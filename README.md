@@ -149,6 +149,8 @@ See [Installation Guide](docs/installation.md) for details.
 
 ## Available Tools
 
+Chat tools return a reusable `session_id`. Save it with `instance` and send both on follow-up turns; omitting the key starts a new conversation. Sync replies preserve the first text block and add metadata; async tools include the key in their JSON results. See [conversation continuity](docs/conversation-continuity.md) for response examples, agent routing, failures, and client compatibility.
+
 ### Sync Tools
 
 | Tool | Description |

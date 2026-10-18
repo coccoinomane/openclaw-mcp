@@ -206,3 +206,7 @@ Cursor and Windsurf only support MCP servers that expose OAuth 2.0 Dynamic Clien
 **This is dev-only.** With DCR enabled alongside the server's auto-approve authorization flow, any client that can reach the server can register itself and obtain a token. To prevent accidental exposure the server refuses to start when `MCP_DANGEROUSLY_ALLOW_DCR=true` and `HOST` is not loopback (`127.0.0.1`, `localhost`, or `::1`). If you genuinely need DCR on a non-loopback bind (e.g., inside a trusted private network), also set `MCP_DANGEROUSLY_ALLOW_DCR_PUBLIC=true`.
 
 For production with Claude.ai, keep DCR disabled and use the pre-configured `MCP_CLIENT_ID` / `MCP_CLIENT_SECRET`.
+
+## Conversation labels and routing
+
+Generated conversation keys use the configured issuer hostname (`MCP_ISSUER_URL` / `--issuer-url`), or the OS hostname when no issuer is configured. Client initialize names supply display labels only. An explicit target agent is included in generated keys; if none is known locally, Gateway default routing applies. For deterministic multi-agent routing, configure `agentId` on each instance and reuse the returned `instance` and `session_id` together. See [conversation continuity](conversation-continuity.md) for the full response contract and limitations.
