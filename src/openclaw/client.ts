@@ -46,6 +46,25 @@ export class OpenClawClient {
     return headers;
   }
 
+  /** Known routing target only. The Gateway owns resolution of its default. */
+  getConversationAgentId(): string | undefined {
+    const configured = this.agentId?.trim();
+    if (configured) {
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(configured)) {
+        throw new Error(
+          'Configured agent ID must be 1-64 alphanumeric/dash/underscore characters, starting with alphanumeric'
+        );
+      }
+      return configured.toLowerCase();
+    }
+    const modelAgent = this.model
+      .trim()
+      .match(/^(?:openclaw[:/]|agent:)([a-z0-9][a-z0-9_-]{0,63})$/i)?.[1];
+    // openclaw/default is a Gateway alias, not an agent named "default".
+    if (this.model.trim().toLowerCase() === 'openclaw/default') return undefined;
+    return modelAgent?.toLowerCase();
+  }
+
   private truncateForLog(value: string): string {
     if (value.length <= MAX_DEBUG_BODY_LENGTH) return value;
     return value.slice(0, MAX_DEBUG_BODY_LENGTH) + `... (truncated, ${value.length} chars total)`;

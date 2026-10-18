@@ -6,8 +6,14 @@
 
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { InstanceRegistry } from '../../openclaw/registry.js';
-import { successResponse, errorResponse, type ToolResponse } from '../../utils/response-helpers.js';
+import {
+  structuredJsonResponse,
+  errorResponse,
+  withConversation,
+  type ToolResponse,
+} from '../../utils/response-helpers.js';
 import { taskManager, type Task, type TaskStatus } from '../tasks/manager.js';
+import { createConversationKey, type ConversationContext } from '../conversation.js';
 import { log } from '../../utils/logger.js';
 import { validateInputIsObject, validateMessage, validateId } from '../../utils/validation.js';
 
@@ -18,7 +24,7 @@ import { validateInputIsObject, validateMessage, validateId } from '../../utils/
 export const openclawChatAsyncTool: Tool = {
   name: 'openclaw_chat_async',
   description:
-    'Send a message to OpenClaw asynchronously. Returns a task_id immediately that can be polled for results. Use this for potentially long-running conversations.',
+    'Send a message to OpenClaw asynchronously. Returns a task_id immediately that can be polled for results. Use this for potentially long-running conversations. Save the returned session_id and instance and reuse both for follow-up turns; omission starts a new conversation. Poll the task after enqueue; do not resend ambiguous failures automatically.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -28,7 +34,8 @@ export const openclawChatAsyncTool: Tool = {
       },
       session_id: {
         type: 'string',
-        description: 'Optional session ID for conversation context',
+        description:
+          'Gateway conversation key from a previous chat; reuse unchanged for follow-up turns, or omit for a new conversation. Distinct from MCP transport session and task IDs.',
       },
       priority: {
         type: 'number',
@@ -45,7 +52,8 @@ export const openclawChatAsyncTool: Tool = {
 
 export const openclawTaskStatusTool: Tool = {
   name: 'openclaw_task_status',
-  description: 'Check the status of an async task. Returns status, and result if completed.',
+  description:
+    'Check the status of an async task. Returns status, session_id, and result if completed. Save session_id and instance for follow-up chat calls, including after failures.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -60,7 +68,8 @@ export const openclawTaskStatusTool: Tool = {
 
 export const openclawTaskListTool: Tool = {
   name: 'openclaw_task_list',
-  description: 'List all tasks. Optionally filter by status, session, or instance.',
+  description:
+    'List owned tasks with session_id and instance for conversation reuse. Optionally filter by status, session, or instance.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -159,7 +168,8 @@ export function startTaskProcessor(registry: InstanceRegistry): void {
 export async function handleOpenclawChatAsync(
   registry: InstanceRegistry,
   input: unknown,
-  ownerId: string
+  ownerId: string,
+  context: ConversationContext = {}
 ): Promise<ToolResponse> {
   if (!validateInputIsObject(input)) {
     return errorResponse('Invalid input: expected an object');
@@ -200,6 +210,11 @@ export async function handleOpenclawChatAsync(
     }
     const resolved = registry.resolve(instanceName);
     instanceId = resolved.name;
+    sessionId ??= createConversationKey(
+      instanceId,
+      context,
+      resolved.client.getConversationAgentId()
+    );
   } catch (error) {
     return errorResponse(error instanceof Error ? error.message : 'Invalid instance');
   }
@@ -217,18 +232,13 @@ export async function handleOpenclawChatAsync(
     instanceId,
   });
 
-  return successResponse(
-    JSON.stringify(
-      {
-        task_id: task.id,
-        status: task.status,
-        instance: instanceId,
-        message: 'Task queued. Use openclaw_task_status to check progress.',
-      },
-      null,
-      2
-    )
-  );
+  return structuredJsonResponse({
+    task_id: task.id,
+    status: task.status,
+    instance: instanceId,
+    session_id: sessionId,
+    message: 'Task queued. Use openclaw_task_status to check progress.',
+  });
 }
 
 export async function handleOpenclawTaskStatus(
@@ -258,6 +268,7 @@ export async function handleOpenclawTaskStatus(
     type: task.type,
     status: task.status,
     instance: task.instanceId,
+    session_id: task.sessionId,
     created_at: task.createdAt.toISOString(),
   };
 
@@ -274,7 +285,7 @@ export async function handleOpenclawTaskStatus(
     response.error = task.error;
   }
 
-  return successResponse(JSON.stringify(response, null, 2));
+  return structuredJsonResponse(response);
 }
 
 const VALID_TASK_STATUSES: readonly TaskStatus[] = [
@@ -335,21 +346,13 @@ export async function handleOpenclawTaskList(
     type: t.type,
     status: t.status,
     instance: t.instanceId,
+    session_id: t.sessionId,
     priority: t.priority,
     created_at: t.createdAt.toISOString(),
     has_result: t.status === 'completed' && !!t.result,
   }));
 
-  return successResponse(
-    JSON.stringify(
-      {
-        stats,
-        tasks: taskList,
-      },
-      null,
-      2
-    )
-  );
+  return structuredJsonResponse({ stats, tasks: taskList });
 }
 
 export async function handleOpenclawTaskCancel(
@@ -375,25 +378,23 @@ export async function handleOpenclawTaskCancel(
   }
 
   if (task.status !== 'pending') {
-    return errorResponse(
+    const response = errorResponse(
       `Cannot cancel task with status: ${task.status}. Only pending tasks can be cancelled.`
     );
+    return task.sessionId ? withConversation(response, task.sessionId, task.instanceId) : response;
   }
 
   const cancelled = taskManager.cancel(task_id, ownerId);
   if (!cancelled) {
-    return errorResponse('Failed to cancel task');
+    const response = errorResponse('Failed to cancel task');
+    return task.sessionId ? withConversation(response, task.sessionId, task.instanceId) : response;
   }
 
-  return successResponse(
-    JSON.stringify(
-      {
-        task_id,
-        status: 'cancelled',
-        message: 'Task cancelled successfully',
-      },
-      null,
-      2
-    )
-  );
+  return structuredJsonResponse({
+    task_id,
+    status: 'cancelled',
+    session_id: task.sessionId,
+    instance: task.instanceId,
+    message: 'Task cancelled successfully',
+  });
 }

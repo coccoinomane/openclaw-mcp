@@ -29,6 +29,7 @@ const deps: ToolRegistrationDeps = {
   registry,
   serverName: SERVER_NAME,
   serverVersion: SERVER_VERSION,
+  issuerUrl: args.issuerUrl,
 };
 
 async function main() {

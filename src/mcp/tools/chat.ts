@@ -1,11 +1,18 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { InstanceRegistry } from '../../openclaw/registry.js';
-import { successResponse, errorResponse, type ToolResponse } from '../../utils/response-helpers.js';
+import {
+  successResponse,
+  errorResponse,
+  withConversation,
+  type ToolResponse,
+} from '../../utils/response-helpers.js';
 import { validateInputIsObject, validateMessage, validateId } from '../../utils/validation.js';
+import { createConversationKey, type ConversationContext } from '../conversation.js';
 
 export const openclawChatTool: Tool = {
   name: 'openclaw_chat',
-  description: 'Send a message to OpenClaw and get a response',
+  description:
+    'Send a message to OpenClaw and get a response. Save the returned session_id and instance and reuse both for follow-up turns. Omitting session_id starts a new conversation. The key is returned in structuredContent and an additional text block, including on Gateway errors; errors may follow accepted work, so do not automatically resend.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -15,7 +22,8 @@ export const openclawChatTool: Tool = {
       },
       session_id: {
         type: 'string',
-        description: 'Optional session ID for conversation context',
+        description:
+          'Gateway conversation key returned by a previous chat. Reuse it unchanged for follow-up turns; omit for a new conversation. Distinct from MCP transport session and task IDs.',
       },
       instance: {
         type: 'string',
@@ -29,7 +37,8 @@ export const openclawChatTool: Tool = {
 
 export async function handleOpenclawChat(
   registry: InstanceRegistry,
-  input: unknown
+  input: unknown,
+  context: ConversationContext = {}
 ): Promise<ToolResponse> {
   if (!validateInputIsObject(input)) {
     return errorResponse('Invalid input: expected an object');
@@ -58,11 +67,19 @@ export async function handleOpenclawChat(
     instanceName = instResult.value;
   }
 
+  let effectiveInstance: string;
   try {
-    const { client } = registry.resolve(instanceName);
+    const { client, name } = registry.resolve(instanceName);
+    effectiveInstance = name;
+    sessionId ??= createConversationKey(name, context, client.getConversationAgentId());
     const response = await client.chat(msgResult.value, sessionId);
-    return successResponse(response.response);
+    return withConversation(successResponse(response.response), sessionId, name);
   } catch (error) {
-    return errorResponse(error instanceof Error ? error.message : 'Failed to chat with OpenClaw');
+    const response = errorResponse(
+      error instanceof Error ? error.message : 'Failed to chat with OpenClaw'
+    );
+    return sessionId && effectiveInstance
+      ? withConversation(response, sessionId, effectiveInstance)
+      : response;
   }
 }

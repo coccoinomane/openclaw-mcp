@@ -15,11 +15,15 @@ import type { InstanceRegistry } from '../openclaw/registry.js';
 import { SERVER_ICON_SVG_BASE64 } from '../config/constants.js';
 import { log, logError } from '../utils/logger.js';
 import * as tools from '../mcp/tools/index.js';
+import { conversationServerLabel } from '../mcp/conversation.js';
+import type { ToolResponse } from '../utils/response-helpers.js';
 
 export interface ToolRegistrationDeps {
   registry: InstanceRegistry;
   serverName: string;
   serverVersion: string;
+  /** Trusted operator configuration; used only for conversation labels. */
+  issuerUrl?: string;
 }
 
 /**
@@ -58,16 +62,20 @@ function registerTools(server: Server, deps: ToolRegistrationDeps): void {
   // connection, so each client gets its own namespace and cannot reach another
   // client's tasks.
   const ownerId = randomUUID();
+  const serverLabel = conversationServerLabel(deps.issuerUrl);
+  // Read after initialize, from this Server only. Never use it as ownerId.
+  const conversationContext = () => ({
+    serverLabel,
+    clientName: server.getClientVersion()?.name,
+  });
 
-  const toolHandlers = new Map<
-    string,
-    (
-      input: unknown
-    ) => Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }>
-  >([
-    ['openclaw_chat', (input) => tools.handleOpenclawChat(registry, input)],
+  const toolHandlers = new Map<string, (input: unknown) => Promise<ToolResponse>>([
+    ['openclaw_chat', (input) => tools.handleOpenclawChat(registry, input, conversationContext())],
     ['openclaw_status', (input) => tools.handleOpenclawStatus(registry, input)],
-    ['openclaw_chat_async', (input) => tools.handleOpenclawChatAsync(registry, input, ownerId)],
+    [
+      'openclaw_chat_async',
+      (input) => tools.handleOpenclawChatAsync(registry, input, ownerId, conversationContext()),
+    ],
     ['openclaw_task_status', (input) => tools.handleOpenclawTaskStatus(registry, input, ownerId)],
     ['openclaw_task_list', (input) => tools.handleOpenclawTaskList(registry, input, ownerId)],
     ['openclaw_task_cancel', (input) => tools.handleOpenclawTaskCancel(registry, input, ownerId)],
@@ -98,7 +106,8 @@ function registerTools(server: Server, deps: ToolRegistrationDeps): void {
     }
 
     try {
-      return await handler(toolArgs);
+      // An object result also satisfies the SDK's extensible Result schema.
+      return { ...(await handler(toolArgs)) };
     } catch (error) {
       logError(`Error executing tool ${name}`, error);
       throw error;

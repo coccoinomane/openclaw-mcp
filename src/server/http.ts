@@ -139,6 +139,8 @@ export async function createHttpServer(
   config: HttpServerConfig,
   deps: ToolRegistrationDeps
 ): Promise<void> {
+  // Configured issuer only; Host and forwarded headers are untrusted labels.
+  const registrationDeps = { ...deps, issuerUrl: config.issuerUrl ?? deps.issuerUrl };
   const authEnabled = !!config.authConfig?.clientId;
   const corsConfig = loadCorsConfig();
 
@@ -248,7 +250,7 @@ export async function createHttpServer(
     ...withAuth(async (req: Request, res: Response) => {
       log('Legacy SSE transport is deprecated; prefer Streamable HTTP at /mcp');
       const transport = new SSEServerTransport('/messages', res as unknown as ServerResponse);
-      const server = createMcpServer(deps);
+      const server = createMcpServer(registrationDeps);
 
       const sessionId = transport.sessionId;
       legacySseSessions.set(sessionId, { transport, server });
@@ -334,7 +336,7 @@ export async function createHttpServer(
       }
     };
 
-    const server = createMcpServer(deps);
+    const server = createMcpServer(registrationDeps);
 
     try {
       await server.connect(transport);
