@@ -71,7 +71,7 @@ Use the task ID to poll the existing task rather than enqueueing the same messag
 
 Synchronous Gateway failures retain `isError: true` and the original `Error: ...` first text block, with conversation metadata added after allocation. The Gateway may have accepted work before a timeout, connection loss, or invalid response. The bridge does not retry. Save the returned key and investigate the result before deciding whether to send another message; reusing a key does not make message delivery idempotent. Pre-submission validation or instance-resolution errors need not include a key. An MCP disconnection can prevent delivery of any response; there is no new persistence or recovery mechanism for that case.
 
-Async failed jobs continue to be successful status queries containing `status: "failed"` and `error`; this feature does not change that signaling. The key stays on the task through failure and cancellation until existing expiry cleanup removes it. Queue capacity and process-local storage are unchanged. Restarting the MCP server loses task records. Connection ownership, cleanup timing, OAuth policy and authorization are unchanged.
+Async failed jobs continue to be successful status queries containing `status: "failed"` and `error`; this feature does not change that signaling. The key stays on the task through failure and cancellation until existing expiry cleanup removes it. Queue capacity and process-local storage are unchanged. Queue-capacity exhaustion retains the existing MCP protocol error without conversation metadata; no Gateway request has been submitted in that case. Restarting the MCP server loses task records. Connection ownership, cleanup timing, OAuth policy and authorization are unchanged.
 
 ## Client compatibility
 

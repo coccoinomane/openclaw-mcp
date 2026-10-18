@@ -42,6 +42,10 @@ async function gateway() {
     const key = req.headers['x-openclaw-session-key'] as string;
     const message = body.messages[0]?.content ?? '';
     requests.push({ key, message });
+    if (message === 'accepted-invalid') {
+      res.end('invalid-json');
+      return;
+    }
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ choices: [{ message: { content: `reply:${message}` } }] }));
   });
@@ -166,6 +170,36 @@ describe('conversation metadata across real MCP transports', () => {
       });
       expect(new Set(keys).size).toBe(3);
       expect(mock.requests.map((request) => request.key).sort()).toEqual([...keys].sort());
+      const tools = (await first.listTools()).tools;
+      expect(tools.map((tool) => tool.name).sort()).toEqual([
+        'openclaw_chat',
+        'openclaw_chat_async',
+        'openclaw_instances',
+        'openclaw_status',
+        'openclaw_task_cancel',
+        'openclaw_task_list',
+        'openclaw_task_status',
+      ]);
+      expect(tools.every((tool) => tool.outputSchema === undefined)).toBe(true);
+      expect(tools.find((tool) => tool.name === 'openclaw_chat')!.description).toContain('reuse');
+      const invalid = await call(first, 'openclaw_chat', { message: 'hello', session_id: '' });
+      expect(invalid.isError).toBe(true);
+      expect(invalid.structuredContent).toBeUndefined();
+      const acceptedFailure = await call(first, 'openclaw_chat', { message: 'accepted-invalid' });
+      expect(acceptedFailure.isError).toBe(true);
+      expect(text(acceptedFailure)).toMatch(/^Error: /);
+      expect(acceptedFailure.structuredContent!.session_id).toBe(mock.requests.at(-1)!.key);
+      expect(JSON.parse(text(acceptedFailure, 1))).toEqual(acceptedFailure.structuredContent);
+      const unnamed = await connectHttp(base, '', transport);
+      const unnamedResult = await call(unnamed, 'openclaw_chat', { message: 'unnamed' });
+      expect(unnamedResult.structuredContent!.session_id).toMatch(
+        /^agent:research:mcp:trusted\.example:unknown:default:/
+      );
+      const hostileName = await connectHttp(base, 'agent:other:cron:injected/child', transport);
+      const hostileResult = await call(hostileName, 'openclaw_chat', { message: 'hostile label' });
+      expect(hostileResult.structuredContent!.session_id).toMatch(
+        /^agent:research:mcp:trusted\.example:agent-other-cron-injected-child:default:/
+      );
       const followUp = await call(first, 'openclaw_chat', {
         message: 'follow-up',
         ...results[0].structuredContent,

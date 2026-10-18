@@ -25,6 +25,7 @@ const calls: Array<{
 const history = new Map<string, string[]>();
 const context = { serverLabel: 'mcp.example.test', clientName: 'Test App' };
 const owners = new Set<string>();
+let releaseRunning: (() => void) | undefined;
 function owner() {
   const id = randomUUID();
   owners.add(id);
@@ -74,6 +75,10 @@ beforeAll(async () => {
       req.on('close', () => res.destroy());
       return;
     }
+    if (message === 'wait-for-release')
+      await new Promise<void>((resolve) => {
+        releaseRunning = resolve;
+      });
     res.setHeader('Content-Type', 'application/json');
     res.end(
       JSON.stringify({ model: 'mock', choices: [{ message: { content: previous.join(' -> ') } }] })
@@ -248,6 +253,57 @@ describe('async conversation metadata and ownership', () => {
     const cancelled = await handleOpenclawTaskCancel(registry, { task_id: queued.task_id }, id);
     expect(cancelled.isError).toBe(true);
     expect(metadata(cancelled).session_id).toBe(queued.session_id);
+  });
+
+  it('exposes the same key while running and rejects running cancellation without losing the result', async () => {
+    const id = owner();
+    const queued = json(
+      await handleOpenclawChatAsync(registry, { message: 'wait-for-release' }, id, context)
+    );
+    try {
+      await vi.waitFor(() => expect(releaseRunning).toBeTypeOf('function'));
+      expect(json(await status(queued.task_id, id, 'running')).session_id).toBe(queued.session_id);
+      const cancelled = await handleOpenclawTaskCancel(registry, { task_id: queued.task_id }, id);
+      expect(cancelled.isError).toBe(true);
+      expect(metadata(cancelled).session_id).toBe(queued.session_id);
+      expect(taskManager.get(queued.task_id, id).status).toBe('running');
+    } finally {
+      releaseRunning?.();
+      releaseRunning = undefined;
+    }
+    expect(json(await status(queued.task_id, id, 'completed')).result).toBe('wait-for-release');
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each(['', null, 'bad\u0000key'])(
+    'rejects invalid async keys without queueing or submitting (%s)',
+    async (session_id) => {
+      const id = owner();
+      const response = await handleOpenclawChatAsync(
+        registry,
+        { message: 'hello', session_id },
+        id,
+        context
+      );
+      expect(response.isError).toBe(true);
+      expect(response.structuredContent).toBeUndefined();
+      expect(taskManager.list(id)).toEqual([]);
+      expect(calls).toHaveLength(0);
+    }
+  );
+
+  it('keeps the existing pre-submission queue-capacity exception without submitting work', async () => {
+    const capacity = vi.spyOn(taskManager, 'create').mockImplementationOnce(() => {
+      throw new Error('Task limit reached');
+    });
+    try {
+      await expect(
+        handleOpenclawChatAsync(registry, { message: 'hello' }, owner(), context)
+      ).rejects.toThrow('Task limit reached');
+      expect(calls).toHaveLength(0);
+    } finally {
+      capacity.mockRestore();
+    }
   });
 
   it('preserves pending cancellation, ownership checks, filters and expiry without leaking keys', async () => {
