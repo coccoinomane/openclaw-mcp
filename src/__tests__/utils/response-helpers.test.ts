@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { successResponse, errorResponse, jsonResponse } from '../../utils/response-helpers.js';
+import {
+  successResponse,
+  errorResponse,
+  jsonResponse,
+  withConversation,
+} from '../../utils/response-helpers.js';
 
 describe('successResponse', () => {
   it('wraps text in content array with type "text"', () => {
@@ -48,5 +53,28 @@ describe('jsonResponse', () => {
   it('is a success response (no isError)', () => {
     const result = jsonResponse({ a: 1 });
     expect(result.isError).toBeUndefined();
+  });
+});
+
+describe('withConversation', () => {
+  it.each([
+    ['success', successResponse('  hello\nworld\n')],
+    ['error', errorResponse('something failed\n')],
+    ['explicit success', { ...successResponse('ok'), isError: false }],
+  ] as const)('separates metadata and preserves the %s response', (_name, response) => {
+    const firstBlock = { ...response.content[0] };
+    const metadata = { session_id: 'session-123', instance: 'work' };
+    const metadataText = '\n\n{"session_id":"session-123","instance":"work"}';
+
+    const result = withConversation(response, metadata.session_id, metadata.instance);
+
+    expect(result.content).toEqual([firstBlock, { type: 'text', text: metadataText }]);
+    expect(result.content[0]).toBe(response.content[0]);
+    expect(result.content.map((block) => block.text).join('')).toBe(firstBlock.text + metadataText);
+    expect(JSON.parse(result.content[1].text)).toEqual(metadata);
+    expect(result.structuredContent).toEqual(metadata);
+    expect(result.isError).toBe(response.isError);
+    expect(Object.hasOwn(result, 'isError')).toBe(Object.hasOwn(response, 'isError'));
+    expect(response.content).toEqual([firstBlock]);
   });
 });

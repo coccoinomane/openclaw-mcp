@@ -12,7 +12,7 @@ A synchronous response keeps the assistant's text in the original first content 
 {
   "content": [
     {"type":"text","text":"What release name should I remember?"},
-    {"type":"text","text":"{\"session_id\":\"agent:research:mcp:mcp.example.com:desktop:work:550e8400-e29b-41d4-a716-446655440000\",\"instance\":\"work\"}"}
+    {"type":"text","text":"\n\n{\"session_id\":\"agent:research:mcp:mcp.example.com:desktop:work:550e8400-e29b-41d4-a716-446655440000\",\"instance\":\"work\"}"}
   ],
   "structuredContent": {
     "session_id":"agent:research:mcp:mcp.example.com:desktop:work:550e8400-e29b-41d4-a716-446655440000",

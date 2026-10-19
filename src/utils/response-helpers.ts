@@ -35,7 +35,7 @@ export function withConversation(
   const metadata = { session_id: sessionId, instance };
   return {
     ...response,
-    content: [...response.content, { type: 'text', text: JSON.stringify(metadata) }],
+    content: [...response.content, { type: 'text', text: `\n\n${JSON.stringify(metadata)}` }],
     structuredContent: metadata,
   };
 }
