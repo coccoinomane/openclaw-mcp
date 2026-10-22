@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   release:
+    # These jobs target upstream-owned npm/OCI packages. Fork releases are GitHub-only.
+    if: github.repository == 'freema/openclaw-mcp'
     runs-on: ubuntu-latest
 
     steps:
