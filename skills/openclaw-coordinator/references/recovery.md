@@ -1,6 +1,6 @@
 # Recovering Discord operations
 
-ROUTE_INSPECTION_UNAVAILABLE blocks ask in the current server. Do not substitute a guessed session key or retry through another messaging route. ROUTE_UNVERIFIED, ROUTE_MISMATCH and NONORDINARY_ROUTE_DENIED require operator inspection. A known new thread ID may remain after post-create route rejection; no agent turn was started and no session identity is claimed.
+Only new_thread is supported. CONTINUE_UNSUPPORTED rejects existing-thread turns before effects. NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED means the operator has not enabled normal routing for that parent. If an optional resolver rejects a newly created thread, retain its ID and inspect it; no agent turn was started.
 
 The service records an operation before the first write and records the thread identity before starting the agent. Records survive process restarts when the operator preserves the state directory. They contain a request digest, not the prompt.
 

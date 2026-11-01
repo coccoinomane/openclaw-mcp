@@ -10,6 +10,7 @@ export interface CreationPolicy {
   accountId: string;
   agentId: string;
   instance: string;
+  normalRouting?: boolean;
 }
 export class DiscordError extends Error {
   constructor(
@@ -97,6 +98,7 @@ export type AdmittedTarget = {
   accountId: string;
   agentId: string;
   categoryId?: string;
+  normalRouting?: boolean;
 };
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export async function privateState(dir: string) {
@@ -156,6 +158,7 @@ export class ChannelCreation {
         accountId: policy.accountId,
         agentId: policy.agentId,
         categoryId: policy.categoryId,
+        normalRouting: policy.normalRouting,
       });
     }
     return targets;
@@ -236,7 +239,7 @@ export class ChannelCreation {
         throw new DiscordError('CREATED_CHANNEL_VERIFICATION_FAILED');
       record.status = 'completed';
       record.target = 'created-' + c.id;
-      record.routing = 'unverified; live inbound route inspection required before ask';
+      record.routing = 'operator-configured normal inbound routing; no runtime binding changes';
       await save(path, record, this.stateDir);
     } catch (error) {
       record.error_code = error instanceof DiscordError ? error.code : 'UNVERIFIED_RESULT';

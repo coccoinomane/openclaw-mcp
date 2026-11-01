@@ -38,19 +38,19 @@ export const discordTools: Tool[] = [
   },
   {
     name: 'openclaw_discord_ask',
+    annotations: { title: 'Ask OpenClaw on Discord', readOnlyHint: false, destructiveHint: false },
     description:
-      'Request a NEW ordinary Discord thread/session or an EXISTING thread/channel turn. Requires verified live inbound routing; currently fails closed with ROUTE_INSPECTION_UNAVAILABLE in the shipped server. Bound/nonordinary or mismatched routes are rejected. User must authorize destination. Preserve operation ID and inspect partial/unknown results before any new action.',
+      'Create a NEW ordinary Discord thread, request the first answer there, and return a Continue on Discord link. Requires operator-acknowledged normal inbound routing. Existing-thread continuation is unavailable. Generation and delivery are reported separately. User must authorize destination. Preserve operation ID and inspect partial/unknown results before any new action.',
     inputSchema: {
       type: 'object',
       properties: {
         target,
         operation_id: operation,
-        mode: { type: 'string', enum: ['new_thread', 'continue'] },
+        mode: { type: 'string', enum: ['new_thread'] },
         title: { type: 'string', minLength: 1, maxLength: 100 },
-        channel_id: { type: 'string', pattern: '^[1-9][0-9]{16,19}$' },
         prompt: { type: 'string', minLength: 1, maxLength: 1048576 },
       },
-      required: ['target', 'operation_id', 'mode', 'prompt'],
+      required: ['target', 'operation_id', 'mode', 'title', 'prompt'],
       additionalProperties: false,
     },
   },

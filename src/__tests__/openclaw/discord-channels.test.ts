@@ -160,7 +160,7 @@ describe('explicit channel creation', () => {
     expect(f.invoke).not.toHaveBeenCalled();
     expect(f.inspect).not.toHaveBeenCalled();
   });
-  it('uses admitted channels for discovery and CLI continuation after restart', async () => {
+  it('uses admitted channels for discovery after restart and denies remote continuation', async () => {
     const f = await fixture();
     const config: DiscordConfig = {
       executable: 'openclaw',
@@ -194,31 +194,13 @@ describe('explicit channel creation', () => {
       category_name: 'Projects',
       category_id: category,
     });
-    expect(
-      await restarted.ask({
-        target: 'created-' + channel,
-        mode: 'continue',
-        channel_id: channel,
-        prompt: 'hello',
-        operation_id: 'continue-operation-001',
-      })
-    ).toMatchObject({ status: 'completed' });
-    expect(runner.mock.calls.at(-1)![1]).toContain('agent:main:discord:channel:' + channel);
-    await expect(
-      restarted.ask({ target: 'created-200000000000000099', mode: 'continue' })
-    ).rejects.toThrow();
+    await expect(restarted.ask({ target: 'created-' + channel, mode: 'continue' })).rejects.toThrow(
+      'CONTINUE_UNSUPPORTED'
+    );
     f.inspect.mockImplementation(
       async (_p, id) => ({ id, guild_id: guild, type: 0, parent_id: 'moved' }) as any
     );
-    expect(
-      await restarted.ask({
-        target: 'created-' + channel,
-        mode: 'continue',
-        channel_id: channel,
-        prompt: 'hello',
-        operation_id: 'continue-operation-002',
-      })
-    ).toMatchObject({ status: 'run_failed', error_code: 'ADMITTED_CHANNEL_MOVED' });
+    await expect(restarted.channels()).rejects.toThrow('ADMITTED_CHANNEL_MOVED');
   });
   it('requires explicit CLI gateway and inbound routing acknowledgement', async () => {
     const f = await fixture();

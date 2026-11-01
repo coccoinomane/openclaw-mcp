@@ -23,6 +23,7 @@ export interface DiscordConfig {
     channelId: string;
     accountId: string;
     agentId: string;
+    normalRouting?: boolean;
   }>;
 }
 export type CliRunner = (executable: string, args: string[], timeout: number) => Promise<unknown>;
@@ -146,12 +147,16 @@ interface Operation {
   discord_url?: string;
   run_id?: string;
   delivery_status?: string;
+  delivery_verified?: boolean;
+  message_id?: string;
+  generation_status?: string;
+  handoff?: string;
   recovery?: string;
   error_code?: string;
 }
 /** Trusted adapter must inspect live inbound routing, including runtime bindings.
  * Static config, channel metadata and session enumeration are insufficient.
- * No production adapter is installed until a supported inspection API exists.
+ * Optional extra check for fresh threads; existing-thread continuation is not supported.
  */
 export type DiscordRouteResolver = (
   target: AdmittedTarget,
@@ -192,7 +197,7 @@ export class DiscordService {
     }
   }
   private async ordinaryRoute(t: AdmittedTarget, channelId: string) {
-    if (!this.resolveRoute) throw new DiscordError('ROUTE_INSPECTION_UNAVAILABLE');
+    if (!this.resolveRoute) return 'agent:' + t.agentId + ':discord:channel:' + channelId;
     let route;
     try {
       route = await this.resolveRoute(t, channelId);
@@ -353,12 +358,20 @@ export class DiscordService {
   private publicResult(op: Operation) {
     const result: Partial<Operation> = { ...op };
     delete result.fingerprint;
+    if (result.discord_url && !result.handoff)
+      result.handoff =
+        'Continue on Discord: ' +
+        result.discord_url +
+        ' (operation ' +
+        result.status +
+        '; first response not confirmed)';
     return { ...result, retry_safe: false };
   }
   async ask(input: any) {
+    if (input.mode !== 'new_thread') throw new DiscordError('CONTINUE_UNSUPPORTED');
     const t = await this.target(input.target);
     const path = this.path(input.operation_id);
-    if (!['new_thread', 'continue'].includes(input.mode)) throw new Error('Invalid mode');
+
     if (
       typeof input.prompt !== 'string' ||
       !input.prompt.trim() ||
@@ -376,9 +389,6 @@ export class DiscordService {
         input.channel_id !== undefined
       )
         throw new Error('Invalid thread title or channel_id');
-    } else {
-      check(input.channel_id, snowflake, 'channel ID');
-      if (input.title !== undefined) throw new Error('title is only valid for new threads');
     }
     const fingerprint = createHash('sha256')
       .update(JSON.stringify([t, input.mode, input.title, input.channel_id, input.prompt]))
@@ -442,6 +452,8 @@ export class DiscordService {
     let dispatched = false;
     let createDispatched = false;
     try {
+      if (this.config.acknowledgeInboundRouting !== true || t.normalRouting !== true)
+        throw new DiscordError('NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED');
       const parent = await this.info(t, t.channelId, true);
       if ([15, 16].includes(parent.type)) throw new DiscordError('FORUM_MEDIA_WRITES_UNSUPPORTED');
       let id = input.channel_id;
@@ -504,8 +516,42 @@ export class DiscordService {
         630000
       );
       op.run_id = typeof result?.runId === 'string' ? result.runId : undefined;
-      const delivery = result?.deliveryStatus ?? result?.result?.deliveryStatus;
-      op.delivery_status = typeof delivery === 'string' ? delivery : 'unverified';
+      const delivery =
+        result?.deliveryStatus ??
+        result?.result?.deliveryStatus ??
+        result?.delivery ??
+        result?.result?.delivery;
+      const deliveryStatus = typeof delivery === 'string' ? delivery : delivery?.status;
+      op.delivery_status = ['sent', 'delivered', 'failed', 'partial_failed', 'suppressed'].includes(
+        deliveryStatus
+      )
+        ? deliveryStatus
+        : 'unverified';
+      op.delivery_verified = false;
+      const messageId = delivery?.messageId;
+      if (typeof messageId === 'string' && snowflake.test(messageId)) {
+        op.message_id = messageId;
+        // One exact-ID read, never a text match or a scan of unrelated messages.
+        try {
+          const readback = await this.cli(t, [
+            'read',
+            '--target',
+            'channel:' + id,
+            '--message-id',
+            messageId,
+            '--limit',
+            '1',
+          ]);
+          op.delivery_verified =
+            readback.channelId === id &&
+            Array.isArray(readback.messages) &&
+            readback.messages.some(
+              (m: any) => m.id === messageId && (!m.channel_id || m.channel_id === id)
+            );
+        } catch {
+          /* Delivery may have succeeded; a failed read does not authorize retry. */
+        }
+      }
       op.error_code = result?._cliFailure ? result._cliCode : undefined;
       op.status = result?._cliFailure
         ? result._cliCode === 'CLI_TIMEOUT'
@@ -516,6 +562,18 @@ export class DiscordService {
           : result?.status === 'error' || result?.ok === false
             ? 'run_failed'
             : 'run_unknown';
+      op.generation_status = op.status;
+      op.handoff = 'Continue on Discord: ' + op.discord_url;
+      if (
+        (op.delivery_status !== 'sent' && op.delivery_status !== 'delivered') ||
+        !op.delivery_verified
+      )
+        op.handoff +=
+          ' (first-response delivery ' +
+          op.delivery_status +
+          '; ' +
+          (op.delivery_verified ? 'message verified' : 'not independently verified') +
+          ')';
       if (op.status !== 'completed')
         op.recovery =
           'Inspect the existing conversation before authorizing a new turn. Never repeat this operation with a new ID blindly.';
