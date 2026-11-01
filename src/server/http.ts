@@ -432,8 +432,16 @@ export async function createHttpServer(
 
   // --- Graceful shutdown ---
 
+  let stopping = false;
   const shutdown = async () => {
+    if (stopping) return;
+    stopping = true;
     log('Shutting down HTTP server...');
+    // Accepted Discord work keeps ownership during shutdown. Hard termination is fail-closed.
+    const forced = setTimeout(() => process.exit(1), 660000);
+    const draining = deps.discord?.shutdown();
+    await draining;
+    clearTimeout(forced);
     await modern.close();
 
     // Close all legacy SSE sessions

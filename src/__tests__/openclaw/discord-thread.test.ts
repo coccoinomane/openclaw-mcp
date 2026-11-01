@@ -41,11 +41,18 @@ const input = {
 const envelope = (result: any) =>
   new Response(JSON.stringify({ ok: true, result: { details: result } }));
 const dirs: string[] = [];
+const services: DiscordService[] = [];
+async function finished(service: DiscordService, input: any) {
+  const result = await service.ask(input);
+  await service.drain();
+  return result.status === 'queued' ? service.status(input.operation_id) : result;
+}
 beforeEach(() => {
   for (const key of Object.keys(process.env))
     if (/^OPENCLAW_(SHELL|.*AGENT.*|.*SESSION.*|.*CALLER.*)$/.test(key)) vi.stubEnv(key, undefined);
 });
 afterEach(async () => {
+  await Promise.all(services.splice(0).map((s) => s.drain()));
   vi.unstubAllEnvs();
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
@@ -93,23 +100,30 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
     if (args[2] === 'create') return { payload: { ok: true, thread: { id: thread } } };
     throw new Error('Unexpected CLI');
   });
-  const service = () =>
-    new DiscordService(
+  const service = () => {
+    const instance = new DiscordService(
       config,
       runner,
       undefined,
       undefined,
       channelReader(instances, config, gateway),
       threadInvoker(instances, config, gateway),
-      threadMemberAdder(config, env, member)
+      threadMemberAdder(config, env, member),
+      async (_t, _id, _prompt, _op, sent) => {
+        events.push('publish');
+        await sent('300000000000000004');
+      }
     );
+    services.push(instance);
+    return instance;
+  };
   return { config, events, gateway, member, runner, record, service: service(), restart: service };
 }
 
 describe('Gateway-first new threads', () => {
   it('persists thread then verified owner membership before unchanged ordinary CLI turn; replay is read-only', async () => {
     const f = await fixture();
-    const result = await f.service.ask(input);
+    const result = await finished(f.service, input);
     expect(result).toMatchObject({
       status: 'completed',
       channel_id: thread,
@@ -124,6 +138,7 @@ describe('Gateway-first new threads', () => {
       'channel-info',
       'PUT',
       'GET',
+      'publish',
       'agent',
     ]);
     const [url, options] = f.gateway.mock.calls[1];
@@ -185,7 +200,7 @@ describe('Gateway-first new threads', () => {
     f.gateway.mockRejectedValueOnce(
       Object.assign(new Error('private'), { cause: { code: 'ECONNREFUSED' } })
     );
-    expect(await f.service.ask(input)).toMatchObject({
+    expect(await finished(f.service, input)).toMatchObject({
       status: 'completed',
       thread_create_transport: 'cli',
       thread_create_fallback: 'THREAD_GATEWAY_UNREACHABLE',
@@ -194,7 +209,7 @@ describe('Gateway-first new threads', () => {
   });
   it('respects explicit CLI mode', async () => {
     const f = await fixture({ threadCreateMode: 'cli' });
-    expect(await f.service.ask(input)).toMatchObject({
+    expect(await finished(f.service, input)).toMatchObject({
       status: 'completed',
       thread_create_transport: 'cli',
     });
@@ -219,7 +234,7 @@ describe('Gateway-first new threads', () => {
             code: failure === 'timeout' ? 'ETIMEDOUT' : 'ECONNRESET',
           })
         );
-      const result = await f.service.ask(input);
+      const result = await finished(f.service, input);
       expect(result.status).toBe('creation_unknown');
       expect(JSON.stringify(result)).not.toContain('private-secret');
       expect(await f.restart().ask(input)).toEqual(result);
@@ -231,7 +246,7 @@ describe('Gateway-first new threads', () => {
   it('does not downgrade when parent metadata is unavailable', async () => {
     const f = await fixture();
     f.gateway.mockRejectedValueOnce(new Error('refused'));
-    expect(await f.service.ask(input)).toMatchObject({
+    expect(await finished(f.service, input)).toMatchObject({
       status: 'run_failed',
       error_code: 'GATEWAY_READ_FAILED',
     });
@@ -256,7 +271,7 @@ describe('Gateway-first new threads', () => {
           })
         )
       );
-      const result = await f.service.ask(input);
+      const result = await finished(f.service, input);
       expect(result).toMatchObject({
         status: 'creation_partial',
         channel_id: thread,
@@ -282,7 +297,7 @@ describe('Gateway-first new threads', () => {
           channel: { id: thread, guild_id: guild, type: 11, parent_id: channel, ...override },
         })
       );
-      expect(await f.service.ask(input)).toMatchObject({
+      expect(await finished(f.service, input)).toMatchObject({
         status: 'run_failed',
         channel_id: thread,
         member_verified: false,
@@ -308,7 +323,7 @@ describe('Gateway-first new threads', () => {
               : new Response(JSON.stringify({ id: thread, user_id: channel }))
         );
       }
-      const result = await f.service.ask(input);
+      const result = await finished(f.service, input);
       expect(result).toMatchObject({
         status: 'run_failed',
         channel_id: thread,
@@ -420,7 +435,7 @@ describe('operator configuration and closed inputs', () => {
   it('describes handoff and expected absence of answer text without changing input schema', () => {
     const tool = discordTools.find((t) => t.name === 'openclaw_discord_ask')!;
     expect(tool.description).toContain('not answer content');
-    expect(tool.description).toContain('Absence of answer text is expected; continue on Discord');
+    expect(tool.description).toContain('Does not wait for generation');
     expect(Object.keys(tool.inputSchema.properties!)).toEqual([
       'target',
       'operation_id',

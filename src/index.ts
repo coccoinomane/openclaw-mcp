@@ -1,3 +1,4 @@
+import { requestPublisher } from './openclaw/discord-request.js';
 import { channelInvoker } from './openclaw/discord-channels.js';
 import { channelReader } from './openclaw/discord-read.js';
 import { threadInvoker, threadMemberAdder } from './openclaw/discord-thread.js';
@@ -54,7 +55,8 @@ async function main() {
       undefined,
       channelReader(args.instances, discordConfig),
       threadInvoker(args.instances, discordConfig),
-      threadMemberAdder(discordConfig)
+      threadMemberAdder(discordConfig),
+      requestPublisher(discordConfig)
     );
   }
   log(`Starting ${SERVER_NAME} v${SERVER_VERSION}`);
@@ -153,6 +155,24 @@ async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
     log('OpenClaw MCP server running on stdio');
+    let stopping = false;
+    const stop = () => {
+      if (stopping) return;
+      stopping = true;
+      const forced = setTimeout(() => process.exit(1), 660000);
+      void (async () => {
+        await deps.discord?.shutdown();
+        await server.close();
+        clearTimeout(forced);
+        process.exit(0);
+      })().catch(() => {
+        logError('Discord shutdown failed');
+        process.exit(1);
+      });
+    };
+    process.once('SIGTERM', stop);
+    process.once('SIGINT', stop);
+    process.stdin.once('end', stop);
   }
 }
 

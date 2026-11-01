@@ -41,7 +41,7 @@ export const discordTools: Tool[] = [
     name: 'openclaw_discord_ask',
     annotations: { title: 'Ask OpenClaw on Discord', readOnlyHint: false, destructiveHint: false },
     description:
-      'Create a NEW ordinary Discord thread, request the first answer there, and return a Continue on Discord link/status, not answer content. Absence of answer text is expected; continue on Discord. Requires operator-acknowledged normal inbound routing. Existing-thread continuation is unavailable. Generation and delivery are reported separately. When the user requests a Discord thread without naming a channel, use openclaw_discord_channels to select the best match for the topic; ask if ambiguous. Respect any destination specified by the user. Preserve operation ID and inspect partial/unknown results before any new action.',
+      'Create a NEW ordinary Discord thread, publish the exact request as a bot, and return a queued Continue on Discord link, not answer content. Does not wait for generation. Use openclaw_discord_operation for eventual status. Select an allowed channel using openclaw_discord_channels when unspecified; ask if ambiguous. Existing-thread continuation is unavailable. Preserve operation ID; inspect partial/unknown outcomes before further action.',
     inputSchema: {
       type: 'object',
       properties: {

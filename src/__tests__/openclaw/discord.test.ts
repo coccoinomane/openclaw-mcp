@@ -8,7 +8,30 @@ const guild = '100000000000000001',
   channel = '100000000000000002',
   thread = '100000000000000003';
 const dirs: string[] = [];
+const services: DiscordService[] = [];
+const publish = async (
+  _t: any,
+  _id: string,
+  _prompt: string,
+  _op: string,
+  sent: (id: string) => Promise<void>
+) => {
+  await sent('100000000000000004');
+};
+class TestService extends DiscordService {
+  constructor(...args: ConstructorParameters<typeof DiscordService>) {
+    args[7] = publish;
+    super(...args);
+    services.push(this);
+  }
+}
+async function finished(service: DiscordService, input: any) {
+  const result = await service.ask(input);
+  await service.drain();
+  return result.status === 'queued' ? service.status(input.operation_id) : result;
+}
 afterEach(async () => {
+  await Promise.all(services.splice(0).map((s) => s.drain()));
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 async function fixture(
@@ -114,7 +137,7 @@ async function fixture(
     ],
   };
   return {
-    service: new DiscordService(config, runner),
+    service: new TestService(config, runner),
     runner,
     config,
     promptPath: () => promptPath,
@@ -130,7 +153,7 @@ const input = {
 describe('Discord service', () => {
   it('allows a bounded operator CLI timeout without changing agent run deadlines', async () => {
     const f = await fixture();
-    const service = new DiscordService({ ...f.config, cliTimeoutMs: 120000 }, f.runner);
+    const service = new TestService({ ...f.config, cliTimeoutMs: 120000 }, f.runner);
     await service.channels();
     expect(f.runner).toHaveBeenCalledWith(f.config.executable, expect.any(Array), 120000);
     const loaded = loadDiscordConfig({
@@ -141,14 +164,14 @@ describe('Discord service', () => {
     });
     expect(loaded?.cliTimeoutMs).toBe(120000);
     for (const cliTimeoutMs of [NaN, Infinity, 999, 180001, 1.5]) {
-      expect(() => new DiscordService({ ...f.config, cliTimeoutMs }, f.runner)).toThrow(
+      expect(() => new TestService({ ...f.config, cliTimeoutMs }, f.runner)).toThrow(
         'MCP_DISCORD_CLI_TIMEOUT_MS'
       );
     }
   });
   it('requires operator acknowledgement of normal inbound human reply routing', async () => {
     const f = await fixture();
-    const service = new DiscordService({ ...f.config, acknowledgeInboundRouting: false }, f.runner);
+    const service = new TestService({ ...f.config, acknowledgeInboundRouting: false }, f.runner);
     expect(await service.ask(input)).toMatchObject({
       status: 'run_failed',
       error_code: 'NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED',
@@ -157,7 +180,7 @@ describe('Discord service', () => {
   });
   it('excludes special bound targets unless explicitly configured for normal routing', async () => {
     const f = await fixture();
-    const service = new DiscordService(
+    const service = new TestService(
       { ...f.config, targets: f.config.targets.map((t) => ({ ...t, normalRouting: false })) },
       f.runner
     );
@@ -168,7 +191,7 @@ describe('Discord service', () => {
   });
   it('rejects parent routed to another agent before creating a new thread', async () => {
     const f = await fixture();
-    const service = new DiscordService(f.config, f.runner, undefined, async (t, id) => ({
+    const service = new TestService(f.config, f.runner, undefined, async (t, id) => ({
       ...t,
       channelId: id,
       agentId: 'other',
@@ -184,7 +207,7 @@ describe('Discord service', () => {
   it('checks the actual new thread route and retains its ID when bound', async () => {
     const f = await fixture();
     const seen: string[] = [];
-    const service = new DiscordService(f.config, f.runner, undefined, async (t, id) => {
+    const service = new TestService(f.config, f.runner, undefined, async (t, id) => {
       seen.push(id);
       return {
         ...t,
@@ -205,7 +228,7 @@ describe('Discord service', () => {
   });
   it('rejects an ordinary-looking key when live inspection fails', async () => {
     const f = await fixture();
-    const service = new DiscordService(f.config, f.runner, undefined, async () => {
+    const service = new TestService(f.config, f.runner, undefined, async () => {
       throw new Error('private routing detail');
     });
     expect(await service.ask(input)).toMatchObject({ error_code: 'ROUTE_UNVERIFIED' });
@@ -217,7 +240,7 @@ describe('Discord service', () => {
       const f = await fixture({
         runResult: { status: 'ok', result: { deliveryStatus: { status } } },
       });
-      expect(await f.service.ask(input)).toMatchObject({
+      expect(await finished(f.service, input)).toMatchObject({
         status: 'completed',
         generation_status: 'completed',
         delivery_status: status,
@@ -235,7 +258,7 @@ describe('Discord service', () => {
         readbackId: messageId,
         readbackError,
       });
-      expect(await f.service.ask(input)).toMatchObject({
+      expect(await finished(f.service, input)).toMatchObject({
         delivery_status: 'sent',
         message_id: messageId,
         delivery_verified: !readbackError,
@@ -251,7 +274,7 @@ describe('Discord service', () => {
       },
       readbackId: '100000000000000099',
     });
-    expect(await f.service.ask(input)).toMatchObject({ delivery_verified: false });
+    expect(await finished(f.service, input)).toMatchObject({ delivery_verified: false });
   });
   it('is opt-in and fails closed on missing config', () => {
     expect(loadDiscordConfig({})).toBeUndefined();
@@ -259,7 +282,7 @@ describe('Discord service', () => {
   });
   it('creates an ordinary session with explicit delivery and safe prompt cleanup', async () => {
     const f = await fixture();
-    const result = await f.service.ask(input);
+    const result = await finished(f.service, input);
     expect(result).toMatchObject({
       status: 'completed',
       session_key: 'agent:main:discord:channel:' + thread,
@@ -283,9 +306,9 @@ describe('Discord service', () => {
   });
   it('does not repeat writes after restart or duplicate request', async () => {
     const f = await fixture();
-    const result = await f.service.ask(input);
+    const result = await finished(f.service, input);
     const count = f.runner.mock.calls.length;
-    expect(await new DiscordService(f.config, f.runner).ask(input)).toEqual(result);
+    expect(await new TestService(f.config, f.runner).ask(input)).toEqual(result);
     expect(f.runner).toHaveBeenCalledTimes(count);
     await expect(f.service.ask({ ...input, prompt: 'different' })).rejects.toThrow(
       'different arguments'
@@ -293,7 +316,7 @@ describe('Discord service', () => {
   });
   it.each([15, 16])('rejects forum/media type %i before writes', async (parentType) => {
     const f = await fixture({ parentType });
-    const result = await f.service.ask(input);
+    const result = await finished(f.service, input);
     expect(result.error_code).toBe('FORUM_MEDIA_WRITES_UNSUPPORTED');
     expect(f.runner.mock.calls.some((c) => c[1][2] === 'create' || c[1][0] === 'agent')).toBe(
       false
@@ -303,7 +326,7 @@ describe('Discord service', () => {
     const f = await fixture({
       runResult: { status: 'ok', _cliFailure: true, _cliCode: 'CLI_EXIT_NONZERO' },
     });
-    expect(await f.service.ask(input)).toMatchObject({
+    expect(await finished(f.service, input)).toMatchObject({
       status: 'run_failed',
       error_code: 'CLI_EXIT_NONZERO',
     });
@@ -320,11 +343,11 @@ describe('Discord service', () => {
     { runResult: { status: 'error' }, status: 'run_failed' },
   ])('records partial/uncertain outcomes: $status', async (options) => {
     const f = await fixture(options);
-    const result = await f.service.ask(input);
+    const result = await finished(f.service, input);
     expect(result.status).toBe(options.status);
     expect(JSON.stringify(result)).not.toContain('secret');
     const count = f.runner.mock.calls.length;
-    await f.service.ask(input);
+    await finished(f.service, input);
     expect(f.runner).toHaveBeenCalledTimes(count);
     if (options.partial) expect(f.runner.mock.calls.some((c) => c[1][0] === 'agent')).toBe(false);
   });
@@ -345,7 +368,7 @@ describe('Discord service', () => {
     'rejects unverified destinations before delivery',
     async (options) => {
       const f = await fixture(options);
-      await f.service.ask(input);
+      await finished(f.service, input);
       expect(f.runner.mock.calls.some((c) => c[1][0] === 'agent')).toBe(false);
     }
   );
@@ -363,16 +386,16 @@ describe('Discord service', () => {
   });
   it('retains interrupted records and never replays on restart', async () => {
     const f = await fixture();
-    await f.service.ask(input);
+    await finished(f.service, input);
     const path = join(f.config.stateDir, input.operation_id + '.json');
     const record = JSON.parse(await readFile(path, 'utf8'));
     record.status = 'running';
     delete record.handoff;
     await writeFile(path, JSON.stringify(record));
     f.runner.mockClear();
-    expect((await new DiscordService(f.config, f.runner).ask(input)).status).toBe('running');
+    expect((await new TestService(f.config, f.runner).ask(input)).status).toBe('run_unknown');
     const running = await f.service.status(input.operation_id);
-    expect(running.status).toBe('running');
+    expect(running.status).toBe('run_unknown');
     expect(running.handoff).toContain(
       'Continue on Discord: https://discord.com/channels/' + guild + '/' + thread
     );

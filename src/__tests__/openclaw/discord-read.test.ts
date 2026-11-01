@@ -299,7 +299,12 @@ describe('batched allowlist discovery', () => {
         runner,
         undefined,
         undefined,
-        channelReader(instances, c, fetcher)
+        channelReader(instances, c, fetcher),
+        undefined,
+        undefined,
+        async (_t, _id, _p, _op, sent) => {
+          await sent('300000000000000005');
+        }
       );
       expect(
         await service.ask({
@@ -309,7 +314,8 @@ describe('batched allowlist discovery', () => {
           title: 'Task',
           prompt: 'mock prompt',
         })
-      ).toMatchObject({ status: 'completed', channel_id: other });
+      ).toMatchObject({ status: 'queued', channel_id: other });
+      await service.drain();
       expect(runner.mock.calls.map((call) => call[1].slice(0, 3))).toEqual([
         ['message', 'thread', 'create'],
         ['agent', '--agent', 'main'],

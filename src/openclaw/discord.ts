@@ -1,3 +1,4 @@
+import type { RequestPublisher } from './discord-request.js';
 import {
   ChannelCreation,
   DiscordError,
@@ -14,7 +15,7 @@ import {
 } from './discord-thread.js';
 import { log } from '../utils/logger.js';
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -26,6 +27,7 @@ export interface DiscordConfig {
   cliGatewayInstance?: string;
   gatewayReadsEnabled?: boolean;
   cliTimeoutMs?: number;
+  maxOperations?: number;
   threadCreateMode?: 'cli' | 'gateway';
   threadMember?: { userId: string; accountId: string };
   acknowledgeInboundRouting?: boolean;
@@ -64,6 +66,7 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
             accountId: env.MCP_DISCORD_THREAD_MEMBER_ACCOUNT_ID || '',
           }
         : undefined,
+    maxOperations: Number(env.MCP_DISCORD_MAX_OPERATIONS ?? 4),
     cliTimeoutMs: env.MCP_DISCORD_CLI_TIMEOUT_MS
       ? Number(env.MCP_DISCORD_CLI_TIMEOUT_MS)
       : undefined,
@@ -73,6 +76,12 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
   return config;
 }
 function validateConfig(config: DiscordConfig) {
+  if (
+    !Number.isInteger(config.maxOperations ?? 4) ||
+    (config.maxOperations ?? 4) < 1 ||
+    (config.maxOperations ?? 4) > 16
+  )
+    throw new DiscordError('OPERATION_LIMIT_INVALID');
   if (
     config.threadCreateMode !== undefined &&
     !['cli', 'gateway'].includes(config.threadCreateMode)
@@ -231,11 +240,23 @@ function payload(value: any): any {
 }
 interface Operation {
   fingerprint: string;
+  owner?: string;
+  request_status?:
+    | 'pending'
+    | 'publishing'
+    | 'sent'
+    | 'verified'
+    | 'failed'
+    | 'partial'
+    | 'unknown';
+  request_verified?: boolean;
+  request_message_ids?: string[];
   status:
     | 'creating'
     | 'creation_unknown'
     | 'created'
     | 'creation_partial'
+    | 'queued'
     | 'running'
     | 'completed'
     | 'run_failed'
@@ -276,6 +297,19 @@ export type DiscordRouteResolver = (
 }>;
 export class DiscordService {
   private readonly creation?: ChannelCreation;
+  private readonly owner = randomUUID();
+  private readonly workers = new Set<Promise<unknown>>();
+  private readonly active = new Set<string>();
+  private readonly preparations = new Map<string, number>();
+  private closing = false;
+  async shutdown() {
+    this.closing = true;
+    await this.drain();
+  }
+  async drain() {
+    while (this.workers.size) await Promise.allSettled([...this.workers]);
+  }
+
   constructor(
     readonly config: DiscordConfig,
     private readonly runner: CliRunner = runCli,
@@ -283,7 +317,8 @@ export class DiscordService {
     private readonly resolveRoute?: DiscordRouteResolver,
     private readonly reader?: DiscordReader,
     private readonly invokeThread?: ThreadInvoker,
-    private readonly addThreadMember?: ThreadMemberAdder
+    private readonly addThreadMember?: ThreadMemberAdder,
+    private readonly publishRequest?: RequestPublisher
   ) {
     validateConfig(config);
     if (config.threadCreateMode === 'gateway' && !invokeThread)
@@ -502,6 +537,20 @@ export class DiscordService {
   private publicResult(op: Operation) {
     const result: Partial<Operation> = { ...op };
     delete result.fingerprint;
+    delete result.owner;
+    // Old process work is never resumed. Reads never rewrite records or repeat effects.
+    if (
+      ['creating', 'created', 'queued', 'running'].includes(op.status) &&
+      (op.owner !== this.owner || !this.active.has(op.operation_id))
+    ) {
+      result.status = op.channel_id ? 'run_unknown' : 'creation_unknown';
+      result.error_code = 'OPERATION_INTERRUPTED';
+      result.recovery =
+        'Service ownership ended. Inspect the existing thread; never replay this operation.';
+      if (op.request_status === 'publishing' || op.request_status === 'sent')
+        result.request_status = 'unknown';
+      if (op.member_status === 'adding') result.member_status = 'unknown';
+    }
     if (result.discord_url && !result.handoff)
       result.handoff =
         'Continue on Discord: ' +
@@ -512,6 +561,40 @@ export class DiscordService {
     return { ...result, retry_safe: false };
   }
   async ask(input: any) {
+    if (input.mode !== 'new_thread') throw new DiscordError('CONTINUE_UNSUPPORTED');
+    this.path(input.operation_id);
+    const existing = await readFile(this.path(input.operation_id), 'utf8').then(
+      () => true,
+      (e) => {
+        if (e.code === 'ENOENT') return false;
+        throw e;
+      }
+    );
+    if (
+      !existing &&
+      !this.active.has(input.operation_id) &&
+      (this.closing || this.active.size >= (this.config.maxOperations ?? 4))
+    )
+      throw new DiscordError(this.closing ? 'SERVICE_STOPPING' : 'OPERATION_CAPACITY');
+    const reserved = !existing && !this.active.has(input.operation_id);
+    if (reserved) this.active.add(input.operation_id);
+    this.preparations.set(input.operation_id, (this.preparations.get(input.operation_id) ?? 0) + 1);
+    const task = this.prepare(input);
+    this.workers.add(task);
+    try {
+      return await task;
+    } finally {
+      this.workers.delete(task);
+      const remaining = this.preparations.get(input.operation_id)! - 1;
+      if (remaining) this.preparations.set(input.operation_id, remaining);
+      else {
+        this.preparations.delete(input.operation_id);
+        if (!this.background.has(input.operation_id)) this.active.delete(input.operation_id);
+      }
+    }
+  }
+  private readonly background = new Set<string>();
+  private async prepare(input: any) {
     if (this.config.threadCreateMode === 'gateway' || this.config.threadMember)
       assertServiceProvenance();
     if (input.mode !== 'new_thread') throw new DiscordError('CONTINUE_UNSUPPORTED');
@@ -522,7 +605,8 @@ export class DiscordService {
       typeof input.prompt !== 'string' ||
       !input.prompt.trim() ||
       new TextEncoder().encode(input.prompt).length > 1024 * 1024 ||
-      input.prompt.includes('\0')
+      input.prompt.includes('\0') ||
+      new TextDecoder().decode(new TextEncoder().encode(input.prompt)) !== input.prompt
     )
       throw new Error('Invalid prompt');
     if (input.mode === 'new_thread') {
@@ -571,6 +655,10 @@ export class DiscordService {
     }
     const op: Operation = {
       fingerprint,
+      owner: this.owner,
+      request_status: 'pending',
+      request_verified: false,
+      request_message_ids: [],
       operation_id: input.operation_id,
       target: t.name,
       status: input.mode === 'new_thread' ? 'creating' : 'created',
@@ -602,6 +690,7 @@ export class DiscordService {
     try {
       if (this.config.acknowledgeInboundRouting !== true || t.normalRouting !== true)
         throw new DiscordError('NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED');
+      if (!this.publishRequest) throw new DiscordError('REQUEST_PUBLISHER_REQUIRED');
       const parent = await this.info(t, t.channelId, true);
       if ([15, 16].includes(parent.type)) throw new DiscordError('FORUM_MEDIA_WRITES_UNSUPPORTED');
       let id = input.channel_id;
@@ -669,95 +758,152 @@ export class DiscordService {
       dir = await mkdtemp(join(tmpdir(), 'openclaw-mcp-'));
       const promptFile = join(dir, 'prompt.txt');
       await writeFile(promptFile, input.prompt, { mode: 0o600 });
-      op.status = 'running';
+      op.request_status = 'publishing';
       await save();
-      dispatched = true;
-      const result: any = await this.runner(
-        this.config.executable,
-        [
-          'agent',
-          '--agent',
-          t.agentId,
-          '--session-key',
-          op.session_key,
-          '--message-file',
-          promptFile,
-          '--deliver',
-          '--reply-channel',
-          'discord',
-          '--reply-to',
-          'channel:' + id,
-          '--reply-account',
-          t.accountId,
-          '--timeout',
-          '600',
-          '--json',
-        ],
-        630000
-      );
-      op.run_id = typeof result?.runId === 'string' ? result.runId : undefined;
-      const delivery =
-        result?.deliveryStatus ??
-        result?.result?.deliveryStatus ??
-        result?.delivery ??
-        result?.result?.delivery;
-      const deliveryStatus = typeof delivery === 'string' ? delivery : delivery?.status;
-      op.delivery_status = ['sent', 'delivered', 'failed', 'partial_failed', 'suppressed'].includes(
-        deliveryStatus
-      )
-        ? deliveryStatus
-        : 'unverified';
-      op.delivery_verified = false;
-      const messageId = delivery?.messageId;
-      if (typeof messageId === 'string' && snowflake.test(messageId)) {
-        op.message_id = messageId;
-        // One exact-ID read, never a text match or a scan of unrelated messages.
-        try {
-          const readback = await this.cli(t, [
-            'read',
-            '--target',
-            'channel:' + id,
-            '--message-id',
-            messageId,
-            '--limit',
-            '1',
-          ]);
-          op.delivery_verified =
-            readback.channelId === id &&
-            Array.isArray(readback.messages) &&
-            readback.messages.some(
-              (m: any) => m.id === messageId && (!m.channel_id || m.channel_id === id)
-            );
-        } catch {
-          /* Delivery may have succeeded; a failed read does not authorize retry. */
-        }
+      try {
+        await this.publishRequest!(t, id, input.prompt, input.operation_id, async (messageId) => {
+          op.request_message_ids = [messageId];
+          op.request_status = 'sent';
+          await save();
+        });
+        if (!op.request_message_ids?.length)
+          throw new DiscordError('REQUEST_RESULT_UNVERIFIED', true);
+        op.request_status = 'verified';
+        op.request_verified = true;
+      } catch (error) {
+        op.request_status = op.request_message_ids?.length
+          ? 'partial'
+          : error instanceof DiscordError && !error.uncertain
+            ? 'failed'
+            : 'unknown';
+        throw error;
       }
-      op.error_code = result?._cliFailure ? result._cliCode : undefined;
-      op.status = result?._cliFailure
-        ? result._cliCode === 'CLI_TIMEOUT'
-          ? 'run_unknown'
-          : 'run_failed'
-        : ['ok', 'completed'].includes(result?.status)
-          ? 'completed'
-          : result?.status === 'error' || result?.ok === false
-            ? 'run_failed'
-            : 'run_unknown';
-      op.generation_status = op.status;
-      op.handoff = 'Continue on Discord: ' + op.discord_url;
-      if (
-        (op.delivery_status !== 'sent' && op.delivery_status !== 'delivered') ||
-        !op.delivery_verified
-      )
-        op.handoff +=
-          ' (first-response delivery ' +
-          op.delivery_status +
-          '; ' +
-          (op.delivery_verified ? 'message verified' : 'not independently verified') +
-          ')';
-      if (op.status !== 'completed')
-        op.recovery =
-          'Inspect the existing conversation before authorizing a new turn. Never repeat this operation with a new ID blindly.';
+      op.status = 'queued';
+      op.generation_status = 'queued';
       await save();
+      const accepted = this.publicResult(op);
+      this.background.add(input.operation_id);
+      const directory = dir;
+      const worker = (async () => {
+        // Handoff is independent of generation and of any transport abort signal.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        try {
+          op.status = 'running';
+          op.generation_status = 'running';
+          await save();
+          dispatched = true;
+          const result: any = await this.runner(
+            this.config.executable,
+            [
+              'agent',
+              '--agent',
+              t.agentId,
+              '--session-key',
+              op.session_key,
+              '--message-file',
+              promptFile,
+              '--deliver',
+              '--reply-channel',
+              'discord',
+              '--reply-to',
+              'channel:' + id,
+              '--reply-account',
+              t.accountId,
+              '--timeout',
+              '600',
+              '--json',
+            ],
+            630000
+          );
+          op.run_id = typeof result?.runId === 'string' ? result.runId : undefined;
+          const delivery =
+            result?.deliveryStatus ??
+            result?.result?.deliveryStatus ??
+            result?.delivery ??
+            result?.result?.delivery;
+          const deliveryStatus = typeof delivery === 'string' ? delivery : delivery?.status;
+          op.delivery_status = [
+            'sent',
+            'delivered',
+            'failed',
+            'partial_failed',
+            'suppressed',
+          ].includes(deliveryStatus)
+            ? deliveryStatus
+            : 'unverified';
+          op.delivery_verified = false;
+          const messageId = delivery?.messageId;
+          if (typeof messageId === 'string' && snowflake.test(messageId)) {
+            op.message_id = messageId;
+            // One exact-ID read, never a text match or a scan of unrelated messages.
+            try {
+              const readback = await this.cli(t, [
+                'read',
+                '--target',
+                'channel:' + id,
+                '--message-id',
+                messageId,
+                '--limit',
+                '1',
+              ]);
+              op.delivery_verified =
+                readback.channelId === id &&
+                Array.isArray(readback.messages) &&
+                readback.messages.some(
+                  (m: any) => m.id === messageId && (!m.channel_id || m.channel_id === id)
+                );
+            } catch {
+              /* Delivery may have succeeded; a failed read does not authorize retry. */
+            }
+          }
+          op.error_code = result?._cliFailure ? result._cliCode : undefined;
+          op.status = result?._cliFailure
+            ? result._cliCode === 'CLI_TIMEOUT'
+              ? 'run_unknown'
+              : 'run_failed'
+            : ['ok', 'completed'].includes(result?.status)
+              ? 'completed'
+              : result?.status === 'error' || result?.ok === false
+                ? 'run_failed'
+                : 'run_unknown';
+          op.generation_status = op.status;
+          op.handoff = 'Continue on Discord: ' + op.discord_url;
+          if (
+            (op.delivery_status !== 'sent' && op.delivery_status !== 'delivered') ||
+            !op.delivery_verified
+          )
+            op.handoff +=
+              ' (first-response delivery ' +
+              op.delivery_status +
+              '; ' +
+              (op.delivery_verified ? 'message verified' : 'not independently verified') +
+              ')';
+          if (op.status !== 'completed')
+            op.recovery =
+              'Inspect the existing conversation before authorizing a new turn. Never repeat this operation with a new ID blindly.';
+          await save();
+        } catch (error) {
+          op.status = dispatched ? 'run_unknown' : 'run_failed';
+          op.generation_status = op.status;
+          op.error_code = error instanceof DiscordError ? error.code : 'UNVERIFIED_RESULT';
+          await save();
+        } finally {
+          if (directory) await rm(directory, { recursive: true, force: true });
+        }
+      })();
+      // Handle failures saving state or cleaning files as well as runner rejection.
+      const owned = worker
+        .catch(() => {
+          log('Discord worker failed; operation requires inspection');
+        })
+        .finally(() => {
+          this.background.delete(input.operation_id);
+          this.active.delete(input.operation_id);
+          this.workers.delete(owned);
+        });
+      this.workers.add(owned);
+      dir = undefined; // worker owns the prompt until generation and cleanup finish
+      return accepted;
     } catch (error) {
       op.error_code = error instanceof DiscordError ? error.code : 'UNVERIFIED_RESULT';
       op.status = dispatched
