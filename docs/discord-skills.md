@@ -22,7 +22,7 @@ Example shape, with placeholders to replace before use:
 [{ "name": "project", "guildId": "GUILD_SNOWFLAKE", "channelId": "CHANNEL_SNOWFLAKE", "accountId": "bot", "agentId": "main" }]
 ```
 
-The CLI uses its own configured gateway, accounts and credentials; OPENCLAW_INSTANCES selects only direct HTTP chat targets. The service never loads secrets itself for Discord. A deployment launcher that filters environment variables must explicitly pass the new settings.
+The CLI uses its own configured gateway, accounts and credentials. Channel creation uses the named OPENCLAW_INSTANCES entry (or the single default instance), with its existing server-side token; credentials are never accepted in tool input. A deployment launcher that filters environment variables must explicitly pass the new settings.
 
 Only expose this capability to callers trusted to act within every configured target. This is a shared service allowlist, not per-user Discord ACLs. HTTP deployments should enable OAuth and restrict network access. Existing gateway policy and bot permissions remain authoritative. Guild identity is read back before writes; existing thread ancestry is checked before delivery.
 
@@ -30,11 +30,11 @@ Invocation environment is inherited unchanged, including OPENCLAW_SHELL and call
 
 ## Tools
 
-- openclaw_discord_channels reads and verifies each allowlisted parent.
+- openclaw_discord_channels reads and verifies each allowlisted parent, including persistently admitted channels, topic/category metadata and available creation policies.
 - openclaw_discord_threads lists active threads or archived public threads. Active listing has no pagination. Archived listing uses before as an ISO archive timestamp and limit up to 100. Private archive enumeration is not supported.
 - openclaw_discord_ask accepts new_thread or continue. New mode requires title; continue requires channel_id. Both require target, prompt and an unpredictable operation_id of 16–100 URL-safe characters.
 - openclaw_discord_operation reads a durable record without writes or CLI calls.
-- openclaw_discord_create_channel explicitly reports unsupported and performs no write. OpenClaw 2026.10.9 documents only message channel info/list. No nonexistent flags are exposed.
+- openclaw_discord_create_channel creates only normal text channels through the documented Gateway message/channel-create action. It requires a separately enabled creation policy and explicit authorization for both creation and persistent admission. CLI thread/session actions do not use this HTTP route. Forum/media parent writes are rejected before effects rather than inventing starter-message behavior.
 
 New threads start ordinary session keys agent:<agentId>:discord:channel:<threadId>. The thread ID itself is the channel peer; there is no parent:thread suffix. This was checked against Discord's installed route-resolution and session-key-normalization implementations and the Discord messaging documentation. The agent CLI uses --session-key, --message-file, --deliver, --reply-channel discord, --reply-to channel:<id>, --reply-account, --agent and --json.
 
@@ -46,13 +46,23 @@ An exclusive file claim and synced record precede external writes. Reusing the s
 
 There is no exactly-once guarantee across Discord and the local filesystem. A crash can leave creating/running, and an ambiguous CLI failure can leave creation_unknown/run_unknown. Inspect the existing target and gateway logs before authorizing a new operation. State records must not be deleted to force retries. Local filesystem atomic-create semantics are required; network filesystems and multi-host replication are not supported.
 
-completed means the agent CLI reported a successful run, not independently verified Discord delivery. Links, session keys and run IDs are returned when known. Partial creation retains the thread and does not start the agent. CLI stderr and raw failure output are not returned or logged by this adapter.
+completed means the agent CLI reported a successful run, not independently verified Discord delivery. Links, session keys and run IDs are returned when known. Partial creation retains the thread and does not start the agent. CLI stderr and raw failure output are not returned or logged by this adapter. Nonzero CLI exits cannot become completed even when stdout claims success; known thread IDs are preserved as partial creation. Sanitized error_code fields identify CLI_TIMEOUT, CLI_EXIT_NONZERO and verified policy/preflight failures.
 
 Modern HTTP async task ownership uses a hash of the validated access token, never clientInfo. Reconnects with that token retain access; token rotation changes ownership. Anonymous modern calls cannot start or access async tasks because there is no stable authenticated owner. Stateful legacy connections retain the prior connection-local ownership rules. All existing tool names remain listed.
 
-## Channel creation follow-up
+## Explicit channel creation
 
-The documented /tools/invoke HTTP API can invoke message/channel-create with operator credentials, and the Discord plugin implements that action. It was inspected, not called. It is deliberately not added as an implicit fallback: that endpoint carries full operator authority and needs a separately reviewed service authorization/provenance design, explicit creation-guild policy, and independent idempotency/partial-outcome tests. The CLI-only adapter does not silently switch to it. Channel creation remains a blocked feature in this staged implementation.
+Enable MCP_DISCORD_CHANNEL_CREATE_ENABLED=true only after defining MCP_DISCORD_CREATION_POLICIES as a JSON array. Each policy has name, guildId, categoryId, accountId, agentId and instance. The instance names an existing server-side gateway configuration with a credential. MCP_DISCORD_CLI_GATEWAY_INSTANCE must name that same instance: this is the operator assertion that the CLI targets that gateway, not a client-selected URL. All policies currently use that one CLI gateway.
+
+Set MCP_DISCORD_ACKNOWLEDGE_INBOUND_ROUTING=true only after verifying that new channels in each configured guild/category are allowed by OpenClaw and Discord and route inbound messages to the configured agent. The adapter does not change bindings, channel permissions, mention requirements or gateway policy. It uses explicit --agent for CLI turns but cannot prove portable inbound routing from Discord channel metadata. If those prerequisites are not satisfied, leave creation disabled.
+
+The caller selects a policy, name and optional topic, and must pass authorize_create=true and authorize_admission=true after user approval. The service reads the configured category through CLI, verifies its guild/type, invokes only message/channel-create with channelType=0, and reads the resulting channel back through the same CLI account. HTTPS or loopback HTTP is required; redirects are rejected. The server-side token never appears in results. No arbitrary tool, action, URL, headers, account, guild or category can be supplied by the caller.
+
+The HTTP adapter refuses agent-originated environments (OPENCLAW_SHELL and agent/session/caller identity markers) before dispatch. It never clears or replaces them. The service must be independently operator-launched; this is not a way for an agent to bypass its messaging tools.
+
+A completed creation record is also the persistent admission record. The returned created-<channelId> target becomes usable by channels, threads and ask across restarts. Its policy digest must still match current operator configuration. Removing/changing the policy revokes admission; moving the channel outside the category fails readback. Clients cannot forge admissions by supplying a target string. No gateway config is rewritten.
+
+created_unadmitted retains a known channel ID when post-create verification fails; creation_unknown means a write may have happened without a confirmed ID. Neither is admitted or automatically retried. A known 401/403/404/429 is returned as creation_rejected with a sanitized error_code. HTTP idempotencyKey supplies a stable tool-call ID, not a claimed provider exactly-once guarantee; the local durable claim prevents replay. If the process stops after creation but before admission, inspect and recover under operator control rather than creating another channel.
 
 ## Verification before deployment
 

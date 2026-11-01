@@ -19,6 +19,7 @@ async function fixture(
     wrongGuild?: boolean;
     wrongParent?: boolean;
     runResult?: any;
+    parentType?: number;
   } = {}
 ) {
   const stateDir = await mkdtemp(join(tmpdir(), 'discord-test-'));
@@ -40,8 +41,9 @@ async function fixture(
           channel: {
             id,
             guild_id: options.wrongGuild ? '100000000000000009' : guild,
-            type: id === channel ? 0 : 11,
-            parent_id: options.wrongParent ? '100000000000000009' : channel,
+            type: id === channel ? (options.parentType ?? 0) : 11,
+            parent_id:
+              id === channel ? undefined : options.wrongParent ? '100000000000000009' : channel,
             name: 'Allowed',
           },
         },
@@ -135,6 +137,23 @@ describe('Discord service', () => {
       'different arguments'
     );
   });
+  it.each([15, 16])('rejects forum/media type %i before writes', async (parentType) => {
+    const f = await fixture({ parentType });
+    const result = await f.service.ask(input);
+    expect(result.error_code).toBe('FORUM_MEDIA_WRITES_UNSUPPORTED');
+    expect(f.runner.mock.calls.some((c) => c[1][2] === 'create' || c[1][0] === 'agent')).toBe(
+      false
+    );
+  });
+  it('does not report completion on conflicting nonzero CLI exit', async () => {
+    const f = await fixture({
+      runResult: { status: 'ok', _cliFailure: true, _cliCode: 'CLI_EXIT_NONZERO' },
+    });
+    expect(await f.service.ask(input)).toMatchObject({
+      status: 'run_failed',
+      error_code: 'CLI_EXIT_NONZERO',
+    });
+  });
   it('claims concurrent requests before any write', async () => {
     const f = await fixture();
     await Promise.allSettled([f.service.ask(input), f.service.ask(input)]);
@@ -222,12 +241,19 @@ describe('Discord service', () => {
       'only supported'
     );
   });
-  it('exposes honest unsupported channel creation and rejects raw arguments', async () => {
+  it('requires channel creation opt-in and rejects raw arguments', async () => {
     const f = await fixture();
     expect(
-      (await handleDiscord(f.service, 'openclaw_discord_create_channel', {})).structuredContent
-        ?.status
-    ).toBe('unsupported');
+      (
+        await handleDiscord(f.service, 'openclaw_discord_create_channel', {
+          policy: 'work',
+          name: 'test',
+          operation_id: 'channel-operation-001',
+          authorize_create: true,
+          authorize_admission: true,
+        })
+      ).structuredContent?.error_code
+    ).toBe('CHANNEL_CREATION_DISABLED');
     expect(
       (await handleDiscord(f.service, 'openclaw_discord_ask', { ...input, args: ['--local'] }))
         .isError

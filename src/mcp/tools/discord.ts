@@ -1,3 +1,4 @@
+import { DiscordError } from '../../openclaw/discord-channels.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { DiscordService } from '../../openclaw/discord.js';
 import { errorResponse, structuredJsonResponse } from '../../utils/response-helpers.js';
@@ -67,9 +68,24 @@ export const discordTools: Tool[] = [
   {
     name: 'openclaw_discord_create_channel',
     description:
-      'Unsupported by the current CLI adapter: OpenClaw message channel exposes info/list only. No channel is created. Ask the user/operator to create and allowlist a channel; do not invent CLI flags.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    annotations: { readOnlyHint: true },
+      'Create a normal text channel under an operator-approved guild/category using the configured Gateway API, then persistently admit it for CLI coordination. Requires explicit user authorization for creation AND admission. No arbitrary tool proxy. Keep operation ID on uncertainty.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        policy: {
+          type: 'string',
+          description: 'Creation policy returned by openclaw_discord_channels.',
+        },
+        operation_id: operation,
+        name: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,99}$' },
+        topic: { type: 'string', maxLength: 1024 },
+        authorize_create: { type: 'boolean', const: true },
+        authorize_admission: { type: 'boolean', const: true },
+      },
+      required: ['policy', 'operation_id', 'name', 'authorize_create', 'authorize_admission'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   },
 ];
 export async function handleDiscord(service: DiscordService, name: string, input: any) {
@@ -85,10 +101,7 @@ export async function handleDiscord(service: DiscordService, name: string, input
     return errorResponse('Invalid Discord tool arguments');
   try {
     if (name === 'openclaw_discord_create_channel')
-      return structuredJsonResponse({
-        status: 'unsupported',
-        reason: 'OpenClaw CLI has no channel create command. No write attempted.',
-      });
+      return structuredJsonResponse(await service.createChannel(input));
     const result =
       name === 'openclaw_discord_channels'
         ? await service.channels()
@@ -98,7 +111,16 @@ export async function handleDiscord(service: DiscordService, name: string, input
             ? await service.ask(input)
             : await service.status(input.operation_id);
     return structuredJsonResponse(result);
-  } catch {
+  } catch (error) {
+    if (error instanceof DiscordError)
+      return {
+        ...errorResponse(error.code),
+        structuredContent: {
+          error_code: error.code,
+          uncertain: error.uncertain,
+          retry_safe: false,
+        },
+      };
     return errorResponse(
       'Discord request rejected or could not be verified. Check arguments, allowlist and operation status; do not blindly retry writes.'
     );

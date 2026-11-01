@@ -1,3 +1,4 @@
+import { channelInvoker } from './openclaw/discord-channels.js';
 import { loadPackagedSkills } from './server/skills.js';
 import { DiscordService, loadDiscordConfig } from './openclaw/discord.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -37,7 +38,15 @@ const deps: ToolRegistrationDeps = {
 async function main() {
   deps.skills = await loadPackagedSkills();
   const discordConfig = loadDiscordConfig();
-  if (discordConfig) deps.discord = new DiscordService(discordConfig);
+  if (discordConfig) {
+    if (
+      discordConfig.creationPolicies?.some(
+        (p) => !args.instances.some((i) => i.name === p.instance && i.token)
+      )
+    )
+      throw new Error('Channel creation requires a configured gateway instance with credentials');
+    deps.discord = new DiscordService(discordConfig, undefined, channelInvoker(args.instances));
+  }
   log(`Starting ${SERVER_NAME} v${SERVER_VERSION}`);
   log(`Model: ${args.model}`);
   log(`Transport: ${args.transport}`);
