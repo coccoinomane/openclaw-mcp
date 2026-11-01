@@ -75,7 +75,7 @@ async function stopChild(child: ChildProcess) {
   }
 }
 
-async function httpBridge(gatewayUrl: string, auth = false) {
+async function httpBridge(gatewayUrl: string, auth = false, extraEnv: Record<string, string> = {}) {
   const reservation = createServer();
   const port = await listen(reservation);
   await new Promise<void>((resolve) => reservation.close(() => resolve()));
@@ -106,7 +106,7 @@ async function httpBridge(gatewayUrl: string, auth = false) {
       '--trust-proxy',
       'true',
     ]),
-    { env: childEnv, stdio: ['ignore', 'ignore', 'pipe'] }
+    { env: { ...childEnv, ...extraEnv }, stdio: ['ignore', 'ignore', 'pipe'] }
   );
   let diagnostics = '';
   child.stderr!.on('data', (chunk) => {
@@ -155,6 +155,94 @@ afterEach(async () => {
 });
 
 describe('conversation metadata across real MCP transports', () => {
+  it.each(['http', 'sse', 'stdio', 'modern'] as const)(
+    '%s wires service-owned Discord reads',
+    async (transport) => {
+      const guild = '400000000000000001',
+        channel = '400000000000000002';
+      const requests: any[] = [];
+      const mock = createServer(async (req, res) => {
+        let raw = '';
+        for await (const chunk of req) raw += chunk;
+        requests.push({
+          url: req.url,
+          authorization: req.headers.authorization,
+          body: JSON.parse(raw),
+        });
+        res.setHeader('Content-Type', 'application/json');
+        res.end(
+          JSON.stringify({
+            ok: true,
+            result: {
+              details: {
+                ok: true,
+                channels: [
+                  { id: channel, guild_id: guild, type: 0, name: 'Allowed' },
+                  { id: '400000000000000003', guild_id: guild, type: 0, name: 'Private' },
+                ],
+              },
+            },
+          })
+        );
+      });
+      const port = await listen(mock);
+      cleanups.push(async () => {
+        mock.closeAllConnections();
+        await new Promise<void>((resolve) => mock.close(() => resolve()));
+      });
+      const url = 'http://127.0.0.1:' + port;
+      const env = {
+        MCP_DISCORD_ENABLED: 'true',
+        MCP_DISCORD_EXECUTABLE: '/never-execute-discord-cli',
+        MCP_DISCORD_STATE_DIR: '/unused-test-state',
+        MCP_DISCORD_CLI_GATEWAY_INSTANCE: 'default',
+        OPENCLAW_GATEWAY_TOKEN: 'mock-read-token',
+        MCP_DISCORD_TARGETS: JSON.stringify([
+          { name: 'work', guildId: guild, channelId: channel, accountId: 'bot', agentId: 'main' },
+        ]),
+      };
+      let client: Client | ModernClient;
+      if (transport === 'stdio') {
+        client = new Client({ name: 'discord-stdio', version: '1' });
+        await client.connect(
+          new StdioClientTransport({
+            command: process.execPath,
+            args: entryArgs(['--openclaw-url', url]),
+            env: { ...childEnv, ...env },
+            stderr: 'pipe',
+          })
+        );
+      } else {
+        const base = await httpBridge(url, false, env);
+        if (transport === 'modern') {
+          client = new ModernClient(
+            { name: 'discord-modern', version: '1' },
+            { versionNegotiation: { mode: { pin: '2026-07-28' } } }
+          );
+          await client.connect(new ModernTransport(new URL(base + '/mcp')));
+        } else client = await connectHttp(base, 'discord-read', transport);
+      }
+      cleanups.push(() => client.close());
+      const result = await client.callTool({ name: 'openclaw_discord_channels', arguments: {} });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        channels: [{ target: 'work', channel_id: channel, name: 'Allowed' }],
+      });
+      expect(JSON.stringify(result)).not.toContain('Private');
+      expect(requests).toEqual([
+        {
+          url: '/tools/invoke',
+          authorization: 'Bearer ' + env.OPENCLAW_GATEWAY_TOKEN,
+          body: {
+            tool: 'message',
+            sessionKey: 'agent:main:main',
+            args: { action: 'channel-list', channel: 'discord', accountId: 'bot', guildId: guild },
+          },
+        },
+      ]);
+    }
+  );
+
   it.each(['http', 'sse'] as const)(
     '%s preserves initialize labels, metadata and connection ownership',
     async (transport) => {

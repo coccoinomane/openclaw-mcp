@@ -1,4 +1,5 @@
 import { channelInvoker } from './openclaw/discord-channels.js';
+import { channelReader } from './openclaw/discord-read.js';
 import { loadPackagedSkills } from './server/skills.js';
 import { DiscordService, loadDiscordConfig } from './openclaw/discord.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -45,7 +46,13 @@ async function main() {
       )
     )
       throw new Error('Channel creation requires a configured gateway instance with credentials');
-    deps.discord = new DiscordService(discordConfig, undefined, channelInvoker(args.instances));
+    deps.discord = new DiscordService(
+      discordConfig,
+      undefined,
+      channelInvoker(args.instances),
+      undefined,
+      channelReader(args.instances, discordConfig)
+    );
   }
   log(`Starting ${SERVER_NAME} v${SERVER_VERSION}`);
   log(`Model: ${args.model}`);

@@ -63,6 +63,13 @@ async function fixture(
       if (options.createError) throw new Error('timeout');
       return { payload: { ok: true, thread: { id: thread }, partial: options.partial } };
     }
+    if (args[1] === 'channel' && args[2] === 'list')
+      return {
+        payload: {
+          ok: true,
+          channels: [{ id: channel, guild_id: guild, type: 0, name: 'Allowed' }],
+        },
+      };
     if (args[2] === 'list')
       return {
         payload: {

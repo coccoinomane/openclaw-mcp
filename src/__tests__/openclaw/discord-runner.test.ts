@@ -1,13 +1,77 @@
 import { readFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
-import { runCli } from '../../openclaw/discord.js';
+import { runCli, DiscordService } from '../../openclaw/discord.js';
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.resetAllMocks();
+  vi.restoreAllMocks();
 });
 describe('Discord CLI execution', () => {
+  it.each([
+    ['message', 'channel', 'list'],
+    ['agent', '--message-file', '/private/prompt'],
+  ])('closes stdin for %j', async (...args) => {
+    const end = vi.fn();
+    vi.mocked(execFile).mockImplementation(((_file, _args, _options, callback) => {
+      callback(null, '{"ok":true}', '');
+      return { stdin: { end } };
+    }) as any);
+    await runCli('mock-only', args, 1000);
+    expect(end).toHaveBeenCalledTimes(1);
+  });
+  it.each(['{"ok":true,"channels":[]}', 'private malformed stdout'])(
+    'logs safe timeout diagnostics and never accepts stdout',
+    async (stdout) => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.mocked(execFile).mockImplementation(((_file, _args, _options, callback) => {
+        callback(
+          Object.assign(new Error('secret-error'), { killed: true, signal: 'SIGTERM', code: null }),
+          stdout,
+          'secret-stderr'
+        );
+        return { stdin: { end: vi.fn() } };
+      }) as any);
+      const service = new DiscordService({
+        executable: 'secret-path',
+        stateDir: '/unused-test-state',
+        targets: [
+          {
+            name: 'work',
+            guildId: '300000000000000001',
+            channelId: '300000000000000002',
+            accountId: 'secret-account',
+            agentId: 'main',
+          },
+        ],
+      });
+      await expect(service.channels()).rejects.toThrow('CLI_TIMEOUT');
+      const line = log.mock.calls[0][0];
+      const diagnostic = JSON.parse(line.slice(line.indexOf('{')));
+      expect(diagnostic).toEqual({
+        classification: 'CLI_TIMEOUT',
+        elapsed_ms: expect.any(Number),
+        signal: 'SIGTERM',
+        code: null,
+        stdout_bytes: new TextEncoder().encode(stdout).length,
+        stderr_bytes: 13,
+        valid_json: stdout.startsWith('{'),
+      });
+      expect(line).not.toContain('secret');
+      expect(line).not.toContain('private');
+    }
+  );
+  it('does not close stdin for an unrelated interactive invocation', async () => {
+    const end = vi.fn();
+    vi.mocked(execFile).mockImplementation(((_file, _args, _options, callback) => {
+      callback(null, '{}', '');
+      return { stdin: { end } };
+    }) as any);
+    await runCli('mock-only', ['agent'], 1000);
+    expect(end).not.toHaveBeenCalled();
+  });
+
   it('keeps source text free of literal NUL bytes', async () => {
     const bytes = await readFile(new URL('../../openclaw/discord.ts', import.meta.url));
     expect([...bytes].includes(0)).toBe(false);

@@ -174,9 +174,15 @@ describe('explicit channel creation', () => {
       args[0] === 'agent'
         ? { status: 'ok' }
         : {
-            payload: {
-              channel: await f.inspect(policy, args[args.indexOf('--target') + 1].slice(8)),
-            },
+            payload:
+              args[2] === 'list'
+                ? {
+                    ok: true,
+                    channels: await Promise.all(
+                      [channel, category].map((id) => f.inspect(policy, id))
+                    ),
+                  }
+                : { channel: await f.inspect(policy, args[args.indexOf('--target') + 1].slice(8)) },
           }
     );
     const service = new DiscordService(config, runner, f.invoke);

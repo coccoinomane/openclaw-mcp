@@ -5,6 +5,8 @@ import {
   type ChannelInvoker,
   type AdmittedTarget,
 } from './discord-channels.js';
+import type { DiscordReader } from './discord-read.js';
+import { log } from '../utils/logger.js';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -89,32 +91,64 @@ function validateConfig(config: DiscordConfig) {
 }
 export const runCli: CliRunner = (executable, args, timeout) =>
   new Promise((resolve, reject) => {
+    const started = performance.now();
     // Inherit provenance unchanged, including OPENCLAW_SHELL and caller identity.
-    execFile(
+    const child = execFile(
       executable,
       args,
       { shell: false, env: process.env, timeout, maxBuffer: 4 * 1024 * 1024 },
-      (error, stdout) => {
+      (error, stdout, stderr) => {
+        let parsed: any;
+        let validJson = false;
+        try {
+          parsed = JSON.parse(stdout);
+          validJson = true;
+        } catch {
+          /* Never log process output. */
+        }
         if (error) {
-          // Some CLI failures still include a structured partial/run result.
-          try {
-            resolve({
-              ...JSON.parse(stdout),
-              _cliFailure: true,
-              _cliCode: error.killed ? 'CLI_TIMEOUT' : 'CLI_EXIT_NONZERO',
-            });
-          } catch {
-            reject(new DiscordError(error.killed ? 'CLI_TIMEOUT' : 'CLI_EXIT_NONZERO', true));
+          const timedOut = error.killed && error.code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+          const classification = timedOut ? 'CLI_TIMEOUT' : 'CLI_EXIT_NONZERO';
+          log(
+            'Discord CLI diagnostic ' +
+              JSON.stringify({
+                classification,
+                elapsed_ms: Math.round(performance.now() - started),
+                signal: ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGABRT'].includes(error.signal ?? '')
+                  ? error.signal
+                  : error.signal
+                    ? 'OTHER'
+                    : null,
+                code:
+                  typeof error.code === 'number'
+                    ? error.code
+                    : ['ENOENT', 'EACCES', 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'].includes(
+                          error.code ?? ''
+                        )
+                      ? error.code
+                      : error.code
+                        ? 'OTHER'
+                        : null,
+                stdout_bytes: new TextEncoder().encode(stdout).length,
+                stderr_bytes: new TextEncoder().encode(stderr).length,
+                valid_json: validJson,
+              })
+          );
+          // Keep known identities for recovery, but never accept failed stdout as success.
+          if (validJson && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            resolve({ ...parsed, _cliFailure: true, _cliCode: classification });
+          } else {
+            reject(new DiscordError(classification, true));
           }
           return;
         }
-        try {
-          resolve(JSON.parse(stdout));
-        } catch {
-          reject(new DiscordError('CLI_INVALID_JSON', true));
-        }
+        if (validJson) resolve(parsed);
+        else reject(new DiscordError('CLI_INVALID_JSON', true));
       }
     );
+    // These invocations never consume prompts from stdin. Deliver EOF to CLI startup.
+    if (args[0] === 'message' || (args[0] === 'agent' && args.includes('--message-file')))
+      child.stdin?.end();
   });
 function payload(value: any): any {
   const result = value?.payload ?? value;
@@ -175,7 +209,8 @@ export class DiscordService {
     readonly config: DiscordConfig,
     private readonly runner: CliRunner = runCli,
     invoke?: ChannelInvoker,
-    private readonly resolveRoute?: DiscordRouteResolver
+    private readonly resolveRoute?: DiscordRouteResolver,
+    private readonly reader?: DiscordReader
   ) {
     validateConfig(config);
     if (config.creationPolicies) {
@@ -184,15 +219,7 @@ export class DiscordService {
         config.stateDir,
         config.creationPolicies,
         invoke,
-        async (p, id) =>
-          (
-            await this.cli({ ...p, channelId: id }, [
-              'channel',
-              'info',
-              '--target',
-              'channel:' + id,
-            ])
-          ).channel
+        async (p, id) => (await this.readInfo({ ...p, channelId: id }, id)).channel
       );
     }
   }
@@ -238,10 +265,13 @@ export class DiscordService {
       )
     );
   }
-  private async info(t: AdmittedTarget, id: string, parent = false) {
+  private async readInfo(t: AdmittedTarget, id: string) {
     check(id, snowflake, 'channel ID');
-    const result = await this.cli(t, ['channel', 'info', '--target', 'channel:' + id]);
-    const c = result.channel;
+    return this.reader && this.config.cliGatewayInstance
+      ? this.reader(t, { action: 'channel-info', channelId: id })
+      : this.cli(t, ['channel', 'info', '--target', 'channel:' + id]);
+  }
+  private verifyChannel(t: AdmittedTarget, id: string, c: any, parent = false) {
     if (!c || c.id !== id || c.guild_id !== t.guildId)
       throw new Error('Channel guild could not be verified');
     if (id === t.channelId && t.categoryId && c.parent_id !== t.categoryId)
@@ -256,18 +286,55 @@ export class DiscordService {
     }
     return c;
   }
+  private async info(t: AdmittedTarget, id: string, parent = false) {
+    return this.verifyChannel(t, id, (await this.readInfo(t, id)).channel, parent);
+  }
   async channels() {
     const channels = [];
-    for (const t of [...this.config.targets, ...((await this.creation?.admitted()) ?? [])]) {
-      const c = await this.info(t, t.channelId, true);
-      const category = c.parent_id
-        ? (await this.cli(t, ['channel', 'info', '--target', 'channel:' + c.parent_id])).channel
-        : undefined;
+    const targets = [...this.config.targets, ...((await this.creation?.admitted()) ?? [])];
+    // One live list per guild/account/agent, scoped to this request only.
+    const lists = new Map<string, Map<string, any>>();
+    for (const t of targets) {
+      const key = JSON.stringify([t.guildId, t.accountId, t.agentId]);
+      if (lists.has(key)) continue;
+      const data =
+        this.reader && this.config.cliGatewayInstance
+          ? await this.reader(t, { action: 'channel-list' })
+          : await this.cli(t, ['channel', 'list', '--guild-id', t.guildId]);
       if (
-        category &&
-        (category.id !== c.parent_id || category.guild_id !== t.guildId || category.type !== 4)
+        !data ||
+        data.ok === false ||
+        data.isError ||
+        data.partial ||
+        !Array.isArray(data.channels)
+      )
+        throw new DiscordError('CHANNEL_LIST_UNVERIFIED');
+      const byId = new Map<string, any>();
+      for (const c of data.channels) {
+        if (!c || typeof c.id !== 'string' || !snowflake.test(c.id) || byId.has(c.id))
+          throw new DiscordError('CHANNEL_LIST_UNVERIFIED');
+        byId.set(c.id, c);
+      }
+      lists.set(key, byId);
+    }
+    for (const t of targets) {
+      const list = lists.get(JSON.stringify([t.guildId, t.accountId, t.agentId]))!;
+      const c = this.verifyChannel(t, t.channelId, list.get(t.channelId), true);
+      const category = c.parent_id == null ? undefined : list.get(c.parent_id);
+      if (
+        c.parent_id != null &&
+        (!category ||
+          category.id !== c.parent_id ||
+          category.guild_id !== t.guildId ||
+          category.type !== 4)
       )
         throw new DiscordError('CATEGORY_VERIFICATION_FAILED');
+      if (
+        typeof c.name !== 'string' ||
+        (c.topic != null && typeof c.topic !== 'string') ||
+        (category && typeof category.name !== 'string')
+      )
+        throw new DiscordError('CHANNEL_METADATA_UNVERIFIED');
       channels.push({
         target: t.name,
         channel_id: c.id,
