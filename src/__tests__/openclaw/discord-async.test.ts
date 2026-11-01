@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DiscordService, type DiscordConfig } from '../../openclaw/discord.js';
 import { DiscordError } from '../../openclaw/discord-channels.js';
-import { requestPublisher, requestLabel } from '../../openclaw/discord-request.js';
+import { requestPublisher } from '../../openclaw/discord-request.js';
 
 const guild = '400000000000000001',
   parent = '400000000000000002',
@@ -302,30 +302,38 @@ describe('closed request publication', () => {
       send: requestPublisher(f.config, { DISCORD_BOT_TOKEN: 'mock-token' }, http)!,
     };
   }
-  it.each([input.prompt, '😀漢字\n '.repeat(1000)])(
-    'publishes exact inline or file text, suppresses mentions, reads exact ID',
-    async (prompt) => {
-      const f = await publisherFixture(prompt);
-      const sent = vi.fn(async () => {});
-      await f.send(target, thread, prompt, input.operation_id, sent);
-      expect(sent).toHaveBeenCalledWith(message);
-      expect(f.http).toHaveBeenCalledTimes(2);
-      expect(f.http.mock.calls[0][0]).toBe(
-        'https://discord.com/api/v10/channels/' + thread + '/messages'
-      );
-      expect(f.http.mock.calls[1][0]).toBe(
-        'https://discord.com/api/v10/channels/' + thread + '/messages/' + message
-      );
-      expect(f.http.mock.calls[0][1]).toMatchObject({
-        redirect: 'error',
-        headers: { Authorization: 'Bot mock-token' },
-      });
-      if (prompt === input.prompt)
-        expect(JSON.parse(f.http.mock.calls[0][1].body).content).toBe(
-          requestLabel + '\n\n' + prompt
-        );
+  it.each([
+    input.prompt,
+    '  Testo originale\ncon spazi  ',
+    'x'.repeat(2000),
+    'x'.repeat(2001),
+    '😀漢字\n '.repeat(1000),
+  ])('publishes exact inline or file text, suppresses mentions, reads exact ID', async (prompt) => {
+    const f = await publisherFixture(prompt);
+    const sent = vi.fn(async () => {});
+    await f.send(target, thread, prompt, input.operation_id, sent);
+    expect(sent).toHaveBeenCalledWith(message);
+    expect(f.http).toHaveBeenCalledTimes(2);
+    expect(f.http.mock.calls[0][0]).toBe(
+      'https://discord.com/api/v10/channels/' + thread + '/messages'
+    );
+    expect(f.http.mock.calls[1][0]).toBe(
+      'https://discord.com/api/v10/channels/' + thread + '/messages/' + message
+    );
+    expect(f.http.mock.calls[0][1]).toMatchObject({
+      redirect: 'error',
+      headers: { Authorization: 'Bot mock-token' },
+    });
+    const body = f.http.mock.calls[0][1].body;
+    if (prompt.length <= 2000) {
+      expect(typeof body).toBe('string');
+      expect(JSON.parse(body).content).toBe(prompt);
+    } else {
+      expect(body).toBeInstanceOf(FormData);
+      expect(JSON.parse(body.get('payload_json')).content).toBe('');
+      expect(await body.get('files[0]').text()).toBe(prompt);
     }
-  );
+  });
   it('rejects scope and provenance before dispatch', async () => {
     const f = await publisherFixture();
     await expect(

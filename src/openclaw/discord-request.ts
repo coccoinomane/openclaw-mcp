@@ -3,7 +3,6 @@ import { assertServiceProvenance, DiscordError, type AdmittedTarget } from './di
 import type { DiscordConfig } from './discord.js';
 
 const snowflake = /^[1-9][0-9]{16,19}$/;
-export const requestLabel = 'Richiesta ricevuta via MCP';
 export type RequestPublisher = (
   target: AdmittedTarget,
   threadId: string,
@@ -47,11 +46,8 @@ export function requestPublisher(
       !/^[a-zA-Z0-9_-]{16,100}$/.test(operation)
     )
       throw new DiscordError('REQUEST_ARGUMENTS_INVALID');
-    const inline = requestLabel + '\n\n' + prompt;
-    const attachment = inline.length > 2000;
-    const content = attachment
-      ? requestLabel + '\n\nTesto integrale allegato: richiesta.txt'
-      : inline;
+    const attachment = prompt.length > 2000;
+    const content = attachment ? '' : prompt;
     const payload = {
       content,
       allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },

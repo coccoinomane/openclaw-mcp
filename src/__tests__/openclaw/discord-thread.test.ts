@@ -436,6 +436,12 @@ describe('operator configuration and closed inputs', () => {
     const tool = discordTools.find((t) => t.name === 'openclaw_discord_ask')!;
     expect(tool.description).toContain('not answer content');
     expect(tool.description).toContain('Does not wait for generation');
+    expect(tool.description).toContain('only the Discord link');
+    expect(tool.description).toContain('unless explicitly requested');
+    expect(tool.description).toContain('report errors or partial/unknown outcomes');
+    expect((tool.inputSchema.properties?.prompt as { description: string }).description).toContain(
+      'verbatim where possible'
+    );
     expect(Object.keys(tool.inputSchema.properties!)).toEqual([
       'target',
       'operation_id',
