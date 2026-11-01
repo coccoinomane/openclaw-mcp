@@ -1,3 +1,11 @@
+import {
+  assertChannelAllowed,
+  assertTargetAllowed,
+  channelAllowed,
+  dynamicTarget,
+  scopeKey,
+  type DiscoveryScope,
+} from './discord-policy.js';
 import type { RequestPublisher } from './discord-request.js';
 import {
   ChannelCreation,
@@ -23,6 +31,9 @@ import { isAbsolute, join } from 'node:path';
 export interface DiscordConfig {
   executable: string;
   stateDir: string;
+  discoveryScopes?: DiscoveryScope[];
+  channelWhitelist?: string[];
+  channelBlacklist?: string[];
   creationPolicies?: CreationPolicy[];
   cliGatewayInstance?: string;
   gatewayReadsEnabled?: boolean;
@@ -52,6 +63,9 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
     executable: env.MCP_DISCORD_EXECUTABLE || 'openclaw',
     stateDir: env.MCP_DISCORD_STATE_DIR || '',
     targets: JSON.parse(env.MCP_DISCORD_TARGETS || '[]'),
+    discoveryScopes: JSON.parse(env.MCP_DISCORD_DISCOVERY_SCOPES ?? '[]'),
+    channelWhitelist: JSON.parse(env.MCP_DISCORD_CHANNEL_WHITELIST ?? '[]'),
+    channelBlacklist: JSON.parse(env.MCP_DISCORD_CHANNEL_BLACKLIST ?? '[]'),
     creationPolicies:
       env.MCP_DISCORD_CHANNEL_CREATE_ENABLED === 'true'
         ? JSON.parse(env.MCP_DISCORD_CREATION_POLICIES || '[]')
@@ -76,6 +90,48 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
   return config;
 }
 function validateConfig(config: DiscordConfig) {
+  for (const [label, values] of Object.entries({
+    targets: config.targets,
+    discoveryScopes: config.discoveryScopes === undefined ? [] : config.discoveryScopes,
+    creationPolicies: config.creationPolicies === undefined ? [] : config.creationPolicies,
+  })) {
+    if (
+      !Array.isArray(values) ||
+      values.some((v) => !v || typeof v !== 'object' || Array.isArray(v))
+    )
+      throw new Error('Invalid Discord ' + label);
+  }
+  for (const values of [config.channelWhitelist, config.channelBlacklist]) {
+    if (
+      values !== undefined &&
+      (!Array.isArray(values) ||
+        values.some((v) => typeof v !== 'string' || !snowflake.test(v)) ||
+        new Set(values).size !== values.length)
+    )
+      throw new Error('Invalid Discord channel policy IDs');
+  }
+  const scopes = new Set<string>();
+  for (const scope of config.discoveryScopes ?? []) {
+    if (
+      Object.keys(scope).some(
+        (k) => !['guildId', 'accountId', 'agentId', 'normalRouting'].includes(k)
+      )
+    )
+      throw new Error('Invalid discovery scope field');
+    check(scope.guildId, snowflake, 'scope guild ID');
+    check(scope.accountId, slug, 'scope account');
+    check(scope.agentId, /^[a-z0-9][a-z0-9_-]{0,63}$/, 'scope agent');
+    if (scopes.has(scopeKey(scope))) throw new Error('Duplicate discovery scope');
+    scopes.add(scopeKey(scope));
+  }
+  for (const t of [
+    ...config.targets,
+    ...(config.discoveryScopes ?? []),
+    ...(config.creationPolicies ?? []),
+  ]) {
+    if (t.normalRouting !== undefined && typeof t.normalRouting !== 'boolean')
+      throw new Error('Invalid normalRouting');
+  }
   if (
     !Number.isInteger(config.maxOperations ?? 4) ||
     (config.maxOperations ?? 4) < 1 ||
@@ -93,9 +149,11 @@ function validateConfig(config: DiscordConfig) {
     check(config.threadMember.userId, snowflake, 'thread member user ID');
     check(config.threadMember.accountId, slug, 'thread member account');
     if (
-      [...config.targets, ...(config.creationPolicies ?? [])].some(
-        (t) => t.accountId !== config.threadMember!.accountId
-      )
+      [
+        ...config.targets,
+        ...(config.discoveryScopes ?? []),
+        ...(config.creationPolicies ?? []),
+      ].some((t) => t.accountId !== config.threadMember!.accountId)
     )
       throw new DiscordError('THREAD_MEMBER_ACCOUNT_MISMATCH');
   }
@@ -110,7 +168,7 @@ function validateConfig(config: DiscordConfig) {
   if (!config.executable || config.executable.includes('\0')) throw new Error('Invalid executable');
   if (
     !Array.isArray(config.targets) ||
-    (!config.targets.length && !config.creationPolicies?.length)
+    (!config.targets.length && !config.discoveryScopes?.length && !config.creationPolicies?.length)
   )
     throw new Error('Discord allowlist is empty');
   if (config.creationPolicies) {
@@ -331,7 +389,12 @@ export class DiscordService {
         config.stateDir,
         config.creationPolicies,
         invoke,
-        async (p, id) => (await this.readInfo({ ...p, channelId: id }, id)).channel
+        async (p, id) => {
+          if (id !== p.categoryId) assertChannelAllowed(this.config, id);
+          else if (this.config.channelBlacklist?.includes(id))
+            throw new DiscordError('CHANNEL_POLICY_DENIED');
+          return (await this.readInfo({ ...p, channelId: id }, id)).channel;
+        }
       );
     }
   }
@@ -360,12 +423,31 @@ export class DiscordService {
   }
   async createChannel(input: any) {
     if (!this.creation) throw new DiscordError('CHANNEL_CREATION_DISABLED');
+    const policy = this.config.creationPolicies?.find((p) => p.name === input.policy);
+    if (policy && this.config.channelBlacklist?.includes(policy.categoryId))
+      throw new DiscordError('CHANNEL_POLICY_DENIED');
     return this.creation.create(input);
   }
   private async target(name: unknown) {
     const targets = [...this.config.targets, ...((await this.creation?.admitted()) ?? [])];
-    const t = targets.find((item) => item.name === name);
+    let t = targets.find((item) => item.name === name);
+    if (!t && typeof name === 'string') {
+      const match = /^discord-[a-f0-9]{64}-([1-9][0-9]{16,19})$/.exec(name);
+      if (match) {
+        t = this.config.discoveryScopes
+          ?.map((s) => dynamicTarget(s, match[1]))
+          .find((candidate) => candidate.name === name);
+        // A crafted dynamic ID must retain narrower legacy/admission constraints.
+        if (t) {
+          const existing = targets.find(
+            (item) => item.channelId === t!.channelId && scopeKey(item) === scopeKey(t!)
+          );
+          if (existing) t = { ...existing, name: t.name };
+        }
+      }
+    }
     if (!t) throw new Error('Target is not allowlisted');
+    assertTargetAllowed(this.config, t);
     return t;
   }
   private async cli(t: DiscordConfig['targets'][number], args: string[]) {
@@ -384,11 +466,14 @@ export class DiscordService {
       : this.cli(t, ['channel', 'info', '--target', 'channel:' + id]);
   }
   private verifyChannel(t: AdmittedTarget, id: string, c: any, parent = false) {
-    if (!c || c.id !== id || c.guild_id !== t.guildId)
+    assertTargetAllowed(this.config, t, id);
+    if (!c || c.id !== id || c.guild_id !== t.guildId || !Number.isInteger(c.type))
       throw new Error('Channel guild could not be verified');
     if (id === t.channelId && t.categoryId && c.parent_id !== t.categoryId)
       throw new DiscordError('ADMITTED_CHANNEL_MOVED');
     const thread = [10, 11, 12].includes(c.type);
+    if (thread && this.config.channelBlacklist?.includes(c.parent_id))
+      throw new DiscordError('CHANNEL_POLICY_DENIED');
     if (
       parent
         ? id !== t.channelId || ![0, 5, 15, 16].includes(c.type)
@@ -399,15 +484,21 @@ export class DiscordService {
     return c;
   }
   private async info(t: AdmittedTarget, id: string, parent = false) {
+    assertTargetAllowed(this.config, t, id);
     return this.verifyChannel(t, id, (await this.readInfo(t, id)).channel, parent);
   }
   async channels() {
     const channels = [];
-    const targets = [...this.config.targets, ...((await this.creation?.admitted()) ?? [])];
+    const targets = [...this.config.targets, ...((await this.creation?.admitted()) ?? [])].filter(
+      (t) => channelAllowed(this.config, t.channelId)
+    );
     // One live list per guild/account/agent, scoped to this request only.
     const lists = new Map<string, Map<string, any>>();
-    for (const t of targets) {
-      const key = JSON.stringify([t.guildId, t.accountId, t.agentId]);
+    for (const t of [
+      ...targets,
+      ...(this.config.discoveryScopes ?? []).map((s) => dynamicTarget(s, s.guildId)),
+    ]) {
+      const key = scopeKey(t);
       if (lists.has(key)) continue;
       const data =
         this.reader && this.config.gatewayReadsEnabled === true && this.config.cliGatewayInstance
@@ -423,14 +514,31 @@ export class DiscordService {
         throw new DiscordError('CHANNEL_LIST_UNVERIFIED');
       const byId = new Map<string, any>();
       for (const c of data.channels) {
-        if (!c || typeof c.id !== 'string' || !snowflake.test(c.id) || byId.has(c.id))
+        if (
+          !c ||
+          typeof c.id !== 'string' ||
+          !snowflake.test(c.id) ||
+          byId.has(c.id) ||
+          c.guild_id !== t.guildId ||
+          !Number.isInteger(c.type)
+        )
           throw new DiscordError('CHANNEL_LIST_UNVERIFIED');
         byId.set(c.id, c);
       }
       lists.set(key, byId);
     }
+    for (const scope of this.config.discoveryScopes ?? []) {
+      for (const c of lists.get(scopeKey(scope))!.values()) {
+        if (![0, 5, 15, 16].includes(c.type) || !channelAllowed(this.config, c.id)) continue;
+        // Keep legacy aliases and category-admission checks when scopes overlap.
+        if (!targets.some((t) => scopeKey(t) === scopeKey(scope) && t.channelId === c.id))
+          targets.push(dynamicTarget(scope, c.id));
+      }
+    }
     for (const t of targets) {
-      const list = lists.get(JSON.stringify([t.guildId, t.accountId, t.agentId]))!;
+      const list = lists.get(scopeKey(t))!;
+      // A complete live list may no longer contain a deleted or inaccessible legacy target.
+      if (!list.has(t.channelId)) continue;
       const c = this.verifyChannel(t, t.channelId, list.get(t.channelId), true);
       const category = c.parent_id == null ? undefined : list.get(c.parent_id);
       if (
@@ -497,7 +605,10 @@ export class DiscordService {
     const threads = raw.threads
       .filter(
         (c: any) =>
+          c &&
+          typeof c.id === 'string' &&
           snowflake.test(c.id) &&
+          !this.config.channelBlacklist?.includes(c.id) &&
           c.guild_id === t.guildId &&
           c.parent_id === t.channelId &&
           [10, 11, 12].includes(c.type)
@@ -529,9 +640,11 @@ export class DiscordService {
         !this.config.creationPolicies?.some((p) => p.name === (result as any).policy)
       )
         throw new DiscordError('CREATION_POLICY_DENIED');
+      if (result.channel_id) assertChannelAllowed(this.config, result.channel_id);
       return this.creation.publicResult(result);
     }
-    await this.target(result.target);
+    const t = await this.target(result.target);
+    assertTargetAllowed(this.config, t, result.channel_id);
     return this.publicResult(result);
   }
   private publicResult(op: Operation) {
@@ -651,6 +764,7 @@ export class DiscordService {
       }
       if (previous.fingerprint !== fingerprint)
         throw new Error('Operation ID already used with different arguments');
+      assertTargetAllowed(this.config, t, previous.channel_id);
       return this.publicResult(previous);
     }
     const op: Operation = {
@@ -791,6 +905,7 @@ export class DiscordService {
           op.status = 'running';
           op.generation_status = 'running';
           await save();
+          assertTargetAllowed(this.config, t, id);
           dispatched = true;
           const result: any = await this.runner(
             this.config.executable,

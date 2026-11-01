@@ -367,7 +367,6 @@ describe('batched allowlist discovery', () => {
   );
   it.each(
     [
-      [],
       [parent],
       [parent, { ...categoryData, type: 0 }],
       [parent, { ...categoryData, guild_id: other }],

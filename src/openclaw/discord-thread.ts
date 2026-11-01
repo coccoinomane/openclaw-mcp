@@ -1,3 +1,4 @@
+import { assertTargetAllowed } from './discord-policy.js';
 import { assertServiceProvenance, DiscordError, type AdmittedTarget } from './discord-channels.js';
 import type { DiscordConfig } from './discord.js';
 import type { InstanceConfig } from './types.js';
@@ -36,14 +37,7 @@ export function threadInvoker(
     throw new DiscordError('INSECURE_GATEWAY_URL');
   return async (target, title, operation) => {
     assertServiceProvenance();
-    // Service resolves admitted targets; dynamic admission still uses the configured scope.
-    if (
-      !config.targets.some((t) => t.channelId === target.channelId && sameScope(t, target)) &&
-      !config.creationPolicies?.some(
-        (p) => p.categoryId === target.categoryId && sameScope(p, target)
-      )
-    )
-      throw new DiscordError('THREAD_SCOPE_DENIED');
+    assertTargetAllowed(config, target, undefined, 'THREAD_SCOPE_DENIED');
     if (
       !snowflake.test(target.channelId) ||
       typeof title !== 'string' ||
@@ -101,9 +95,6 @@ export function threadInvoker(
 }
 
 const snowflake = /^[1-9][0-9]{16,19}$/;
-function sameScope(a: { guildId: string; accountId: string; agentId: string }, b: AdmittedTarget) {
-  return a.guildId === b.guildId && a.accountId === b.accountId && a.agentId === b.agentId;
-}
 export type ThreadMemberAdder = (target: AdmittedTarget, threadId: string) => Promise<void>;
 
 /** Called only after the service durably records and verifies its newly created thread. */
@@ -120,12 +111,9 @@ export function threadMemberAdder(
   if (!token || /\s/.test(token)) throw new DiscordError('THREAD_MEMBER_CREDENTIAL_MISSING');
   return async (target, threadId) => {
     assertServiceProvenance();
+    assertTargetAllowed(config, target, threadId, 'THREAD_MEMBER_SCOPE_DENIED');
     if (
       target.accountId !== accountId ||
-      (!config.targets.some((t) => t.channelId === target.channelId && sameScope(t, target)) &&
-        !config.creationPolicies?.some(
-          (p) => p.categoryId === target.categoryId && sameScope(p, target)
-        )) ||
       !snowflake.test(threadId) ||
       threadId === target.channelId
     )

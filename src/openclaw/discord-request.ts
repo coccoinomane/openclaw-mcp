@@ -1,3 +1,4 @@
+import { assertTargetAllowed } from './discord-policy.js';
 import { createHash } from 'node:crypto';
 import { assertServiceProvenance, DiscordError, type AdmittedTarget } from './discord-channels.js';
 import type { DiscordConfig } from './discord.js';
@@ -25,17 +26,8 @@ export function requestPublisher(
   const account = config.threadMember.accountId;
   return async (target, threadId, prompt, operation, sent) => {
     assertServiceProvenance();
-    const sameScope = (t: { guildId: string; accountId: string; agentId: string }) =>
-      t.guildId === target.guildId &&
-      t.accountId === target.accountId &&
-      t.agentId === target.agentId;
-    if (
-      target.accountId !== account ||
-      !snowflake.test(threadId) ||
-      threadId === target.channelId ||
-      (!config.targets.some((t) => t.channelId === target.channelId && sameScope(t)) &&
-        !config.creationPolicies?.some((p) => p.categoryId === target.categoryId && sameScope(p)))
-    )
+    assertTargetAllowed(config, target, threadId, 'REQUEST_SCOPE_DENIED');
+    if (target.accountId !== account || !snowflake.test(threadId) || threadId === target.channelId)
       throw new DiscordError('REQUEST_SCOPE_DENIED');
     if (
       typeof prompt !== 'string' ||

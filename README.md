@@ -13,7 +13,7 @@ The optional Discord integration lets your MCP client act as a chief of staff: c
 
 The first message contains your request without an added prefix. Caller instructions ask clients to preserve your wording and return only the Discord link on success. Thread creation can reuse the running Gateway instead of loading the Discord plugin in a new CLI process. Direct Ask OpenClaw remains available.
 
-Discord is **off by default**, so its tools are hidden unless `MCP_DISCORD_ENABLED=true`. Enabling it also requires an operator-configured allowlist, credentials and verified normal channel routing. See the [Discord setup guide](docs/discord-skills.md). The packaged coordinator skill is available through the modern MCP Skills extension or legacy resources.
+Discord is **off by default**, so its tools are hidden unless `MCP_DISCORD_ENABLED=true`. Configure explicit guild/account/agent discovery scopes: an empty channel whitelist includes all supported channels in those scopes, while the blacklist always wins. Legacy target allowlists still work. Credentials and verified normal channel routing are required. See the [Discord setup guide](docs/discord-skills.md). The packaged coordinator skill is available through the modern MCP Skills extension or legacy resources.
 
 ## Install this fork
 

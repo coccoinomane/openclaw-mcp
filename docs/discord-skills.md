@@ -14,9 +14,26 @@ Discord tools are absent unless MCP_DISCORD_ENABLED=true. Set these in the servi
 
 - MCP_DISCORD_EXECUTABLE: executable name or absolute path; default openclaw. No shell or raw argument option.
 - MCP_DISCORD_STATE_DIR: required absolute path to a private, durable local directory. Preserve it across restarts. Run one service process per state directory; all its transports share that process. Do not share it across security principals or expose it as a static directory.
-- MCP_DISCORD_TARGETS: nonempty JSON array of objects with name, guildId, channelId, accountId and agentId. Each entry authorizes discovery for one parent and its actual threads, for one account and agent. Set normalRouting:true only for parents verified by the operator to route ordinary new threads and human replies to that agent/account; omit it or set false for special bound targets. Ask also requires MCP_DISCORD_ACKNOWLEDGE_INBOUND_ROUTING=true. Use concrete Discord IDs; wildcards are rejected.
+- MCP_DISCORD_TARGETS: legacy JSON array of objects with name, guildId, channelId, accountId and agentId. Each entry authorizes discovery for one parent and its actual threads, for one account and agent. Set normalRouting:true only for parents verified by the operator to route ordinary new threads and human replies to that agent/account; omit it or set false for special bound targets. Ask also requires MCP_DISCORD_ACKNOWLEDGE_INBOUND_ROUTING=true. Use concrete Discord IDs; wildcards are rejected.
+- MCP_DISCORD_DISCOVERY_SCOPES: JSON array of explicit {guildId, accountId, agentId, normalRouting?} mappings, default []. Only these mappings enable dynamic guild discovery. Missing/empty scopes never expand legacy targets or creation policies to whole guilds. Duplicate mappings, unknown fields, malformed IDs and nonboolean normalRouting fail startup.
+- MCP_DISCORD_CHANNEL_WHITELIST: JSON array of parent channel IDs, default []. Empty means all supported parents within explicit discovery scopes, plus configured legacy/admitted targets. A nonempty array narrows all of those sources.
+- MCP_DISCORD_CHANNEL_BLACKLIST: JSON array of denied channel/thread IDs, default []. Blacklist takes precedence over the whitelist, legacy aliases and persisted admissions. A denied parent cannot be used to list or create threads. A denied thread cannot receive membership, request publication or generation through this service. These are exact IDs, not category-subtree rules.
 
-Example shape, with placeholders to replace before use:
+For dynamic-only discovery, omit MCP_DISCORD_TARGETS or set it to []. Example (synthetic IDs):
+
+```
+MCP_DISCORD_DISCOVERY_SCOPES=[{"guildId":"700000000000000001","accountId":"bot","agentId":"main","normalRouting":true}]
+MCP_DISCORD_CHANNEL_WHITELIST=[]
+MCP_DISCORD_CHANNEL_BLACKLIST=["700000000000000003"]
+```
+
+Discovery fetches a fresh list on every call, once per guild/account/agent mapping. New channels appear without config edits; renames retain the target ID; deleted or inaccessible legacy targets are skipped. Dynamic IDs use the mapping hash and channel ID, never the display name. Existing aliases remain in discovery when their mapping overlaps a scope. Legacy TARGETS stays an additional explicitly authorized source, not a scope restriction: remove obsolete entries when migrating. Blacklist and whitelist checks apply to all sources and crafted target IDs before writes.
+
+Text and announcement parents are supported; forum/media parents remain discoverable but reject asks. Categories, voice/stage channels and threads are not parent targets. Metadata with unverified guild/type/identity fails closed. An accessible category is required when parent metadata references it. Actual writes still read back the parent and new thread ancestry, require normalRouting:true and the global routing acknowledgement, and retain route checks. Enabling normalRouting on a scope asserts ordinary routing for every eligible current and future channel in that scope; use a whitelist when that assertion is too broad.
+
+Existing creation policies remain separate. Created channels must also pass the channel policy before admission and later operations. With a nonempty whitelist, a new, not-yet-listed ID remains created_unadmitted; no automatic retry or policy edit occurs. A blacklisted category denies creation under that policy; category blacklisting does not recursively hide its existing children. Scope changes do not resume old operations.
+
+Legacy target shape, with placeholders to replace before use:
 
 ```json
 [{ "name": "project", "guildId": "GUILD_SNOWFLAKE", "channelId": "CHANNEL_SNOWFLAKE", "accountId": "bot", "agentId": "main", "normalRouting": true }]

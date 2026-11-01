@@ -22,7 +22,9 @@ export function channelReader(
   const policies = config.creationPolicies ?? [];
   if (policies.some((p) => p.instance !== instance.name))
     throw new DiscordError('READ_GATEWAY_MISMATCH');
-  const scopes = new Set([...config.targets, ...policies].map(scopeKey));
+  const scopes = new Set(
+    [...config.targets, ...(config.discoveryScopes ?? []), ...policies].map(scopeKey)
+  );
   const url = new URL('/tools/invoke', instance.url);
   if (
     url.username ||
@@ -45,6 +47,8 @@ export function channelReader(
         (typeof request.channelId !== 'string' || !snowflake.test(request.channelId)))
     )
       throw new DiscordError('READ_ACTION_DENIED');
+    if (request.action === 'channel-info' && config.channelBlacklist?.includes(request.channelId))
+      throw new DiscordError('CHANNEL_POLICY_DENIED');
     let response: Response;
     try {
       response = await fetcher(url.toString(), {

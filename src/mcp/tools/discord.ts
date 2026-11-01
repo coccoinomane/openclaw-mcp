@@ -4,7 +4,8 @@ import type { DiscordService } from '../../openclaw/discord.js';
 import { errorResponse, structuredJsonResponse } from '../../utils/response-helpers.js';
 const target = {
   type: 'string',
-  description: 'Operator-defined target name returned by openclaw_discord_channels.',
+  description:
+    'Stable target identifier returned by openclaw_discord_channels; not a display name.',
 };
 const operation = {
   type: 'string',
