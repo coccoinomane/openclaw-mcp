@@ -19,6 +19,7 @@ export interface DiscordConfig {
   creationPolicies?: CreationPolicy[];
   cliGatewayInstance?: string;
   gatewayReadsEnabled?: boolean;
+  cliTimeoutMs?: number;
   acknowledgeInboundRouting?: boolean;
   targets: Array<{
     name: string;
@@ -47,12 +48,22 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
         : undefined,
     cliGatewayInstance: env.MCP_DISCORD_CLI_GATEWAY_INSTANCE,
     gatewayReadsEnabled: env.MCP_DISCORD_GATEWAY_READS_ENABLED === 'true',
+    cliTimeoutMs: env.MCP_DISCORD_CLI_TIMEOUT_MS
+      ? Number(env.MCP_DISCORD_CLI_TIMEOUT_MS)
+      : undefined,
     acknowledgeInboundRouting: env.MCP_DISCORD_ACKNOWLEDGE_INBOUND_ROUTING === 'true',
   };
   validateConfig(config);
   return config;
 }
 function validateConfig(config: DiscordConfig) {
+  if (
+    config.cliTimeoutMs !== undefined &&
+    (!Number.isInteger(config.cliTimeoutMs) ||
+      config.cliTimeoutMs < 1000 ||
+      config.cliTimeoutMs > 180000)
+  )
+    throw new Error('MCP_DISCORD_CLI_TIMEOUT_MS must be an integer from 1000 to 180000');
   if (!isAbsolute(config.stateDir)) throw new Error('MCP_DISCORD_STATE_DIR must be absolute');
   if (!config.executable || config.executable.includes('\0')) throw new Error('Invalid executable');
   if (
@@ -283,7 +294,7 @@ export class DiscordService {
       await this.runner(
         this.config.executable,
         ['message', ...args, '--channel', 'discord', '--account', t.accountId, '--json'],
-        30000
+        this.config.cliTimeoutMs ?? 30000
       )
     );
   }

@@ -128,6 +128,24 @@ const input = {
   prompt: 'Please help $(not-a-shell)',
 };
 describe('Discord service', () => {
+  it('allows a bounded operator CLI timeout without changing agent run deadlines', async () => {
+    const f = await fixture();
+    const service = new DiscordService({ ...f.config, cliTimeoutMs: 120000 }, f.runner);
+    await service.channels();
+    expect(f.runner).toHaveBeenCalledWith(f.config.executable, expect.any(Array), 120000);
+    const loaded = loadDiscordConfig({
+      MCP_DISCORD_ENABLED: 'true',
+      MCP_DISCORD_STATE_DIR: f.config.stateDir,
+      MCP_DISCORD_TARGETS: JSON.stringify(f.config.targets),
+      MCP_DISCORD_CLI_TIMEOUT_MS: '120000',
+    });
+    expect(loaded?.cliTimeoutMs).toBe(120000);
+    for (const cliTimeoutMs of [NaN, Infinity, 999, 180001, 1.5]) {
+      expect(() => new DiscordService({ ...f.config, cliTimeoutMs }, f.runner)).toThrow(
+        'MCP_DISCORD_CLI_TIMEOUT_MS'
+      );
+    }
+  });
   it('requires operator acknowledgement of normal inbound human reply routing', async () => {
     const f = await fixture();
     const service = new DiscordService({ ...f.config, acknowledgeInboundRouting: false }, f.runner);
