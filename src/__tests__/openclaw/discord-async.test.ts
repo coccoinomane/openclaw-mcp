@@ -23,7 +23,7 @@ const input = {
   target: 'work',
   operation_id: 'async-operation-0001',
   title: 'Task',
-  prompt: '  exact @everyone <@673098154832560136> 😀\ntrailing  ',
+  prompt: '  exact @everyone <@400000000000000006> 😀\ntrailing  ',
 };
 const fixtures: Array<{
   generation: ReturnType<typeof deferred<any>>;
@@ -61,7 +61,7 @@ async function fixture() {
     gatewayReadsEnabled: true,
     cliGatewayInstance: 'home',
     threadCreateMode: 'gateway',
-    threadMember: { userId: '673098154832560136', accountId: 'bot' },
+    threadMember: { userId: '400000000000000006', accountId: 'bot' },
     maxOperations: 1,
   };
   const events: string[] = [];

@@ -10,7 +10,7 @@ import { discordTools, handleDiscord } from '../../mcp/tools/discord.js';
 const guild = '300000000000000001',
   channel = '300000000000000002',
   thread = '300000000000000003';
-const owner = '673098154832560136';
+const owner = '400000000000000006';
 const target = {
   name: 'work',
   guildId: guild,
