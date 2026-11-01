@@ -241,7 +241,7 @@ export async function createHttpServer(
     app.get('/.well-known/oauth-protected-resource/:path', (req: Request, res: Response) => {
       res.json({
         resource: `${issuerUrl.toString()}${req.params.path}`,
-        authorization_servers: [issuerUrl.toString().replace(/\/$/, '')],
+        authorization_servers: [issuerUrl.toString()],
         scopes_supported: ['mcp:tools'],
       });
     });

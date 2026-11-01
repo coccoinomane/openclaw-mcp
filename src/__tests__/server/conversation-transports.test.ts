@@ -75,7 +75,12 @@ async function stopChild(child: ChildProcess) {
   }
 }
 
-async function httpBridge(gatewayUrl: string, auth = false, extraEnv: Record<string, string> = {}) {
+async function httpBridge(
+  gatewayUrl: string,
+  auth = false,
+  extraEnv: Record<string, string> = {},
+  issuer = 'https://Trusted.Example:8443/mcp'
+) {
   const reservation = createServer();
   const port = await listen(reservation);
   await new Promise<void>((resolve) => reservation.close(() => resolve()));
@@ -102,7 +107,7 @@ async function httpBridge(gatewayUrl: string, auth = false, extraEnv: Record<str
       '--agent-id',
       'research',
       '--issuer-url',
-      'https://Trusted.Example:8443/mcp',
+      issuer,
       '--trust-proxy',
       'true',
     ]),
@@ -423,6 +428,23 @@ describe('mixed-era production endpoint', () => {
     });
     expect(origin.status).toBe(403);
   });
+});
+
+describe('OAuth discovery issuer consistency', () => {
+  it.each(['https://trusted.example', 'https://trusted.example/'])(
+    'matches authorization server metadata for %s',
+    async (issuer) => {
+      const base = await httpBridge('http://127.0.0.1:1', true, {}, issuer);
+      const metadata = (await (
+        await fetch(base + '/.well-known/oauth-authorization-server')
+      ).json()) as { issuer: string };
+      const resource = (await (
+        await fetch(base + '/.well-known/oauth-protected-resource/mcp')
+      ).json()) as { authorization_servers: string[]; resource: string };
+      expect(resource.authorization_servers).toEqual([metadata.issuer]);
+      expect(resource.resource).toBe('https://trusted.example/mcp');
+    }
+  );
 });
 
 describe('modern OAuth gate', () => {
