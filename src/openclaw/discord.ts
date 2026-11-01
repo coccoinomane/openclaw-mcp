@@ -149,12 +149,28 @@ interface Operation {
   recovery?: string;
   error_code?: string;
 }
+/** Trusted adapter must inspect live inbound routing, including runtime bindings.
+ * Static config, channel metadata and session enumeration are insufficient.
+ * No production adapter is installed until a supported inspection API exists.
+ */
+export type DiscordRouteResolver = (
+  target: AdmittedTarget,
+  channelId: string
+) => Promise<{
+  channelId: string;
+  guildId: string;
+  accountId: string;
+  agentId: string;
+  sessionKey: string;
+  kind: 'ordinary' | 'bound' | 'subagent' | 'unknown';
+}>;
 export class DiscordService {
   private readonly creation?: ChannelCreation;
   constructor(
     readonly config: DiscordConfig,
     private readonly runner: CliRunner = runCli,
-    invoke?: ChannelInvoker
+    invoke?: ChannelInvoker,
+    private readonly resolveRoute?: DiscordRouteResolver
   ) {
     validateConfig(config);
     if (config.creationPolicies) {
@@ -174,6 +190,29 @@ export class DiscordService {
           ).channel
       );
     }
+  }
+  private async ordinaryRoute(t: AdmittedTarget, channelId: string) {
+    if (!this.resolveRoute) throw new DiscordError('ROUTE_INSPECTION_UNAVAILABLE');
+    let route;
+    try {
+      route = await this.resolveRoute(t, channelId);
+    } catch {
+      throw new DiscordError('ROUTE_UNVERIFIED');
+    }
+    if (
+      !route ||
+      route.channelId !== channelId ||
+      route.guildId !== t.guildId ||
+      route.accountId !== t.accountId
+    )
+      throw new DiscordError('ROUTE_UNVERIFIED');
+    if (route.kind !== 'ordinary') throw new DiscordError('NONORDINARY_ROUTE_DENIED');
+    if (
+      route.agentId !== t.agentId ||
+      route.sessionKey !== 'agent:' + t.agentId + ':discord:channel:' + channelId
+    )
+      throw new DiscordError('ROUTE_MISMATCH');
+    return route.sessionKey;
   }
   async createChannel(input: any) {
     if (!this.creation) throw new DiscordError('CHANNEL_CREATION_DISABLED');
@@ -407,6 +446,7 @@ export class DiscordService {
       if ([15, 16].includes(parent.type)) throw new DiscordError('FORUM_MEDIA_WRITES_UNSUPPORTED');
       let id = input.channel_id;
       if (input.mode === 'new_thread') {
+        await this.ordinaryRoute(t, t.channelId);
         createDispatched = true;
         const created = await this.cli(t, [
           'thread',
@@ -421,7 +461,6 @@ export class DiscordService {
         if (id === t.channelId) throw new DiscordError('CREATED_THREAD_ID_INVALID', true);
         op.channel_id = id;
         op.discord_url = 'https://discord.com/channels/' + t.guildId + '/' + id;
-        op.session_key = 'agent:' + t.agentId + ':discord:channel:' + id;
         op.status = created.partial ? 'creation_partial' : 'created';
         await save();
         if (created.partial) {
@@ -434,7 +473,7 @@ export class DiscordService {
       await this.info(t, id);
       op.channel_id = id;
       op.discord_url = 'https://discord.com/channels/' + t.guildId + '/' + id;
-      op.session_key = 'agent:' + t.agentId + ':discord:channel:' + id;
+      op.session_key = await this.ordinaryRoute(t, id);
       dir = await mkdtemp(join(tmpdir(), 'openclaw-mcp-'));
       const promptFile = join(dir, 'prompt.txt');
       await writeFile(promptFile, input.prompt, { mode: 0o600 });

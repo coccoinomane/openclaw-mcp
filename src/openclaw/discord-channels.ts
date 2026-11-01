@@ -236,8 +236,7 @@ export class ChannelCreation {
         throw new DiscordError('CREATED_CHANNEL_VERIFICATION_FAILED');
       record.status = 'completed';
       record.target = 'created-' + c.id;
-      record.session_key = 'agent:' + p.agentId + ':discord:channel:' + c.id;
-      record.routing = 'explicit_cli_agent; inbound routing remains operator configured';
+      record.routing = 'unverified; live inbound route inspection required before ask';
       await save(path, record, this.stateDir);
     } catch (error) {
       record.error_code = error instanceof DiscordError ? error.code : 'UNVERIFIED_RESULT';

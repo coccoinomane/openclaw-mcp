@@ -89,7 +89,12 @@ async function fixture(
     ],
   };
   return {
-    service: new DiscordService(config, runner),
+    service: new DiscordService(config, runner, undefined, async (t, id) => ({
+      ...t,
+      channelId: id,
+      sessionKey: 'agent:' + t.agentId + ':discord:channel:' + id,
+      kind: 'ordinary',
+    })),
     runner,
     config,
     promptPath: () => promptPath,
@@ -103,6 +108,88 @@ const input = {
   prompt: 'Please help $(not-a-shell)',
 };
 describe('Discord service', () => {
+  it.each(['new_thread', 'continue'])(
+    'rejects %s without live route inspection before any external write',
+    async (mode) => {
+      const f = await fixture();
+      const service = new DiscordService(f.config, f.runner);
+      const result = await service.ask(
+        mode === 'new_thread' ? input : { ...input, mode, title: undefined, channel_id: thread }
+      );
+      expect(result).toMatchObject({
+        status: 'run_failed',
+        error_code: 'ROUTE_INSPECTION_UNAVAILABLE',
+      });
+      expect(result.session_key).toBeUndefined();
+      expect(f.runner.mock.calls.every((c) => c[1][2] === 'info')).toBe(true);
+    }
+  );
+  it('rejects parent routed to another agent before creating a new thread', async () => {
+    const f = await fixture();
+    const service = new DiscordService(f.config, f.runner, undefined, async (t, id) => ({
+      ...t,
+      channelId: id,
+      agentId: 'other',
+      sessionKey: 'agent:other:discord:channel:' + id,
+      kind: 'ordinary',
+    }));
+    expect(await service.ask(input)).toMatchObject({
+      error_code: 'ROUTE_MISMATCH',
+      status: 'run_failed',
+    });
+    expect(f.runner.mock.calls.every((c) => c[1][2] === 'info')).toBe(true);
+  });
+  it.each(['bound', 'subagent', 'unknown'] as const)(
+    'rejects an existing %s thread without agent dispatch',
+    async (kind) => {
+      const f = await fixture();
+      const service = new DiscordService(f.config, f.runner, undefined, async (t, id) => ({
+        ...t,
+        channelId: id,
+        sessionKey: 'agent:main:subagent:bound',
+        kind,
+      }));
+      const result = await service.ask({
+        ...input,
+        mode: 'continue',
+        title: undefined,
+        channel_id: thread,
+      });
+      expect(result).toMatchObject({ error_code: 'NONORDINARY_ROUTE_DENIED', channel_id: thread });
+      expect(result.session_key).toBeUndefined();
+      expect(f.runner.mock.calls.every((c) => c[1][2] === 'info')).toBe(true);
+    }
+  );
+  it('checks the actual new thread route and retains its ID when bound', async () => {
+    const f = await fixture();
+    const seen: string[] = [];
+    const service = new DiscordService(f.config, f.runner, undefined, async (t, id) => {
+      seen.push(id);
+      return {
+        ...t,
+        channelId: id,
+        sessionKey: 'agent:main:discord:channel:' + id,
+        kind: id === channel ? 'ordinary' : 'bound',
+      };
+    });
+    const result = await service.ask(input);
+    expect(seen).toEqual([channel, thread]);
+    expect(result).toMatchObject({
+      error_code: 'NONORDINARY_ROUTE_DENIED',
+      channel_id: thread,
+      status: 'run_failed',
+    });
+    expect(result.session_key).toBeUndefined();
+    expect(f.runner.mock.calls.some((c) => c[1][0] === 'agent')).toBe(false);
+  });
+  it('rejects an ordinary-looking key when live inspection fails', async () => {
+    const f = await fixture();
+    const service = new DiscordService(f.config, f.runner, undefined, async () => {
+      throw new Error('private routing detail');
+    });
+    expect(await service.ask(input)).toMatchObject({ error_code: 'ROUTE_UNVERIFIED' });
+    expect(f.runner.mock.calls.every((c) => c[1][2] === 'info')).toBe(true);
+  });
   it('is opt-in and fails closed on missing config', () => {
     expect(loadDiscordConfig({})).toBeUndefined();
     expect(() => loadDiscordConfig({ MCP_DISCORD_ENABLED: 'true' })).toThrow();

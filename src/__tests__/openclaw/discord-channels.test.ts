@@ -59,8 +59,8 @@ describe('explicit channel creation', () => {
     expect(result).toMatchObject({
       status: 'completed',
       target: 'created-' + channel,
-      session_key: 'agent:main:discord:channel:' + channel,
     });
+    expect(result.session_key).toBeUndefined();
     expect(f.inspect.mock.calls.map((c) => c[1])).toEqual([category, channel]);
     const restarted = new ChannelCreation(f.dir, [policy], f.invoke, f.inspect);
     expect(await restarted.create(input)).toEqual(result);
@@ -181,7 +181,12 @@ describe('explicit channel creation', () => {
     );
     const service = new DiscordService(config, runner, f.invoke);
     await service.createChannel(input);
-    const restarted = new DiscordService(config, runner, f.invoke);
+    const restarted = new DiscordService(config, runner, f.invoke, async (t, id) => ({
+      ...t,
+      channelId: id,
+      sessionKey: 'agent:' + t.agentId + ':discord:channel:' + id,
+      kind: 'ordinary',
+    }));
     const list = await restarted.channels();
     expect(list.channels[0]).toMatchObject({
       target: 'created-' + channel,

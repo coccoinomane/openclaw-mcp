@@ -39,7 +39,7 @@ export const discordTools: Tool[] = [
   {
     name: 'openclaw_discord_ask',
     description:
-      'Create a NEW ordinary Discord thread and session, or continue an EXISTING thread/channel. Runs and delivers an agent turn, not a subagent or fork. User must authorize destination. Preserve operation ID and inspect partial/unknown results before any new action.',
+      'Request a NEW ordinary Discord thread/session or an EXISTING thread/channel turn. Requires verified live inbound routing; currently fails closed with ROUTE_INSPECTION_UNAVAILABLE in the shipped server. Bound/nonordinary or mismatched routes are rejected. User must authorize destination. Preserve operation ID and inspect partial/unknown results before any new action.',
     inputSchema: {
       type: 'object',
       properties: {

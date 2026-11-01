@@ -1,5 +1,7 @@
 # Recovering Discord operations
 
+ROUTE_INSPECTION_UNAVAILABLE blocks ask in the current server. Do not substitute a guessed session key or retry through another messaging route. ROUTE_UNVERIFIED, ROUTE_MISMATCH and NONORDINARY_ROUTE_DENIED require operator inspection. A known new thread ID may remain after post-create route rejection; no agent turn was started and no session identity is claimed.
+
 The service records an operation before the first write and records the thread identity before starting the agent. Records survive process restarts when the operator preserves the state directory. They contain a request digest, not the prompt.
 
 - completed: for ask, the CLI reported a successful agent run; for channel creation, the channel was read back and persistently admitted. Keep the Discord link for follow-up.

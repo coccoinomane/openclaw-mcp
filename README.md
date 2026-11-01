@@ -347,6 +347,6 @@ Created by [Tomáš Grasl](https://www.tomasgrasl.cz/)
 
 ## Discord coordination and Skills
 
-Optional service-owned Discord CLI tools can discover allowed channels and threads, start an ordinary session in a new thread, or continue an existing conversation. They are disabled by default and retain invocation provenance. Separately enabled channel creation uses a constrained Gateway API adapter with guild/category policy and persistent admission; thread/session work remains CLI-only. See [configuration, recovery and migration limits](docs/discord-skills.md).
+Optional service-owned Discord CLI tools discover allowed channels and threads. Thread creation and continuation currently fail closed: no supported live inbound-route inspection adapter has been verified. They must not infer continuity from a configured agent or a fabricated session key. They are disabled by default and retain invocation provenance. Separately enabled channel creation uses a constrained Gateway API adapter with guild/category policy and persistent admission; thread/session work remains CLI-only. See [configuration, recovery and migration limits](docs/discord-skills.md).
 
 Modern HTTP clients receive the official MCP Skills extension; legacy clients can read the packaged coordinator skill through MCP resources. Existing direct Ask OpenClaw tools remain available.
