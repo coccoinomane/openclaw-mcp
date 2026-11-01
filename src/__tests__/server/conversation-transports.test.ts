@@ -193,6 +193,7 @@ describe('conversation metadata across real MCP transports', () => {
       const url = 'http://127.0.0.1:' + port;
       const env = {
         MCP_DISCORD_ENABLED: 'true',
+        MCP_DISCORD_GATEWAY_READS_ENABLED: 'true',
         MCP_DISCORD_EXECUTABLE: '/never-execute-discord-cli',
         MCP_DISCORD_STATE_DIR: '/unused-test-state',
         MCP_DISCORD_CLI_GATEWAY_INSTANCE: 'default',

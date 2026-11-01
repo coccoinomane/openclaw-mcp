@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { channelReader } from '../../openclaw/discord-read.js';
-import { DiscordService, type DiscordConfig } from '../../openclaw/discord.js';
+import { DiscordService, loadDiscordConfig, type DiscordConfig } from '../../openclaw/discord.js';
 import { handleDiscord } from '../../mcp/tools/discord.js';
 const guild = '300000000000000001',
   channel = '300000000000000002',
@@ -22,6 +22,7 @@ const config: DiscordConfig = {
   stateDir: '/unused-test-state',
   targets: [target],
   cliGatewayInstance: 'home',
+  gatewayReadsEnabled: true,
   acknowledgeInboundRouting: true,
 };
 const instances = [{ name: 'home', url: 'http://127.0.0.1:18789', token: 'mock-credential' }];
@@ -64,6 +65,20 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 describe('closed metadata reader', () => {
+  it.each([undefined, 'false', '1', 'true'])('requires explicit environment opt-in %j', (flag) => {
+    const loaded = loadDiscordConfig({
+      MCP_DISCORD_ENABLED: 'true',
+      MCP_DISCORD_STATE_DIR: '/unused-test-state',
+      MCP_DISCORD_TARGETS: JSON.stringify([target]),
+      MCP_DISCORD_CLI_GATEWAY_INSTANCE: 'home',
+      MCP_DISCORD_GATEWAY_READS_ENABLED: flag,
+    });
+    expect(loaded?.gatewayReadsEnabled).toBe(flag === 'true');
+    expect(typeof channelReader(instances, loaded!)).toBe(
+      flag === 'true' ? 'function' : 'undefined'
+    );
+  });
+
   it('uses fixed server instance, account and agent with no redirects', async () => {
     const f = fixture();
     const result = await f.service.channels();
@@ -140,10 +155,12 @@ describe('closed metadata reader', () => {
     for (const [c, r] of [
       [config, undefined],
       [{ ...config, cliGatewayInstance: undefined }, reader],
+      [{ ...config, gatewayReadsEnabled: undefined }, reader],
+      [{ ...config, gatewayReadsEnabled: false }, reader],
     ] as const) {
       await new DiscordService(c, runner, undefined, undefined, r).channels();
     }
-    expect(runner).toHaveBeenCalledTimes(2);
+    expect(runner).toHaveBeenCalledTimes(4);
     expect(reader).not.toHaveBeenCalled();
     expect(runner.mock.calls[0]).toEqual([
       'never-executed',

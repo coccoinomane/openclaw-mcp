@@ -18,6 +18,7 @@ export interface DiscordConfig {
   stateDir: string;
   creationPolicies?: CreationPolicy[];
   cliGatewayInstance?: string;
+  gatewayReadsEnabled?: boolean;
   acknowledgeInboundRouting?: boolean;
   targets: Array<{
     name: string;
@@ -45,6 +46,7 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
         ? JSON.parse(env.MCP_DISCORD_CREATION_POLICIES || '[]')
         : undefined,
     cliGatewayInstance: env.MCP_DISCORD_CLI_GATEWAY_INSTANCE,
+    gatewayReadsEnabled: env.MCP_DISCORD_GATEWAY_READS_ENABLED === 'true',
     acknowledgeInboundRouting: env.MCP_DISCORD_ACKNOWLEDGE_INBOUND_ROUTING === 'true',
   };
   validateConfig(config);
@@ -267,7 +269,7 @@ export class DiscordService {
   }
   private async readInfo(t: AdmittedTarget, id: string) {
     check(id, snowflake, 'channel ID');
-    return this.reader && this.config.cliGatewayInstance
+    return this.reader && this.config.gatewayReadsEnabled === true && this.config.cliGatewayInstance
       ? this.reader(t, { action: 'channel-info', channelId: id })
       : this.cli(t, ['channel', 'info', '--target', 'channel:' + id]);
   }
@@ -298,7 +300,7 @@ export class DiscordService {
       const key = JSON.stringify([t.guildId, t.accountId, t.agentId]);
       if (lists.has(key)) continue;
       const data =
-        this.reader && this.config.cliGatewayInstance
+        this.reader && this.config.gatewayReadsEnabled === true && this.config.cliGatewayInstance
           ? await this.reader(t, { action: 'channel-list' })
           : await this.cli(t, ['channel', 'list', '--guild-id', t.guildId]);
       if (
