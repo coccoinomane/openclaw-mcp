@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { runCli, DiscordService } from '../../openclaw/discord.js';
@@ -9,6 +10,43 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe('Discord CLI execution', () => {
+  it('records first output, exit, close and callback separately without output content', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(100);
+    const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter() });
+    vi.mocked(execFile).mockImplementation(((_file, _args, _options, callback) => {
+      child.once('close', () =>
+        callback(
+          Object.assign(new Error('private'), { killed: true, signal: 'SIGTERM' }),
+          '{"status":"ok"}',
+          'private stderr'
+        )
+      );
+      return child;
+    }) as any);
+    const pending = runCli('never-executed', [], 1000);
+    clock.mockReturnValue(120);
+    child.stdout.emit('data', 'private output');
+    clock.mockReturnValue(130);
+    child.stdout.emit('data', 'later output');
+    clock.mockReturnValue(1000);
+    child.emit('exit', null, 'SIGTERM');
+    clock.mockReturnValue(1100);
+    child.emit('close', null, 'SIGTERM');
+    await expect(pending).resolves.toMatchObject({ _cliFailure: true, _cliCode: 'CLI_TIMEOUT' });
+    const line = log.mock.calls[0][0];
+    expect(JSON.parse(line.slice(line.indexOf('{')))).toMatchObject({
+      first_stdout_ms: 20,
+      exit_ms: 900,
+      close_ms: 1000,
+      callback_ms: 1000,
+      elapsed_ms: 1000,
+      valid_json: true,
+    });
+    expect(line).not.toContain('private');
+    expect(line).not.toContain('output');
+  });
+
   it.each([
     ['message', 'channel', 'list'],
     ['agent', '--message-file', '/private/prompt'],
@@ -52,6 +90,10 @@ describe('Discord CLI execution', () => {
       expect(diagnostic).toEqual({
         classification: 'CLI_TIMEOUT',
         elapsed_ms: expect.any(Number),
+        first_stdout_ms: null,
+        exit_ms: null,
+        close_ms: null,
+        callback_ms: expect.any(Number),
         signal: 'SIGTERM',
         code: null,
         stdout_bytes: new TextEncoder().encode(stdout).length,

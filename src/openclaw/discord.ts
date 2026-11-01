@@ -94,12 +94,17 @@ function validateConfig(config: DiscordConfig) {
 export const runCli: CliRunner = (executable, args, timeout) =>
   new Promise((resolve, reject) => {
     const started = performance.now();
+    const elapsed = () => Math.round(performance.now() - started);
+    let firstStdoutMs: number | null = null;
+    let exitMs: number | null = null;
+    let closeMs: number | null = null;
     // Inherit provenance unchanged, including OPENCLAW_SHELL and caller identity.
     const child = execFile(
       executable,
       args,
       { shell: false, env: process.env, timeout, maxBuffer: 4 * 1024 * 1024 },
       (error, stdout, stderr) => {
+        const callbackMs = elapsed();
         let parsed: any;
         let validJson = false;
         try {
@@ -115,7 +120,11 @@ export const runCli: CliRunner = (executable, args, timeout) =>
             'Discord CLI diagnostic ' +
               JSON.stringify({
                 classification,
-                elapsed_ms: Math.round(performance.now() - started),
+                elapsed_ms: callbackMs,
+                first_stdout_ms: firstStdoutMs,
+                exit_ms: exitMs,
+                close_ms: closeMs,
+                callback_ms: callbackMs,
                 signal: ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGABRT'].includes(error.signal ?? '')
                   ? error.signal
                   : error.signal
@@ -148,6 +157,17 @@ export const runCli: CliRunner = (executable, args, timeout) =>
         else reject(new DiscordError('CLI_INVALID_JSON', true));
       }
     );
+    child.stdout?.once('data', () => {
+      firstStdoutMs = elapsed();
+    });
+    child.once?.('exit', () => {
+      exitMs = elapsed();
+    });
+    // execFile invokes its callback from close; record close before that listener.
+    child.prependOnceListener?.('close', () => {
+      closeMs = elapsed();
+    });
+    // EOF is hygiene for noninteractive commands, not a proven timeout fix.
     // These invocations never consume prompts from stdin. Deliver EOF to CLI startup.
     if (args[0] === 'message' || (args[0] === 'agent' && args.includes('--message-file')))
       child.stdin?.end();
