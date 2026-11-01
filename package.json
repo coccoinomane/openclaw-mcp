@@ -40,10 +40,14 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/core": "2.4.0",
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@modelcontextprotocol/server": "2.4.0",
     "yargs": "^17.7.2"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
     "@types/node": "^20.11.0",
     "@types/yargs": "^17.0.32",
     "@typescript-eslint/eslint-plugin": "^6.21.0",
@@ -62,7 +66,8 @@
     "docs",
     "README.md",
     "LICENSE",
-    "plugins"
+    "plugins",
+    "skills"
   ],
   "homepage": "https://github.com/coccoinomane/openclaw-mcp#readme",
   "repository": {

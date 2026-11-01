@@ -1,6 +1,12 @@
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  Client as ModernClient,
+  StreamableHTTPClientTransport as ModernTransport,
+} from '@modelcontextprotocol/client';
+import { SkillsClient } from '@modelcontextprotocol/client/ext/skills';
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createServer, type Server } from 'node:http';
+import { createServer, request, type Server } from 'node:http';
 import { hostname } from 'node:os';
 import { once } from 'node:events';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -69,13 +75,22 @@ async function stopChild(child: ChildProcess) {
   }
 }
 
-async function httpBridge(gatewayUrl: string) {
+async function httpBridge(gatewayUrl: string, auth = false) {
   const reservation = createServer();
   const port = await listen(reservation);
   await new Promise<void>((resolve) => reservation.close(() => resolve()));
   const child = spawn(
     process.execPath,
     entryArgs([
+      ...(auth
+        ? [
+            '--auth',
+            '--client-id',
+            'integration-client',
+            '--client-secret',
+            'integration-secret-12345678901234567890',
+          ]
+        : []),
       '--transport',
       'http',
       '--host',
@@ -270,5 +285,132 @@ describe('conversation metadata across real MCP transports', () => {
     expect(text(result)).toBe('reply:stdio hello');
     expect(JSON.parse(text(result, 1))).toEqual(result.structuredContent);
     expect(mock.requests[0].key).toBe(result.structuredContent?.session_id);
+  });
+});
+
+describe('mixed-era production endpoint', () => {
+  it('serves 2026 Skills and chat beside legacy clients with host protection', async () => {
+    const mock = await gateway();
+    const base = await httpBridge(mock.url);
+    const modern = new ModernClient(
+      { name: 'Modern Desktop', version: '1' },
+      { versionNegotiation: { mode: { pin: '2026-07-28' } } }
+    );
+    cleanups.push(() => modern.close());
+    await modern.connect(new ModernTransport(new URL(base + '/mcp')));
+    expect(modern.getProtocolEra()).toBe('modern');
+    const skills = new SkillsClient(modern);
+    const list = await skills.list();
+    expect((await skills.read(list.skills[0])).verified).toBe(true);
+    const result = await modern.callTool({
+      name: 'openclaw_chat',
+      arguments: { message: 'modern hello' },
+    });
+    expect((result.structuredContent as Record<string, unknown>)?.session_id).toMatch(
+      /^agent:research:mcp:trusted[.]example:modern-desktop:default:/
+    );
+    const legacy = await connectHttp(base, 'Legacy', 'http');
+    expect((await legacy.listResources()).resources).toHaveLength(1);
+    const forbidden = await new Promise<number>((resolve, reject) => {
+      const req = request(
+        base + '/mcp',
+        {
+          method: 'POST',
+          headers: { Host: 'attacker.invalid', 'Content-Type': 'application/json' },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode!);
+        }
+      );
+      req.on('error', reject);
+      req.end('{}');
+    });
+    expect(forbidden).toBe(403);
+    const origin = await fetch(base + '/mcp', {
+      method: 'POST',
+      headers: { Origin: 'https://attacker.invalid', 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    expect(origin.status).toBe(403);
+  });
+});
+
+describe('modern OAuth gate', () => {
+  it('requires authentication before protocol discovery and preserves token-owned async work', async () => {
+    const mock = await gateway();
+    const base = await httpBridge(mock.url, true);
+    const unauthenticated = new ModernClient(
+      { name: 'unauthenticated', version: '1' },
+      { versionNegotiation: { mode: { pin: '2026-07-28' } } }
+    );
+    cleanups.push(() => unauthenticated.close());
+    await expect(
+      unauthenticated.connect(new ModernTransport(new URL(base + '/mcp')))
+    ).rejects.toThrow();
+    const mintToken = async () => {
+      const verifier = randomUUID();
+      const authorize = new URL(base + '/authorize');
+      for (const [key, value] of Object.entries({
+        response_type: 'code',
+        client_id: 'integration-client',
+        redirect_uri: 'http://localhost/callback',
+        code_challenge: createHash('sha256').update(verifier).digest('base64url'),
+        code_challenge_method: 'S256',
+      }))
+        authorize.searchParams.set(key, value);
+      const response = await fetch(authorize.toString(), { redirect: 'manual' });
+      expect(response.status).toBe(302);
+      const code = new URL(response.headers.get('location')!).searchParams.get('code')!;
+      const tokenResponse = await fetch(base + '/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          code_verifier: verifier,
+          redirect_uri: 'http://localhost/callback',
+          client_id: 'integration-client',
+          client_secret: 'integration-secret-12345678901234567890',
+        }).toString(),
+      });
+      expect(tokenResponse.status).toBe(200);
+      return ((await tokenResponse.json()) as { access_token: string }).access_token;
+    };
+    const token = await mintToken();
+    const connect = async (name: string, accessToken: string) => {
+      const client = new ModernClient(
+        { name, version: '1' },
+        { versionNegotiation: { mode: { pin: '2026-07-28' } } }
+      );
+      cleanups.push(() => client.close());
+      await client.connect(
+        new ModernTransport(new URL(base + '/mcp'), {
+          requestInit: { headers: { Authorization: 'Bearer ' + accessToken } },
+        })
+      );
+      return client;
+    };
+    const first = await connect('First', token);
+    const started = await first.callTool({
+      name: 'openclaw_chat_async',
+      arguments: { message: 'owned task' },
+    });
+    const meta = started.structuredContent as Record<string, unknown>;
+    const firstContent = started.content as Array<{ type: string; text: string }>;
+    const job = JSON.parse(firstContent[0].text);
+    const reconnected = await connect('Different label', token);
+    const polled = await reconnected.callTool({
+      name: 'openclaw_task_status',
+      arguments: { task_id: job.task_id },
+    });
+    expect(polled.isError).not.toBe(true);
+    expect((polled.structuredContent as Record<string, unknown>).session_id).toBe(meta.session_id);
+    const other = await connect('First', await mintToken());
+    const rejected = await other.callTool({
+      name: 'openclaw_task_status',
+      arguments: { task_id: job.task_id },
+    });
+    expect(rejected.isError).toBe(true);
   });
 });

@@ -15,6 +15,7 @@ RUN npm ci
 # Copy source and build configuration
 COPY tsup.config.ts tsconfig.json ./
 COPY src/ src/
+COPY skills/ skills/
 
 # Build the project
 RUN npm run build
@@ -42,6 +43,7 @@ WORKDIR /app
 
 # Copy only the production artifacts
 COPY --from=builder /app/dist/ dist/
+COPY --from=builder /app/skills/ skills/
 COPY --from=builder /app/node_modules/ node_modules/
 COPY --from=builder /app/package.json package.json
 

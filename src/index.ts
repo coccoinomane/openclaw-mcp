@@ -1,3 +1,5 @@
+import { loadPackagedSkills } from './server/skills.js';
+import { DiscordService, loadDiscordConfig } from './openclaw/discord.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 import { SERVER_NAME, SERVER_VERSION } from './config/constants.js';
@@ -33,6 +35,9 @@ const deps: ToolRegistrationDeps = {
 };
 
 async function main() {
+  deps.skills = await loadPackagedSkills();
+  const discordConfig = loadDiscordConfig();
+  if (discordConfig) deps.discord = new DiscordService(discordConfig);
   log(`Starting ${SERVER_NAME} v${SERVER_VERSION}`);
   log(`Model: ${args.model}`);
   log(`Transport: ${args.transport}`);

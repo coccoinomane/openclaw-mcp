@@ -344,3 +344,9 @@ Created by [Tomáš Grasl](https://www.tomasgrasl.cz/)
 
 - [OpenClaw](https://github.com/openclaw/openclaw) — The AI assistant this MCP connects to
 - [MCP Specification](https://spec.modelcontextprotocol.io/) — Model Context Protocol docs
+
+## Discord coordination and Skills
+
+Optional service-owned Discord CLI tools can discover allowed channels and threads, start an ordinary session in a new thread, or continue an existing conversation. They are disabled by default and retain invocation provenance. Channel creation is explicitly unsupported by this CLI adapter. See [configuration, recovery and migration limits](docs/discord-skills.md).
+
+Modern HTTP clients receive the official MCP Skills extension; legacy clients can read the packaged coordinator skill through MCP resources. Existing direct Ask OpenClaw tools remain available.

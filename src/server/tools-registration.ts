@@ -6,6 +6,15 @@
  * that registration logic into a reusable function.
  */
 
+import { McpServer } from '@modelcontextprotocol/server';
+import type { SkillCatalog } from '@modelcontextprotocol/server/ext/skills';
+import {
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
+import { readSkillResource, skillResources } from './skills.js';
+import type { DiscordService } from '../openclaw/discord.js';
+import { discordTools, handleDiscord } from '../mcp/tools/discord.js';
 import { randomUUID } from 'node:crypto';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -20,6 +29,8 @@ import type { ToolResponse } from '../utils/response-helpers.js';
 
 export interface ToolRegistrationDeps {
   registry: InstanceRegistry;
+  discord?: DiscordService;
+  skills?: SkillCatalog;
   serverName: string;
   serverVersion: string;
   /** Trusted operator configuration; used only for conversation labels. */
@@ -46,13 +57,26 @@ export function createMcpServer(deps: ToolRegistrationDeps): Server {
   );
 
   registerTools(server, deps);
+  if (deps.skills) {
+    server.registerCapabilities({ resources: {} });
+    server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+      resources: skillResources(deps.skills!),
+    }));
+    server.setRequestHandler(ReadResourceRequestSchema, async (request) =>
+      readSkillResource(deps.skills!, request.params.uri)
+    );
+  }
   return server;
 }
 
 /**
  * Register all OpenClaw tools on an existing MCP Server instance.
  */
-function registerTools(server: Server, deps: ToolRegistrationDeps): void {
+function toolSet(
+  deps: ToolRegistrationDeps,
+  clientName: () => string | undefined,
+  ownerId: string = randomUUID()
+) {
   const { registry } = deps;
 
   // Identity of this MCP connection, used to scope async tasks.
@@ -61,12 +85,12 @@ function registerTools(server: Server, deps: ToolRegistrationDeps): void {
   // behaviour is unchanged. In HTTP mode createMcpServer() is called once per
   // connection, so each client gets its own namespace and cannot reach another
   // client's tasks.
-  const ownerId = randomUUID();
+
   const serverLabel = conversationServerLabel(deps.issuerUrl);
   // Read after initialize, from this Server only. Never use it as ownerId.
   const conversationContext = () => ({
     serverLabel,
-    clientName: server.getClientVersion()?.name,
+    clientName: clientName(),
   });
 
   const toolHandlers = new Map<string, (input: unknown) => Promise<ToolResponse>>([
@@ -82,7 +106,7 @@ function registerTools(server: Server, deps: ToolRegistrationDeps): void {
     ['openclaw_instances', (input) => tools.handleOpenclawInstances(registry, input)],
   ]);
 
-  const allTools = [
+  const allTools: import('@modelcontextprotocol/sdk/types.js').Tool[] = [
     tools.openclawChatTool,
     tools.openclawStatusTool,
     tools.openclawChatAsyncTool,
@@ -92,6 +116,16 @@ function registerTools(server: Server, deps: ToolRegistrationDeps): void {
     tools.openclawInstancesTool,
   ];
 
+  if (deps.discord) {
+    allTools.push(...discordTools);
+    for (const tool of discordTools)
+      toolHandlers.set(tool.name, (input) => handleDiscord(deps.discord!, tool.name, input ?? {}));
+  }
+  return { allTools, toolHandlers };
+}
+
+function registerTools(server: Server, deps: ToolRegistrationDeps) {
+  const { allTools, toolHandlers } = toolSet(deps, () => server.getClientVersion()?.name);
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return { tools: allTools };
   });
@@ -113,4 +147,45 @@ function registerTools(server: Server, deps: ToolRegistrationDeps): void {
       throw error;
     }
   });
+}
+
+export function createModernMcpServer(deps: ToolRegistrationDeps, ownerId?: string): McpServer {
+  const mcp = new McpServer({ name: deps.serverName, version: deps.serverVersion });
+  let requestClientName: string | undefined;
+  const { allTools, toolHandlers } = toolSet(
+    deps,
+    () => requestClientName ?? mcp.server.getClientVersion()?.name,
+    ownerId
+  );
+  mcp.server.registerCapabilities({ tools: {} });
+  mcp.server.setRequestHandler('tools/list', async () => ({
+    tools: JSON.parse(JSON.stringify(allTools)),
+  }));
+  mcp.server.setRequestHandler('tools/call', async ({ params }, ctx) => {
+    requestClientName = ctx.mcpReq.envelope?.['io.modelcontextprotocol/clientInfo']?.name;
+    if (
+      !ownerId &&
+      [
+        'openclaw_chat_async',
+        'openclaw_task_status',
+        'openclaw_task_list',
+        'openclaw_task_cancel',
+      ].includes(params.name)
+    ) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Modern HTTP async tasks require authentication. Use authenticated HTTP or a stateful legacy connection.',
+          },
+        ],
+        isError: true,
+      };
+    }
+    const handler = toolHandlers.get(params.name);
+    if (!handler) throw new Error('Unknown tool');
+    return { ...(await handler(params.arguments ?? {})) };
+  });
+  deps.skills?.attach(mcp);
+  return mcp;
 }

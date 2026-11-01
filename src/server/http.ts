@@ -11,7 +11,9 @@
  * - Graceful shutdown
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { createMcpHandler, isLegacyRequest } from '@modelcontextprotocol/server';
+import { toNodeHandler, toWebRequest } from '@modelcontextprotocol/node';
 import type { IncomingMessage, ServerResponse, Server as HttpServer } from 'node:http';
 import type { Request, Response, NextFunction } from 'express';
 
@@ -24,7 +26,11 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 
 import { OpenClawAuthProvider, type AuthProviderConfig } from '../auth/provider.js';
 import { log, logError } from '../utils/logger.js';
-import { createMcpServer, type ToolRegistrationDeps } from './tools-registration.js';
+import {
+  createMcpServer,
+  createModernMcpServer,
+  type ToolRegistrationDeps,
+} from './tools-registration.js';
 
 export interface HttpServerConfig {
   port: number;
@@ -158,6 +164,25 @@ export async function createHttpServer(
     app.set('trust proxy', config.trustProxy);
     log(`Trust proxy: ${JSON.stringify(config.trustProxy)}`);
   }
+
+  // A missing Origin is normal for native clients. A browser origin must be
+  // same-origin with the trusted issuer/bind address, or explicitly allowlisted.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const origin = req.headers.origin;
+    const localOrigins = [
+      'http://localhost:' + config.port,
+      'http://127.0.0.1:' + config.port,
+      'http://[::1]:' + config.port,
+    ];
+    const trustedOrigins = config.issuerUrl
+      ? [new URL(config.issuerUrl).origin, ...localOrigins]
+      : localOrigins;
+    if (origin && !isOriginAllowed(origin, [...trustedOrigins, ...corsConfig.origins])) {
+      res.status(403).json({ error: 'Origin not allowed' });
+      return;
+    }
+    next();
+  });
 
   // --- CORS middleware (before auth so preflight works) ---
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -298,7 +323,23 @@ export async function createHttpServer(
 
   // --- Modern Streamable HTTP transport (ALL /mcp) ---
 
+  // Modern HTTP has no connection identity. Authenticated tokens retain task ownership
+  // across requests; anonymous modern requests cannot share asynchronous task state.
+  const modern = createMcpHandler(
+    (ctx) => {
+      const owner = ctx.authInfo?.token
+        ? 'modern:' + createHash('sha256').update(ctx.authInfo.token).digest('hex')
+        : undefined;
+      return createModernMcpServer(registrationDeps, owner);
+    },
+    { legacy: 'reject' }
+  );
+  const modernNode = toNodeHandler(modern);
   const handleStreamableRequest = async (req: Request, res: Response) => {
+    if (!(await isLegacyRequest(await toWebRequest(req, req.body), req.body))) {
+      await modernNode(req, res, req.body);
+      return;
+    }
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
     if (sessionId && streamableSessions.has(sessionId)) {
@@ -393,6 +434,7 @@ export async function createHttpServer(
 
   const shutdown = async () => {
     log('Shutting down HTTP server...');
+    await modern.close();
 
     // Close all legacy SSE sessions
     for (const [id, session] of legacySseSessions) {
