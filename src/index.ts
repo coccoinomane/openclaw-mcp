@@ -1,5 +1,6 @@
 import { channelInvoker } from './openclaw/discord-channels.js';
 import { channelReader } from './openclaw/discord-read.js';
+import { threadInvoker, threadMemberAdder } from './openclaw/discord-thread.js';
 import { loadPackagedSkills } from './server/skills.js';
 import { DiscordService, loadDiscordConfig } from './openclaw/discord.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -51,7 +52,9 @@ async function main() {
       undefined,
       channelInvoker(args.instances),
       undefined,
-      channelReader(args.instances, discordConfig)
+      channelReader(args.instances, discordConfig),
+      threadInvoker(args.instances, discordConfig),
+      threadMemberAdder(discordConfig)
     );
   }
   log(`Starting ${SERVER_NAME} v${SERVER_VERSION}`);

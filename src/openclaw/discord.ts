@@ -1,11 +1,17 @@
 import {
   ChannelCreation,
   DiscordError,
+  assertServiceProvenance,
   type CreationPolicy,
   type ChannelInvoker,
   type AdmittedTarget,
 } from './discord-channels.js';
 import type { DiscordReader } from './discord-read.js';
+import {
+  ThreadGatewayUnavailable,
+  type ThreadInvoker,
+  type ThreadMemberAdder,
+} from './discord-thread.js';
 import { log } from '../utils/logger.js';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -20,6 +26,8 @@ export interface DiscordConfig {
   cliGatewayInstance?: string;
   gatewayReadsEnabled?: boolean;
   cliTimeoutMs?: number;
+  threadCreateMode?: 'cli' | 'gateway';
+  threadMember?: { userId: string; accountId: string };
   acknowledgeInboundRouting?: boolean;
   targets: Array<{
     name: string;
@@ -48,6 +56,14 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
         : undefined,
     cliGatewayInstance: env.MCP_DISCORD_CLI_GATEWAY_INSTANCE,
     gatewayReadsEnabled: env.MCP_DISCORD_GATEWAY_READS_ENABLED === 'true',
+    threadCreateMode: (env.MCP_DISCORD_THREAD_CREATE_MODE || 'cli') as 'cli' | 'gateway',
+    threadMember:
+      env.MCP_DISCORD_THREAD_MEMBER_ENABLED === 'true'
+        ? {
+            userId: env.MCP_DISCORD_THREAD_MEMBER_USER_ID || '',
+            accountId: env.MCP_DISCORD_THREAD_MEMBER_ACCOUNT_ID || '',
+          }
+        : undefined,
     cliTimeoutMs: env.MCP_DISCORD_CLI_TIMEOUT_MS
       ? Number(env.MCP_DISCORD_CLI_TIMEOUT_MS)
       : undefined,
@@ -57,6 +73,23 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
   return config;
 }
 function validateConfig(config: DiscordConfig) {
+  if (
+    config.threadCreateMode !== undefined &&
+    !['cli', 'gateway'].includes(config.threadCreateMode)
+  )
+    throw new DiscordError('THREAD_CREATE_MODE_INVALID');
+  if (config.threadCreateMode === 'gateway' && !config.cliGatewayInstance)
+    throw new DiscordError('THREAD_GATEWAY_CONFIGURATION_INVALID');
+  if (config.threadMember) {
+    check(config.threadMember.userId, snowflake, 'thread member user ID');
+    check(config.threadMember.accountId, slug, 'thread member account');
+    if (
+      [...config.targets, ...(config.creationPolicies ?? [])].some(
+        (t) => t.accountId !== config.threadMember!.accountId
+      )
+    )
+      throw new DiscordError('THREAD_MEMBER_ACCOUNT_MISMATCH');
+  }
   if (
     config.cliTimeoutMs !== undefined &&
     (!Number.isInteger(config.cliTimeoutMs) ||
@@ -217,6 +250,11 @@ interface Operation {
   delivery_verified?: boolean;
   message_id?: string;
   generation_status?: string;
+  thread_create_transport?: 'cli' | 'gateway';
+  thread_create_fallback?: string;
+  member_status?: 'disabled' | 'pending' | 'adding' | 'verified' | 'failed' | 'unknown';
+  member_verified?: boolean;
+  member_error_code?: string;
   handoff?: string;
   recovery?: string;
   error_code?: string;
@@ -243,9 +281,15 @@ export class DiscordService {
     private readonly runner: CliRunner = runCli,
     invoke?: ChannelInvoker,
     private readonly resolveRoute?: DiscordRouteResolver,
-    private readonly reader?: DiscordReader
+    private readonly reader?: DiscordReader,
+    private readonly invokeThread?: ThreadInvoker,
+    private readonly addThreadMember?: ThreadMemberAdder
   ) {
     validateConfig(config);
+    if (config.threadCreateMode === 'gateway' && !invokeThread)
+      throw new DiscordError('THREAD_ADAPTER_REQUIRED');
+    if (config.threadMember && !addThreadMember)
+      throw new DiscordError('THREAD_MEMBER_ADAPTER_REQUIRED');
     if (config.creationPolicies) {
       if (!invoke) throw new DiscordError('CREATION_ADAPTER_REQUIRED');
       this.creation = new ChannelCreation(
@@ -468,6 +512,8 @@ export class DiscordService {
     return { ...result, retry_safe: false };
   }
   async ask(input: any) {
+    if (this.config.threadCreateMode === 'gateway' || this.config.threadMember)
+      assertServiceProvenance();
     if (input.mode !== 'new_thread') throw new DiscordError('CONTINUE_UNSUPPORTED');
     const t = await this.target(input.target);
     const path = this.path(input.operation_id);
@@ -528,6 +574,8 @@ export class DiscordService {
       operation_id: input.operation_id,
       target: t.name,
       status: input.mode === 'new_thread' ? 'creating' : 'created',
+      member_status: this.config.threadMember ? 'pending' : 'disabled',
+      member_verified: false,
     };
     try {
       await file.writeFile(JSON.stringify(op));
@@ -560,14 +608,29 @@ export class DiscordService {
       if (input.mode === 'new_thread') {
         await this.ordinaryRoute(t, t.channelId);
         createDispatched = true;
-        const created = await this.cli(t, [
-          'thread',
-          'create',
-          '--target',
-          'channel:' + t.channelId,
-          '--thread-name',
-          input.title,
-        ]);
+        const createCli = () =>
+          this.cli(t, [
+            'thread',
+            'create',
+            '--target',
+            'channel:' + t.channelId,
+            '--thread-name',
+            input.title,
+          ]);
+        let created;
+        op.thread_create_transport = this.config.threadCreateMode === 'gateway' ? 'gateway' : 'cli';
+        await save();
+        if (op.thread_create_transport === 'gateway') {
+          try {
+            created = await this.invokeThread!(t, input.title, input.operation_id);
+          } catch (error) {
+            if (!(error instanceof ThreadGatewayUnavailable)) throw error;
+            op.thread_create_transport = 'cli';
+            op.thread_create_fallback = error.code;
+            await save();
+            created = await createCli();
+          }
+        } else created = await createCli();
         id = created.thread?.id;
         check(id, snowflake, 'created thread ID');
         if (id === t.channelId) throw new DiscordError('CREATED_THREAD_ID_INVALID', true);
@@ -586,6 +649,23 @@ export class DiscordService {
       op.channel_id = id;
       op.discord_url = 'https://discord.com/channels/' + t.guildId + '/' + id;
       op.session_key = await this.ordinaryRoute(t, id);
+      if (this.config.threadMember) {
+        op.member_status = 'adding';
+        await save();
+        try {
+          await this.addThreadMember!(t, id);
+          op.member_status = 'verified';
+          op.member_verified = true;
+        } catch (error) {
+          op.member_status =
+            error instanceof DiscordError && !error.uncertain ? 'failed' : 'unknown';
+          op.member_error_code =
+            error instanceof DiscordError ? error.code : 'THREAD_MEMBER_UNVERIFIED';
+          await save();
+          throw new DiscordError('THREAD_MEMBER_NOT_VERIFIED');
+        }
+        await save();
+      }
       dir = await mkdtemp(join(tmpdir(), 'openclaw-mcp-'));
       const promptFile = join(dir, 'prompt.txt');
       await writeFile(promptFile, input.prompt, { mode: 0o600 });

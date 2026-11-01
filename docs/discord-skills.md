@@ -28,13 +28,37 @@ Only expose this capability to callers trusted to act within every configured ta
 
 Invocation environment is inherited unchanged, including OPENCLAW_SHELL and caller identity. An agent-originated CLI restriction is a rejection to respect, not a marker to remove. Do not deploy a wrapper that erases provenance.
 
+## Gateway thread creation and owner membership
+
+Set MCP_DISCORD_THREAD_CREATE_MODE=gateway to create new threads through the authenticated, closed message/thread-create adapter. The default cli mode retains the existing CLI creation path. Gateway mode requires MCP_DISCORD_CLI_GATEWAY_INSTANCE and that instance's server-side credential. Enable Gateway metadata reads as above to avoid CLI startup for parent/thread checks. The ordinary agent CLI invocation and delivery arguments are unchanged.
+
+Gateway creation falls back to CLI only on ECONNREFUSED: the connection could not dispatch a mutation. No HTTP response authorizes fallback, including 404 (which may hide a policy denial). There is no fallback on 401/403/429, timeout, connection reset, malformed results, partial creation, or any known thread ID. Parent metadata read failures stop before creation. CLI fallback can itself require the Gateway; it is not an offline path and never starts or restarts the Gateway.
+
+To add the owner to every newly created thread, configure the service environment:
+
+```dotenv
+MCP_DISCORD_THREAD_CREATE_MODE=gateway
+MCP_DISCORD_GATEWAY_READS_ENABLED=true
+MCP_DISCORD_CLI_GATEWAY_INSTANCE=default
+MCP_DISCORD_THREAD_MEMBER_ENABLED=true
+MCP_DISCORD_THREAD_MEMBER_USER_ID=673098154832560136
+MCP_DISCORD_THREAD_MEMBER_ACCOUNT_ID=bot
+# Supply DISCORD_BOT_TOKEN through the service's private environment/secret store.
+```
+
+Replace default and bot with the existing instance/account names. Membership is disabled unless explicitly enabled. The configured account must match every allowed target and creation policy; mixed-account deployments need separate services. Missing credentials fail startup. Clients cannot choose a user, credential, endpoint, or membership action. This adds no targets to the allowlist.
+
+The native message tool has no thread-member-add action. After saving the new thread ID/link and verifying its guild, parent and thread type through the existing metadata reader, the service sends one PUT to https://discord.com/api/v10/channels/{newThreadId}/thread-members/{configuredUserId}, then one GET to the same URL. Both use the service's bot credential, reject redirects and preserve the service-provenance guard. Discord requires send permission and an unarchived thread. Its 204 response covers both added and already-present members; the GET must confirm the exact thread and user before member_verified becomes true. See [Discord's membership API](https://docs.discord.com/developers/resources/channel#add-thread-member).
+
+The operation saves member_status before generation: disabled, pending, adding, verified, failed or unknown, alongside member_verified and a sanitized member_error_code when applicable. A membership failure stops generation, retains the thread link and reports run_failed rather than completed. Unknown means membership may have changed but was not verified; do not create another thread or replay the operation. A crash during adding also requires operator inspection. Partial creation stops before membership and generation. Neither reusing an operation ID nor polling its status repeats creation, membership, or the agent turn. Tokens and raw HTTP error bodies are never included in these records or results.
+
 ## Tools
 
 - openclaw_discord_channels fetches one live channel list per guild/account/agent for each request. It returns only exact allowlisted parents, including persistently admitted channels, with verified guild/type and category metadata. Missing or invalid parents/categories fail the request; moved admitted channels are rejected. Lists are never cached across requests.
 - openclaw_discord_threads lists active threads or archived public threads. Active listing has no pagination. Archived listing uses before as an ISO archive timestamp and limit up to 100. Private archive enumeration is not supported.
-- openclaw_discord_ask accepts only new_thread, with target, title, prompt and an unpredictable operation_id of 16–100 URL-safe characters. Existing-thread/channel continuation is rejected before effects and is absent from the public schema.
+- openclaw_discord_ask accepts only new_thread, with target, title, prompt and an unpredictable operation_id of 16–100 URL-safe characters. It returns link/status rather than answer content; absence of answer text is expected. Continue on Discord to read and reply. Existing-thread/channel continuation is rejected before effects and is absent from the public schema.
 - openclaw_discord_operation reads a durable record without writes or CLI calls.
-- openclaw_discord_create_channel creates only normal text channels through the documented Gateway message/channel-create action. It requires a separately enabled creation policy and explicit authorization for both creation and persistent admission. CLI thread/session actions do not use this HTTP route. Forum/media parent writes are rejected before effects rather than inventing starter-message behavior.
+- openclaw_discord_create_channel creates only normal text channels through the documented Gateway message/channel-create action. It requires a separately enabled creation policy and explicit authorization for both creation and persistent admission. The agent turn stays on CLI; optional Gateway thread creation uses the separate message/thread-create action. Forum/media parent writes are rejected before effects rather than inventing starter-message behavior.
 
 The supported workflow is a new thread created by this service, its first OpenClaw response, then a “Continue on Discord” link. The fresh thread ID is associated durably with agent:<agentId>:discord:channel:<threadId> using the operator-verified normal parent routing. There is no arbitrary existing-thread continuation or runtime rebinding support. Special bound parents must not be marked normalRouting:true. An optional route inspector can reject mismatches, but the shipped new-thread path does not require an unavailable exact-route API. Parent guild/type and thread ancestry are still read back. No Gateway bindings are changed.
 

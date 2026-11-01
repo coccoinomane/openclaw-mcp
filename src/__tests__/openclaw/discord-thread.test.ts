@@ -1,0 +1,432 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { DiscordService, loadDiscordConfig, type DiscordConfig } from '../../openclaw/discord.js';
+import { threadInvoker, threadMemberAdder } from '../../openclaw/discord-thread.js';
+import { channelReader } from '../../openclaw/discord-read.js';
+import { discordTools, handleDiscord } from '../../mcp/tools/discord.js';
+
+const guild = '300000000000000001',
+  channel = '300000000000000002',
+  thread = '300000000000000003';
+const owner = '673098154832560136';
+const target = {
+  name: 'work',
+  guildId: guild,
+  channelId: channel,
+  accountId: 'bot',
+  agentId: 'main',
+  normalRouting: true,
+};
+const base: DiscordConfig = {
+  executable: 'never-executed',
+  stateDir: '/unused-test-state',
+  targets: [target],
+  cliGatewayInstance: 'home',
+  gatewayReadsEnabled: true,
+  threadCreateMode: 'gateway',
+  threadMember: { userId: owner, accountId: 'bot' },
+  acknowledgeInboundRouting: true,
+};
+const instances = [{ name: 'home', url: 'http://127.0.0.1:18789', token: 'mock-gateway-secret' }];
+const env = { DISCORD_BOT_TOKEN: 'mock-bot-secret' };
+const input = {
+  target: 'work',
+  mode: 'new_thread',
+  operation_id: 'thread-test-operation-1',
+  title: 'Task',
+  prompt: 'Help',
+};
+const envelope = (result: any) =>
+  new Response(JSON.stringify({ ok: true, result: { details: result } }));
+const dirs: string[] = [];
+beforeEach(() => {
+  for (const key of Object.keys(process.env))
+    if (/^OPENCLAW_(SHELL|.*AGENT.*|.*SESSION.*|.*CALLER.*)$/.test(key)) vi.stubEnv(key, undefined);
+});
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+});
+async function fixture(overrides: Partial<DiscordConfig> = {}) {
+  const stateDir = await mkdtemp(join(tmpdir(), 'discord-thread-test-'));
+  dirs.push(stateDir);
+  const config = { ...base, ...overrides, stateDir };
+  const events: string[] = [];
+  const record = async () =>
+    JSON.parse(await readFile(join(stateDir, input.operation_id + '.json'), 'utf8'));
+  const gateway = vi.fn(async (_url: any, opts: any) => {
+    const args = JSON.parse(opts.body).args;
+    events.push(args.action);
+    if (args.action === 'thread-create') return envelope({ ok: true, thread: { id: thread } });
+    return envelope({
+      ok: true,
+      channel: {
+        id: args.channelId,
+        guild_id: guild,
+        type: args.channelId === channel ? 0 : 11,
+        parent_id: args.channelId === channel ? undefined : channel,
+      },
+    });
+  });
+  const member = vi.fn(async (_url: any, opts: any) => {
+    events.push(opts.method);
+    expect(await record()).toMatchObject({
+      channel_id: thread,
+      member_status: 'adding',
+      member_verified: false,
+    });
+    return opts.method === 'PUT'
+      ? new Response(null, { status: 204 })
+      : new Response(JSON.stringify({ id: thread, user_id: owner }));
+  });
+  const runner = vi.fn(async (_exe: string, args: string[]) => {
+    events.push(args[0]);
+    if (args[0] === 'agent') {
+      expect(await record()).toMatchObject({
+        member_status: config.threadMember ? 'verified' : 'disabled',
+        status: 'running',
+      });
+      return { status: 'ok', runId: 'mock-run' };
+    }
+    if (args[2] === 'create') return { payload: { ok: true, thread: { id: thread } } };
+    throw new Error('Unexpected CLI');
+  });
+  const service = () =>
+    new DiscordService(
+      config,
+      runner,
+      undefined,
+      undefined,
+      channelReader(instances, config, gateway),
+      threadInvoker(instances, config, gateway),
+      threadMemberAdder(config, env, member)
+    );
+  return { config, events, gateway, member, runner, record, service: service(), restart: service };
+}
+
+describe('Gateway-first new threads', () => {
+  it('persists thread then verified owner membership before unchanged ordinary CLI turn; replay is read-only', async () => {
+    const f = await fixture();
+    const result = await f.service.ask(input);
+    expect(result).toMatchObject({
+      status: 'completed',
+      channel_id: thread,
+      member_status: 'verified',
+      member_verified: true,
+      thread_create_transport: 'gateway',
+      session_key: 'agent:main:discord:channel:' + thread,
+    });
+    expect(f.events).toEqual([
+      'channel-info',
+      'thread-create',
+      'channel-info',
+      'PUT',
+      'GET',
+      'agent',
+    ]);
+    const [url, options] = f.gateway.mock.calls[1];
+    expect(url).toBe('http://127.0.0.1:18789/tools/invoke');
+    expect(options.redirect).toBe('error');
+    expect(options.headers.Authorization).toBe('Bearer mock-gateway-secret');
+    expect(JSON.parse(options.body)).toEqual({
+      tool: 'message',
+      sessionKey: 'agent:main:main',
+      idempotencyKey: input.operation_id,
+      args: {
+        action: 'thread-create',
+        channel: 'discord',
+        accountId: 'bot',
+        channelId: channel,
+        threadName: 'Task',
+      },
+    });
+    expect(f.member.mock.calls.map((c) => c[0])).toEqual(
+      Array(2).fill('https://discord.com/api/v10/channels/' + thread + '/thread-members/' + owner)
+    );
+    expect(f.member.mock.calls[0][1]).toMatchObject({
+      method: 'PUT',
+      redirect: 'error',
+      headers: { Authorization: 'Bot mock-bot-secret' },
+    });
+    expect(f.runner.mock.calls[0][1]).toEqual([
+      'agent',
+      '--agent',
+      'main',
+      '--session-key',
+      'agent:main:discord:channel:' + thread,
+      '--message-file',
+      expect.any(String),
+      '--deliver',
+      '--reply-channel',
+      'discord',
+      '--reply-to',
+      'channel:' + thread,
+      '--reply-account',
+      'bot',
+      '--timeout',
+      '600',
+      '--json',
+    ]);
+    expect(await f.restart().ask(input)).toEqual(result);
+    expect(await f.service.status(input.operation_id)).toEqual(result);
+    expect(f.gateway).toHaveBeenCalledTimes(3);
+    expect(f.member).toHaveBeenCalledTimes(2);
+    expect(f.runner).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(await f.record())).not.toContain('secret');
+    expect(JSON.stringify(result)).not.toContain('secret');
+  });
+  it('uses CLI only on proven pre-dispatch connection refusal', async () => {
+    const f = await fixture();
+    f.gateway.mockResolvedValueOnce(
+      envelope({ ok: true, channel: { id: channel, guild_id: guild, type: 0 } })
+    );
+    f.gateway.mockRejectedValueOnce(
+      Object.assign(new Error('private'), { cause: { code: 'ECONNREFUSED' } })
+    );
+    expect(await f.service.ask(input)).toMatchObject({
+      status: 'completed',
+      thread_create_transport: 'cli',
+      thread_create_fallback: 'THREAD_GATEWAY_UNREACHABLE',
+    });
+    expect(f.runner.mock.calls.map((c) => c[1][0])).toEqual(['message', 'agent']);
+  });
+  it('respects explicit CLI mode', async () => {
+    const f = await fixture({ threadCreateMode: 'cli' });
+    expect(await f.service.ask(input)).toMatchObject({
+      status: 'completed',
+      thread_create_transport: 'cli',
+    });
+    expect(f.events).not.toContain('thread-create');
+  });
+  it.each([401, 403, 404, 429, 500, 'timeout', 'reset', 'malformed', 'denied'])(
+    'never falls back after %s',
+    async (failure) => {
+      const f = await fixture();
+      f.gateway.mockResolvedValueOnce(
+        envelope({ ok: true, channel: { id: channel, guild_id: guild, type: 0 } })
+      );
+      if (typeof failure === 'number')
+        f.gateway.mockResolvedValueOnce(new Response('private-secret', { status: failure }));
+      else if (failure === 'malformed')
+        f.gateway.mockResolvedValueOnce(new Response('private-secret'));
+      else if (failure === 'denied')
+        f.gateway.mockResolvedValueOnce(envelope({ ok: false, error: 'private-secret' }));
+      else
+        f.gateway.mockRejectedValueOnce(
+          Object.assign(new Error('private-secret'), {
+            code: failure === 'timeout' ? 'ETIMEDOUT' : 'ECONNRESET',
+          })
+        );
+      const result = await f.service.ask(input);
+      expect(result.status).toBe('creation_unknown');
+      expect(JSON.stringify(result)).not.toContain('private-secret');
+      expect(await f.restart().ask(input)).toEqual(result);
+      expect(f.gateway).toHaveBeenCalledTimes(2);
+      expect(f.runner).not.toHaveBeenCalled();
+      expect(f.member).not.toHaveBeenCalled();
+    }
+  );
+  it('does not downgrade when parent metadata is unavailable', async () => {
+    const f = await fixture();
+    f.gateway.mockRejectedValueOnce(new Error('refused'));
+    expect(await f.service.ask(input)).toMatchObject({
+      status: 'run_failed',
+      error_code: 'GATEWAY_READ_FAILED',
+    });
+    expect(f.gateway).toHaveBeenCalledTimes(1);
+    expect(f.runner).not.toHaveBeenCalled();
+  });
+  it.each([true, false])(
+    'retains partial known thread, even failed envelope=%s',
+    async (failed) => {
+      const f = await fixture();
+      f.gateway.mockResolvedValueOnce(
+        envelope({ ok: true, channel: { id: channel, guild_id: guild, type: 0 } })
+      );
+      f.gateway.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: !failed,
+            result: {
+              isError: failed,
+              details: { ok: !failed, thread: { id: thread }, partial: true },
+            },
+          })
+        )
+      );
+      const result = await f.service.ask(input);
+      expect(result).toMatchObject({
+        status: 'creation_partial',
+        channel_id: thread,
+        discord_url: expect.stringContaining(thread),
+        member_verified: false,
+      });
+      expect(await f.restart().ask(input)).toEqual(result);
+      expect(f.runner).not.toHaveBeenCalled();
+      expect(f.member).not.toHaveBeenCalled();
+    }
+  );
+  it.each([{ parent_id: guild }, { guild_id: channel }, { type: 0 }])(
+    'verifies ancestry before membership %j',
+    async (override) => {
+      const f = await fixture();
+      f.gateway.mockResolvedValueOnce(
+        envelope({ ok: true, channel: { id: channel, guild_id: guild, type: 0 } })
+      );
+      f.gateway.mockResolvedValueOnce(envelope({ ok: true, thread: { id: thread } }));
+      f.gateway.mockResolvedValueOnce(
+        envelope({
+          ok: true,
+          channel: { id: thread, guild_id: guild, type: 11, parent_id: channel, ...override },
+        })
+      );
+      expect(await f.service.ask(input)).toMatchObject({
+        status: 'run_failed',
+        channel_id: thread,
+        member_verified: false,
+      });
+      expect(f.member).not.toHaveBeenCalled();
+      expect(f.runner).not.toHaveBeenCalled();
+    }
+  );
+  it.each(['put-denied', 'put-timeout', 'get-absent', 'get-wrong-user', 'get-malformed'])(
+    'retains link and separate unverified membership on %s',
+    async (failure) => {
+      const f = await fixture();
+      if (failure === 'put-timeout') f.member.mockRejectedValueOnce(new Error('mock-bot-secret'));
+      else if (failure === 'put-denied')
+        f.member.mockResolvedValueOnce(new Response('mock-bot-secret', { status: 403 }));
+      else {
+        f.member.mockResolvedValueOnce(new Response(null, { status: 204 }));
+        f.member.mockResolvedValueOnce(
+          failure === 'get-absent'
+            ? new Response('private', { status: 404 })
+            : failure === 'get-malformed'
+              ? new Response('private')
+              : new Response(JSON.stringify({ id: thread, user_id: channel }))
+        );
+      }
+      const result = await f.service.ask(input);
+      expect(result).toMatchObject({
+        status: 'run_failed',
+        channel_id: thread,
+        discord_url: expect.stringContaining(thread),
+        member_status: 'unknown',
+        member_verified: false,
+        member_error_code: expect.stringContaining('THREAD_MEMBER_'),
+        error_code: 'THREAD_MEMBER_NOT_VERIFIED',
+      });
+      expect(await f.restart().ask(input)).toEqual(result);
+      expect(f.runner).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain('secret');
+      expect(f.member).toHaveBeenCalledTimes(failure.startsWith('put') ? 1 : 2);
+    }
+  );
+});
+
+describe('operator configuration and closed inputs', () => {
+  it('requires explicit opt-in with bounded configuration and credentials', () => {
+    const vars = {
+      MCP_DISCORD_ENABLED: 'true',
+      MCP_DISCORD_STATE_DIR: '/unused-test-state',
+      MCP_DISCORD_TARGETS: JSON.stringify([target]),
+    };
+    expect(loadDiscordConfig(vars)).toMatchObject({
+      threadCreateMode: 'cli',
+      threadMember: undefined,
+    });
+    expect(threadInvoker(instances, { ...base, threadCreateMode: 'cli' })).toBeUndefined();
+    expect(threadMemberAdder({ ...base, threadMember: undefined }, env)).toBeUndefined();
+    expect(() =>
+      loadDiscordConfig({ ...vars, MCP_DISCORD_THREAD_CREATE_MODE: 'anything' })
+    ).toThrow();
+    expect(() =>
+      loadDiscordConfig({ ...vars, MCP_DISCORD_THREAD_MEMBER_ENABLED: 'true' })
+    ).toThrow();
+    expect(() => threadMemberAdder(base, {})).toThrow('THREAD_MEMBER_CREDENTIAL_MISSING');
+    expect(() =>
+      threadMemberAdder({ ...base, threadMember: { userId: '../escape', accountId: 'bot' } }, env)
+    ).toThrow('THREAD_MEMBER_CONFIGURATION_INVALID');
+    expect(() =>
+      loadDiscordConfig({
+        ...vars,
+        MCP_DISCORD_THREAD_MEMBER_ENABLED: 'true',
+        MCP_DISCORD_THREAD_MEMBER_USER_ID: owner,
+        MCP_DISCORD_THREAD_MEMBER_ACCOUNT_ID: 'other',
+      })
+    ).toThrow('THREAD_MEMBER_ACCOUNT_MISMATCH');
+    expect(
+      loadDiscordConfig({
+        ...vars,
+        MCP_DISCORD_THREAD_MEMBER_ENABLED: 'true',
+        MCP_DISCORD_THREAD_MEMBER_USER_ID: owner,
+        MCP_DISCORD_THREAD_MEMBER_ACCOUNT_ID: 'bot',
+      })?.threadMember
+    ).toEqual({ userId: owner, accountId: 'bot' });
+    for (const list of [
+      [],
+      [instances[0], instances[0]],
+      [{ ...instances[0], token: undefined }],
+      [{ ...instances[0], url: 'http://remote.invalid' }],
+    ])
+      expect(() => threadInvoker(list, base)).toThrow();
+  });
+  it.each(['userId', 'token', 'url', 'args', 'accountId', 'threadCreateMode'])(
+    'rejects client override %s before effects',
+    async (key) => {
+      const f = await fixture();
+      expect(
+        (await handleDiscord(f.service, 'openclaw_discord_ask', { ...input, [key]: 'untrusted' }))
+          .isError
+      ).toBe(true);
+      expect(f.gateway).not.toHaveBeenCalled();
+      expect(f.member).not.toHaveBeenCalled();
+    }
+  );
+  it('enforces service provenance on both adapters and ask without stripping identity', async () => {
+    const f = await fixture();
+    vi.stubEnv('OPENCLAW_CALLER_ID', 'agent');
+    await expect(f.service.ask(input)).rejects.toThrow('AGENT_PROVENANCE_DENIED');
+    await expect(
+      threadInvoker(instances, base, f.gateway)!(target, 'Task', input.operation_id)
+    ).rejects.toThrow('AGENT_PROVENANCE_DENIED');
+    await expect(threadMemberAdder(base, env, f.member)!(target, thread)).rejects.toThrow(
+      'AGENT_PROVENANCE_DENIED'
+    );
+    expect(process.env.OPENCLAW_CALLER_ID).toBe('agent');
+    expect(f.gateway).not.toHaveBeenCalled();
+    expect(f.member).not.toHaveBeenCalled();
+  });
+  it('rejects unconfigured gateway/member account mappings', async () => {
+    const f = await fixture();
+    await expect(
+      threadInvoker(instances, base, f.gateway)!(
+        { ...target, channelId: thread },
+        'Task',
+        input.operation_id
+      )
+    ).rejects.toThrow('THREAD_SCOPE_DENIED');
+    await expect(
+      threadMemberAdder(base, env, f.member)!({ ...target, accountId: 'other' }, thread)
+    ).rejects.toThrow('THREAD_MEMBER_SCOPE_DENIED');
+    await expect(
+      threadMemberAdder(base, env, f.member)!({ ...target, guildId: channel }, thread)
+    ).rejects.toThrow('THREAD_MEMBER_SCOPE_DENIED');
+    expect(f.gateway).not.toHaveBeenCalled();
+    expect(f.member).not.toHaveBeenCalled();
+  });
+  it('describes handoff and expected absence of answer text without changing input schema', () => {
+    const tool = discordTools.find((t) => t.name === 'openclaw_discord_ask')!;
+    expect(tool.description).toContain('not answer content');
+    expect(tool.description).toContain('Absence of answer text is expected; continue on Discord');
+    expect(Object.keys(tool.inputSchema.properties!)).toEqual([
+      'target',
+      'operation_id',
+      'mode',
+      'title',
+      'prompt',
+    ]);
+  });
+});
