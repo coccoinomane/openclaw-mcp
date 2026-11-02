@@ -339,10 +339,7 @@ interface Operation {
   recovery?: string;
   error_code?: string;
 }
-/** Trusted adapter must inspect live inbound routing, including runtime bindings.
- * Static config, channel metadata and session enumeration are insufficient.
- * Required for existing threads; must fail closed when routing cannot be established.
- */
+/** Optional extra route verification. Normal routing is an operator prerequisite. */
 export type DiscordRouteResolver = (
   target: AdmittedTarget,
   channelId: string
@@ -399,8 +396,7 @@ export class DiscordService {
       );
     }
   }
-  private async ordinaryRoute(t: AdmittedTarget, channelId: string, existing = false) {
-    if (existing && !this.resolveRoute) throw new DiscordError('ROUTE_INSPECTOR_REQUIRED');
+  private async ordinaryRoute(t: AdmittedTarget, channelId: string) {
     if (!this.resolveRoute) return 'agent:' + t.agentId + ':discord:channel:' + channelId;
     let route;
     try {
@@ -724,7 +720,6 @@ export class DiscordService {
     }
   }
   private async verifyReply(t: AdmittedTarget, id: string, prompt: string) {
-    if (!this.resolveRoute) throw new DiscordError('ROUTE_INSPECTOR_REQUIRED');
     await this.info(t, t.channelId, true);
     const thread = await this.info(t, id);
     if (id === t.channelId || ![10, 11].includes(thread.type))
@@ -751,7 +746,7 @@ export class DiscordService {
       ].every((name) => p.permissions.includes(name))
     )
       throw new DiscordError('THREAD_PERMISSIONS_DENIED');
-    return this.ordinaryRoute(t, id, true);
+    return this.ordinaryRoute(t, id);
   }
   private readonly background = new Set<string>();
   private async claimSession(key: string, operation: string) {
@@ -945,7 +940,7 @@ export class DiscordService {
       await this.info(t, id);
       op.channel_id = id;
       op.discord_url = 'https://discord.com/channels/' + t.guildId + '/' + id;
-      op.session_key = await this.ordinaryRoute(t, id, replying);
+      op.session_key = await this.ordinaryRoute(t, id);
       if (!replying && this.config.threadMember) {
         op.member_status = 'adding';
         await save();

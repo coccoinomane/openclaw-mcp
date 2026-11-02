@@ -1,3 +1,6 @@
+import { threadMemberAdder } from '../../openclaw/discord-thread.js';
+import { requestPublisher } from '../../openclaw/discord-request.js';
+import { channelReader } from '../../openclaw/discord-read.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -298,12 +301,21 @@ describe('existing public thread replies', () => {
       expect(f.publish).not.toHaveBeenCalled();
     }
   );
-  it('requires a live inspector rather than guessing from static normalRouting', async () => {
+  it('uses configured canonical routing without an optional resolver', async () => {
     const f = await fixture();
-    expect(await f.withoutResolver().reply(input)).toMatchObject({
-      error_code: 'ROUTE_INSPECTOR_REQUIRED',
+    const service = f.withoutResolver();
+    expect(await service.reply(input)).toMatchObject({
+      status: 'queued',
+      session_key: f.route.sessionKey,
     });
-    expect(f.publish).not.toHaveBeenCalled();
+    await f.running;
+    const args = f.runner.mock.calls.find((c) => c[1][0] === 'agent')![1];
+    expect(args[args.indexOf('--session-key') + 1]).toBe('agent:main:discord:channel:' + thread);
+    expect(f.publish).toHaveBeenCalledTimes(1);
+    f.finish({ status: 'ok' });
+    await service.drain();
+    expect(await service.reply(input)).toMatchObject({ status: 'completed' });
+    expect(f.publish).toHaveBeenCalledTimes(1);
   });
   it('rejects a parent ID and client-selected session, agent or transport fields', async () => {
     const f = await fixture();
@@ -454,4 +466,92 @@ describe('existing public thread replies', () => {
     });
     expect(f.publish).toHaveBeenCalledTimes(1);
   });
+  it.each([false, true])(
+    'runs stock adapter composition without a route resolver; archived=%s',
+    async (archived) => {
+      const f = await fixture();
+      f.metadata.thread_metadata.archived = archived;
+      f.config.threadMember = { accountId: 'bot', userId: '400000000000000009' };
+      let posted: any;
+      const network = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        const address = String(url);
+        if (address === 'http://127.0.0.1:18789/tools/invoke') {
+          const body = JSON.parse(String(init?.body));
+          expect(body.args.action).toBe('channel-info');
+          return Response.json({
+            ok: true,
+            result: {
+              details: {
+                ok: true,
+                channel:
+                  body.args.channelId === parent
+                    ? { id: parent, guild_id: guild, type: 0 }
+                    : f.metadata,
+              },
+            },
+          });
+        }
+        const base = 'https://discord.com/api/v10/channels/' + thread + '/messages';
+        if (address === base && init?.method === 'POST') {
+          posted = JSON.parse(String(init.body));
+          expect(posted.content).toBe(input.prompt);
+          expect(posted.allowed_mentions).toEqual({
+            parse: [],
+            users: [],
+            roles: [],
+            replied_user: false,
+          });
+          expect(posted.enforce_nonce).toBe(true);
+        } else if (address !== base + '/400000000000000004' || init?.method !== 'GET') {
+          throw new Error('Unexpected network effect: ' + address);
+        }
+        return Response.json({
+          id: '400000000000000004',
+          channel_id: thread,
+          content: posted.content,
+          author: { id: '400000000000000008', bot: true },
+          mention_everyone: false,
+          mentions: [],
+          mention_roles: [],
+        });
+      });
+      const service = new DiscordService(
+        f.config,
+        f.runner,
+        undefined,
+        undefined,
+        channelReader(
+          [{ name: 'home', url: 'http://127.0.0.1:18789', token: 'test-only' }],
+          f.config,
+          network
+        ),
+        undefined,
+        threadMemberAdder(f.config, { DISCORD_BOT_TOKEN: 'test-only' }, network),
+        requestPublisher(f.config, { DISCORD_BOT_TOKEN: 'test-only' }, network)
+      );
+      try {
+        const result = await handleDiscord(service, 'openclaw_discord_reply', input);
+        expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toMatchObject({
+          status: 'queued',
+          session_key: f.route.sessionKey,
+          request_verified: true,
+        });
+        await f.running;
+        expect(f.prompt()).toBe(input.prompt);
+        f.finish({ status: 'ok' });
+        await service.drain();
+        expect(await service.reply(input)).toMatchObject({ status: 'completed' });
+        expect(
+          network.mock.calls.filter(
+            ([, init]) => init?.method === 'POST' && String(init.body).includes('allowed_mentions')
+          )
+        ).toHaveLength(1);
+        expect(f.runner.mock.calls.filter(([, args]) => args[0] === 'agent')).toHaveLength(1);
+      } finally {
+        f.finish({ status: 'ok' });
+        await service.drain();
+      }
+    }
+  );
 });

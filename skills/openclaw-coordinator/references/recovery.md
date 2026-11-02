@@ -1,6 +1,6 @@
 # Recovering Discord operations
 
-openclaw_discord_ask accepts only new_thread. Use openclaw_discord_reply for an existing public thread; it requires verified live routing. ROUTE_INSPECTOR_REQUIRED means the service integration is missing and no request was sent. SESSION_BUSY_OR_UNCERTAIN means another operation holds a durable session claim; do not delete it to force a retry. NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED means the operator has not enabled normal routing for that parent. If an optional resolver rejects a newly created thread, retain its ID and inspect it; no agent turn was started.
+openclaw_discord_ask accepts only new_thread. Use openclaw_discord_reply for an existing public thread; it uses operator-configured normal routing. SESSION_BUSY_OR_UNCERTAIN means another operation holds a durable session claim; do not delete it to force a retry. NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED means the operator has not enabled normal routing for that parent. If an optional resolver rejects a newly created thread, retain its ID and inspect it; no agent turn was started.
 
 The service records an operation before the first write and records the thread identity before starting the agent. Records survive process restarts when the operator preserves the state directory. They contain a request digest, not the prompt.
 
@@ -13,6 +13,6 @@ The service records an operation before the first write and records the thread i
 - creation_unknown or run_unknown: a timeout, malformed response or command failure left the outcome uncertain. Inspect Discord and gateway logs; the service cannot prove that nothing happened.
 - OPERATION_INTERRUPTED: a stored creating/created/queued/running record has no live owner here. Reads report an unknown outcome without replay or record mutation. Inspect the existing thread.
 
-Use the same operation ID to retrieve the record. Do not delete records or use a fresh ID to force a retry. After an operator establishes what happened and the user authorizes another turn, continue by replying directly in the verified Discord thread. Use openclaw_discord_reply only when its live inspector is available and the previous outcome has been reconciled. Never create a replacement thread merely because the original response was lost.
+Use the same operation ID to retrieve the record. Do not delete records or use a fresh ID to force a retry. After an operator establishes what happened and the user authorizes another turn, continue by replying directly in the verified Discord thread. Use openclaw_discord_reply only after the previous outcome has been reconciled. Never create a replacement thread merely because the original response was lost.
 
 Keep one private durable state directory per service deployment, shared by its in-process workers and transports. Do not run multiple service processes against it. The file claim prevents concurrent duplicate operations on a local filesystem. Network filesystems and cross-host state replication are not supported. Record retention is an operator task; removing a record removes duplicate protection.

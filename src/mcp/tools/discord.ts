@@ -70,7 +70,7 @@ export const discordTools: Tool[] = [
       destructiveHint: false,
     },
     description:
-      'Publish the exact request as a bot in an EXISTING public Discord thread and queue an ordinary agent turn in the same canonical session. Active and archived unlocked threads are supported; sending auto-unarchives. Requires verified live routing; Gateway owns run admission and queueing; the stock entry point currently rejects replies with ROUTE_INSPECTOR_REQUIRED until a trusted inspector is integrated. Never supply a session key. Preserve wording without additions. Return only the Discord link on queued handoff, without polling for the answer; report denied, partial or unknown outcomes honestly. Reuse the operation ID and identical arguments after a disconnect; use openclaw_discord_operation for recovery. Never retry uncertain writes with a new ID.',
+      'Publish the exact request as a bot in an EXISTING public Discord thread and queue an ordinary agent turn in the same canonical session. Active and archived unlocked threads are supported; sending auto-unarchives. Uses operator-configured normal routing; Gateway owns run admission and queueing. Runtime rebindings are unsupported. Never supply a session key. Preserve wording without additions. Return only the Discord link on queued handoff, without polling for the answer; report denied, partial or unknown outcomes honestly. Reuse the operation ID and identical arguments after a disconnect; use openclaw_discord_operation for recovery. Never retry uncertain writes with a new ID.',
     inputSchema: {
       type: 'object',
       properties: {
