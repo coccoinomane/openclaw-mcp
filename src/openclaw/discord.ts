@@ -298,6 +298,7 @@ function payload(value: any): any {
 }
 interface Operation {
   fingerprint: string;
+  kind?: 'thread_reply';
   owner?: string;
   request_status?:
     | 'pending'
@@ -340,7 +341,7 @@ interface Operation {
 }
 /** Trusted adapter must inspect live inbound routing, including runtime bindings.
  * Static config, channel metadata and session enumeration are insufficient.
- * Optional extra check for fresh threads; existing-thread continuation is not supported.
+ * Required for existing threads; must fail closed when routing cannot be established.
  */
 export type DiscordRouteResolver = (
   target: AdmittedTarget,
@@ -352,6 +353,9 @@ export type DiscordRouteResolver = (
   agentId: string;
   sessionKey: string;
   kind: 'ordinary' | 'bound' | 'subagent' | 'unknown';
+  /** Live Gateway admission, not inferred from session names or static configuration. */
+  admitted?: boolean;
+  busy?: boolean;
 }>;
 export class DiscordService {
   private readonly creation?: ChannelCreation;
@@ -398,7 +402,8 @@ export class DiscordService {
       );
     }
   }
-  private async ordinaryRoute(t: AdmittedTarget, channelId: string) {
+  private async ordinaryRoute(t: AdmittedTarget, channelId: string, existing = false) {
+    if (existing && !this.resolveRoute) throw new DiscordError('ROUTE_INSPECTOR_REQUIRED');
     if (!this.resolveRoute) return 'agent:' + t.agentId + ':discord:channel:' + channelId;
     let route;
     try {
@@ -419,6 +424,9 @@ export class DiscordService {
       route.sessionKey !== 'agent:' + t.agentId + ':discord:channel:' + channelId
     )
       throw new DiscordError('ROUTE_MISMATCH');
+    if (existing && route.admitted !== true) throw new DiscordError('GATEWAY_ADMISSION_UNVERIFIED');
+    if (existing && route.busy !== false)
+      throw new DiscordError(route.busy === true ? 'SESSION_BUSY' : 'SESSION_ACTIVITY_UNVERIFIED');
     return route.sessionKey;
   }
   async createChannel(input: any) {
@@ -656,7 +664,8 @@ export class DiscordService {
       ['creating', 'created', 'queued', 'running'].includes(op.status) &&
       (op.owner !== this.owner || !this.active.has(op.operation_id))
     ) {
-      result.status = op.channel_id ? 'run_unknown' : 'creation_unknown';
+      result.status =
+        op.channel_id || op.kind === 'thread_reply' ? 'run_unknown' : 'creation_unknown';
       result.error_code = 'OPERATION_INTERRUPTED';
       result.recovery =
         'Service ownership ended. Inspect the existing thread; never replay this operation.';
@@ -675,6 +684,20 @@ export class DiscordService {
   }
   async ask(input: any) {
     if (input.mode !== 'new_thread') throw new DiscordError('CONTINUE_UNSUPPORTED');
+    return this.enqueue(input);
+  }
+  async reply(input: any) {
+    if (
+      !input ||
+      Object.keys(input).some(
+        (key) => !['target', 'channel_id', 'operation_id', 'prompt'].includes(key)
+      )
+    )
+      throw new DiscordError('REPLY_ARGUMENTS_INVALID');
+    check(input.channel_id, snowflake, 'thread ID');
+    return this.enqueue({ ...input, mode: 'reply' });
+  }
+  private async enqueue(input: any) {
     this.path(input.operation_id);
     const existing = await readFile(this.path(input.operation_id), 'utf8').then(
       () => true,
@@ -706,11 +729,79 @@ export class DiscordService {
       }
     }
   }
+  private async verifyReply(t: AdmittedTarget, id: string, prompt: string) {
+    if (!this.resolveRoute) throw new DiscordError('ROUTE_INSPECTOR_REQUIRED');
+    await this.info(t, t.channelId, true);
+    const thread = await this.info(t, id);
+    if (id === t.channelId || ![10, 11].includes(thread.type))
+      throw new DiscordError('PUBLIC_THREAD_REQUIRED');
+    if (
+      thread.thread_metadata?.locked !== false ||
+      typeof thread.thread_metadata?.archived !== 'boolean'
+    )
+      throw new DiscordError('THREAD_LOCKED_OR_UNVERIFIED');
+    const permissions = await this.cli(t, ['permissions', '--target', 'channel:' + id]);
+    const p = permissions.permissions;
+    if (
+      !p ||
+      p.channelId !== id ||
+      p.guildId !== t.guildId ||
+      p.isDm !== false ||
+      p.channelType !== thread.type ||
+      !Array.isArray(p.permissions) ||
+      ![
+        'ViewChannel',
+        'SendMessagesInThreads',
+        'ReadMessageHistory',
+        ...(prompt.length > 2000 ? ['AttachFiles'] : []),
+      ].every((name) => p.permissions.includes(name))
+    )
+      throw new DiscordError('THREAD_PERMISSIONS_DENIED');
+    return this.ordinaryRoute(t, id, true);
+  }
   private readonly background = new Set<string>();
+  private async claimSession(key: string, operation: string) {
+    const path = join(
+      this.config.stateDir,
+      'session-' + createHash('sha256').update(key).digest('hex') + '.lock'
+    );
+    let handle;
+    try {
+      handle = await open(path, 'wx', 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST')
+        throw new DiscordError('SESSION_BUSY_OR_UNCERTAIN');
+      throw error;
+    }
+    try {
+      await handle.writeFile(JSON.stringify({ operation_id: operation, owner: this.owner }));
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    const directory = await open(this.config.stateDir, 'r');
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+    let released = false;
+    return async () => {
+      if (released) return;
+      await rm(path);
+      released = true;
+      const directory = await open(this.config.stateDir, 'r');
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
+    };
+  }
   private async prepare(input: any) {
-    if (this.config.threadCreateMode === 'gateway' || this.config.threadMember)
+    const replying = input.mode === 'reply';
+    if (replying || this.config.threadCreateMode === 'gateway' || this.config.threadMember)
       assertServiceProvenance();
-    if (input.mode !== 'new_thread') throw new DiscordError('CONTINUE_UNSUPPORTED');
     const t = await this.target(input.target);
     const path = this.path(input.operation_id);
 
@@ -769,6 +860,7 @@ export class DiscordService {
     }
     const op: Operation = {
       fingerprint,
+      ...(replying ? { kind: 'thread_reply' as const } : {}),
       owner: this.owner,
       request_status: 'pending',
       request_verified: false,
@@ -776,7 +868,7 @@ export class DiscordService {
       operation_id: input.operation_id,
       target: t.name,
       status: input.mode === 'new_thread' ? 'creating' : 'created',
-      member_status: this.config.threadMember ? 'pending' : 'disabled',
+      member_status: !replying && this.config.threadMember ? 'pending' : 'disabled',
       member_verified: false,
     };
     try {
@@ -798,6 +890,7 @@ export class DiscordService {
       await rename(temporary, path);
       await syncDirectory();
     };
+    let releaseSession: (() => Promise<void>) | undefined;
     let dir: string | undefined;
     let dispatched = false;
     let createDispatched = false;
@@ -808,6 +901,13 @@ export class DiscordService {
       const parent = await this.info(t, t.channelId, true);
       if ([15, 16].includes(parent.type)) throw new DiscordError('FORUM_MEDIA_WRITES_UNSUPPORTED');
       let id = input.channel_id;
+      if (replying) {
+        op.session_key = await this.verifyReply(t, id, input.prompt);
+        op.channel_id = id;
+        op.discord_url = 'https://discord.com/channels/' + t.guildId + '/' + id;
+        releaseSession = await this.claimSession(op.session_key, input.operation_id);
+        await save();
+      }
       if (input.mode === 'new_thread') {
         await this.ordinaryRoute(t, t.channelId);
         createDispatched = true;
@@ -851,8 +951,8 @@ export class DiscordService {
       await this.info(t, id);
       op.channel_id = id;
       op.discord_url = 'https://discord.com/channels/' + t.guildId + '/' + id;
-      op.session_key = await this.ordinaryRoute(t, id);
-      if (this.config.threadMember) {
+      op.session_key = await this.ordinaryRoute(t, id, replying);
+      if (!replying && this.config.threadMember) {
         op.member_status = 'adding';
         await save();
         try {
@@ -872,6 +972,7 @@ export class DiscordService {
       dir = await mkdtemp(join(tmpdir(), 'openclaw-mcp-'));
       const promptFile = join(dir, 'prompt.txt');
       await writeFile(promptFile, input.prompt, { mode: 0o600 });
+      if (replying) await this.verifyReply(t, id, input.prompt);
       op.request_status = 'publishing';
       await save();
       try {
@@ -906,6 +1007,7 @@ export class DiscordService {
           op.generation_status = 'running';
           await save();
           assertTargetAllowed(this.config, t, id);
+          if (replying) await this.verifyReply(t, id, input.prompt);
           dispatched = true;
           const result: any = await this.runner(
             this.config.executable,
@@ -1004,6 +1106,8 @@ export class DiscordService {
           await save();
         } finally {
           if (directory) await rm(directory, { recursive: true, force: true });
+          // Ambiguous dispatch retains the durable claim for operator recovery.
+          if (!dispatched || op.status === 'completed') await releaseSession?.();
         }
       })();
       // Handle failures saving state or cleaning files as well as runner rejection.
@@ -1033,6 +1137,11 @@ export class DiscordService {
       await save();
     } finally {
       if (dir) await rm(dir, { recursive: true, force: true });
+      if (
+        !this.background.has(input.operation_id) &&
+        !['unknown', 'partial', 'publishing', 'sent'].includes(op.request_status ?? '')
+      )
+        await releaseSession?.();
     }
     return this.publicResult(op);
   }

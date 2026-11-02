@@ -15,6 +15,8 @@ The first message contains your request without an added prefix. Caller instruct
 
 Discord is **off by default**, so its tools are hidden unless `MCP_DISCORD_ENABLED=true`. Configure explicit guild/account/agent discovery scopes: an empty channel whitelist includes all supported channels in those scopes, while the blacklist always wins. Legacy target allowlists still work. Credentials and verified normal channel routing are required. See the [Discord setup guide](docs/discord-skills.md). The packaged coordinator skill is available through the modern MCP Skills extension or legacy resources.
 
+`openclaw_discord_reply` adds existing-public-thread handoff to the shared tool set (13 tools with Discord enabled, 7 without). It requires a trusted live routing/admission inspector; the stock entry point currently fails closed with `ROUTE_INSPECTOR_REQUIRED`. Do not deploy it as a working reply feature until that integration is supplied. See [existing-thread requirements](docs/discord-reply.md).
+
 ## Install this fork
 
 Use the archive from [GitHub Releases](https://github.com/coccoinomane/openclaw-mcp/releases). It includes compiled JavaScript and a dependency lockfile; dependencies are installed separately. Node.js 20 or newer is required; Node.js 24 is recommended.

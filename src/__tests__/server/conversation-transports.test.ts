@@ -229,6 +229,14 @@ describe('conversation metadata across real MCP transports', () => {
         } else client = await connectHttp(base, 'discord-read', transport);
       }
       cleanups.push(() => client.close());
+      const listing = await client.listTools();
+      expect(listing.tools).toHaveLength(13);
+      expect(
+        listing.tools.find((t: any) => t.name === 'openclaw_discord_reply')?.inputSchema
+      ).toMatchObject({
+        required: ['target', 'channel_id', 'operation_id', 'prompt'],
+        additionalProperties: false,
+      });
       const result = await client.callTool({ name: 'openclaw_discord_channels', arguments: {} });
       expect(result.isError).not.toBe(true);
       expect(result.structuredContent).toMatchObject({

@@ -42,7 +42,7 @@ export const discordTools: Tool[] = [
     name: 'openclaw_discord_ask',
     annotations: { title: 'Ask OpenClaw on Discord', readOnlyHint: false, destructiveHint: false },
     description:
-      'Create a NEW ordinary Discord thread, publish the exact request as a bot without a prefix, and return a queued Continue on Discord link, not answer content. Does not wait for generation. Preserve the user’s wording; do not add requirements or optimize the prompt unless explicitly requested. On successful handoff, reply to the user with only the Discord link, without commentary or a summary; report errors or partial/unknown outcomes instead of implying success. Use openclaw_discord_operation only when eventual status or recovery is needed, not before handing off. Select an allowed channel using openclaw_discord_channels when unspecified; ask if ambiguous. Existing-thread continuation is unavailable. Preserve operation ID; inspect partial/unknown outcomes before further action.',
+      'Create a NEW ordinary Discord thread, publish the exact request as a bot without a prefix, and return a queued Continue on Discord link, not answer content. Does not wait for generation. Preserve the user’s wording; do not add requirements or optimize the prompt unless explicitly requested. On successful handoff, reply to the user with only the Discord link, without commentary or a summary; report errors or partial/unknown outcomes instead of implying success. Use openclaw_discord_operation only when eventual status or recovery is needed, not before handing off. Select an allowed channel using openclaw_discord_channels when unspecified; ask if ambiguous. Use openclaw_discord_reply for an existing public thread. Preserve operation ID; inspect partial/unknown outcomes before further action.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -59,6 +59,37 @@ export const discordTools: Tool[] = [
         },
       },
       required: ['target', 'operation_id', 'mode', 'title', 'prompt'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'openclaw_discord_reply',
+    annotations: {
+      title: 'Reply in an existing Discord thread',
+      readOnlyHint: false,
+      destructiveHint: false,
+    },
+    description:
+      'Publish the exact request as a bot in an EXISTING public Discord thread and queue an ordinary agent turn in the same canonical session. Active and archived unlocked threads are supported; sending auto-unarchives. Requires verified live routing and Gateway admission; the stock entry point currently rejects replies with ROUTE_INSPECTOR_REQUIRED until a trusted inspector is integrated. Never supply a session key. Preserve wording without additions. Return only the Discord link on queued handoff, without polling for the answer; report denied, partial or unknown outcomes honestly. Reuse the operation ID and identical arguments after a disconnect; use openclaw_discord_operation for recovery. Never retry uncertain writes with a new ID.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target,
+        channel_id: {
+          type: 'string',
+          pattern: '^[1-9][0-9]{16,19}$',
+          description: 'Existing public thread ID under the selected target parent.',
+        },
+        operation_id: operation,
+        prompt: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 1048576,
+          description:
+            'Exact request to forward, without extra requirements or prompt optimization.',
+        },
+      },
+      required: ['target', 'channel_id', 'operation_id', 'prompt'],
       additionalProperties: false,
     },
   },
@@ -117,7 +148,9 @@ export async function handleDiscord(service: DiscordService, name: string, input
           ? await service.threads(input)
           : name === 'openclaw_discord_ask'
             ? await service.ask(input)
-            : await service.status(input.operation_id);
+            : name === 'openclaw_discord_reply'
+              ? await service.reply(input)
+              : await service.status(input.operation_id);
     return structuredJsonResponse(result);
   } catch (error) {
     if (error instanceof DiscordError)
