@@ -27,7 +27,34 @@ The MCP server logs operational events to **stderr** using the `[openclaw-mcp]` 
 ### Connections (SSE/HTTP transport)
 
 - SSE session connected/disconnected (with session ID)
-- Streamable HTTP session initialized/closed (with session ID)
+- Streamable HTTP session initialized/closed (without session ID)
+
+### HTTP request diagnostics
+
+Each /mcp request that reaches application middleware produces one bounded JSON
+log line prefixed with `HTTP`. It records a timestamp, a server-generated
+request ID (also returned as `X-Request-Id`), HTTP method and path without query,
+allowlisted MCP method/tool name, protocol version, selected transport branch,
+session-present/session-known booleans, HTTP status and error category. Unknown
+client labels are replaced with `other`. No session IDs, arguments, prompts,
+response contents, authorization headers or client-supplied correlation IDs are
+included. These diagnostics do not require debug mode.
+
+The middleware runs before bearer authentication and origin checks, so their
+401/403 responses are visible. Host validation and JSON parsing happen earlier
+inside the SDK; requests rejected there are not covered. HTTP 200 means transport
+success, not necessarily tool success: JSON-RPC errors and tool-level errors can
+also travel in a successful HTTP response.
+
+For stateful (2025-era) Streamable HTTP, an unknown or deleted session returns
+HTTP 404 / JSON-RPC -32001. The client must initialize a new session without the
+old session header. A non-initialize request missing its session header returns
+HTTP 400 / -32000 without creating a server or executing tools. No tool request
+is automatically replayed. Modern stateless traffic keeps its existing routing.
+
+When reporting a failure, include the time, HTTP status and `X-Request-Id` if
+available. A client-visible -32603 alone does not establish whether the failure
+came from the transport, client or a tool.
 
 ### Errors
 

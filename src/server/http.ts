@@ -18,6 +18,8 @@ import type { IncomingMessage, ServerResponse, Server as HttpServer } from 'node
 import type { Request, Response, NextFunction } from 'express';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { InitializeRequestSchema, JSONRPCRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { httpDiagnostics } from './http-diagnostics.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
@@ -165,6 +167,8 @@ export async function createHttpServer(
     log(`Trust proxy: ${JSON.stringify(config.trustProxy)}`);
   }
 
+  app.use(httpDiagnostics((id) => streamableSessions.has(id)));
+
   // A missing Origin is normal for native clients. A browser origin must be
   // same-origin with the trusted issuer/bind address, or explicitly allowlisted.
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -205,7 +209,7 @@ export async function createHttpServer(
         'Access-Control-Allow-Headers',
         'Content-Type, Authorization, Mcp-Session-Id, mcp-protocol-version'
       );
-      res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+      res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id, X-Request-Id');
     }
 
     if (req.method === 'OPTIONS') {
@@ -336,7 +340,9 @@ export async function createHttpServer(
   );
   const modernNode = toNodeHandler(modern);
   const handleStreamableRequest = async (req: Request, res: Response) => {
-    if (!(await isLegacyRequest(await toWebRequest(req, req.body), req.body))) {
+    const legacy = await isLegacyRequest(await toWebRequest(req, req.body), req.body);
+    res.locals.mcpDiagnostic.branch = legacy ? 'legacy' : 'modern';
+    if (!legacy) {
       await modernNode(req, res, req.body);
       return;
     }
@@ -352,7 +358,8 @@ export async function createHttpServer(
           req.body
         );
       } catch (error) {
-        logError(`Error in streamable session ${sessionId}`, error);
+        res.locals.mcpDiagnostic.category = 'transport_exception';
+        logError('Error in streamable session');
         if (!res.headersSent) {
           res.status(500).json({ error: 'Internal server error' });
         }
@@ -360,12 +367,38 @@ export async function createHttpServer(
       return;
     }
 
-    // New session (initialization request)
+    // Never recreate a lost session or replay its request. The client must initialize again.
+    if (sessionId) {
+      res.locals.mcpDiagnostic.category = 'unknown_session';
+      res
+        .status(404)
+        .json({ jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Session not found' } });
+      return;
+    }
+    if (
+      req.method !== 'POST' ||
+      !JSONRPCRequestSchema.safeParse(req.body).success ||
+      !InitializeRequestSchema.safeParse(req.body).success
+    ) {
+      res.locals.mcpDiagnostic.category =
+        req.body?.method === 'initialize' ? 'invalid_initialize' : 'missing_session';
+      res.status(400).json({
+        jsonrpc: '2.0',
+        id: null,
+        error: {
+          code: -32000,
+          message: 'Bad Request: Mcp-Session-Id header is required; initialize a new session first',
+        },
+      });
+      return;
+    }
+
+    // New session (validated initialization request only).
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (newSessionId) => {
         streamableSessions.set(newSessionId, { transport, server });
-        log(`Streamable session initialized: ${newSessionId}`);
+        log('Streamable session initialized');
       },
     });
 
@@ -373,7 +406,7 @@ export async function createHttpServer(
       const sid = transport.sessionId;
       if (sid) {
         streamableSessions.delete(sid);
-        log(`Streamable session closed: ${sid}`);
+        log('Streamable session closed');
       }
     };
 
@@ -387,10 +420,14 @@ export async function createHttpServer(
         req.body
       );
     } catch (error) {
-      logError('Failed to initialize streamable session', error);
+      res.locals.mcpDiagnostic.category = 'transport_exception';
+      logError('Failed to initialize streamable session');
       if (!res.headersSent) {
         res.status(500).json({ error: 'Internal server error' });
       }
+    } finally {
+      // Header validation can reject an initialize request before it acquires a session.
+      if (!transport.sessionId) await server.close();
     }
   };
 
