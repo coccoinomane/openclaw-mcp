@@ -1,3 +1,10 @@
+import {
+  discordChannelsOutput,
+  discordThreadsOutput,
+  discordTurnOutput,
+  discordCreationOutput,
+  discordOperationOutput,
+} from './discord-output.js';
 import { DiscordError } from '../../openclaw/discord-channels.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { DiscordService } from '../../openclaw/discord.js';
@@ -18,12 +25,14 @@ const operation = {
 export const discordTools: Tool[] = [
   {
     name: 'openclaw_discord_channels',
+    outputSchema: discordChannelsOutput,
     description:
       "List verified operator-allowed Discord channels. Use their names, topics and categories to choose the most suitable channel for a new thread about the user's request; ask for clarification only when the destination is ambiguous. Requires service opt-in.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'openclaw_discord_threads',
+    outputSchema: discordThreadsOutput,
     description:
       'List active threads or archived public threads under an allowed channel. Only archived results support pagination.',
     inputSchema: {
@@ -40,6 +49,7 @@ export const discordTools: Tool[] = [
   },
   {
     name: 'openclaw_discord_ask',
+    outputSchema: discordTurnOutput,
     annotations: { title: 'Ask OpenClaw on Discord', readOnlyHint: false, destructiveHint: false },
     description:
       'Create a NEW ordinary Discord thread, publish the exact request as a bot without a prefix, and return a queued Continue on Discord link, not answer content. Does not wait for generation. Preserve the user’s wording; do not add requirements or optimize the prompt unless explicitly requested. On successful handoff, reply to the user with only the Discord link, without commentary or a summary; report errors or partial/unknown outcomes instead of implying success. Use openclaw_discord_operation only when eventual status or recovery is needed, not before handing off. Select an allowed channel using openclaw_discord_channels when unspecified; ask if ambiguous. Use openclaw_discord_reply for an existing public thread. Preserve operation ID; inspect partial/unknown outcomes before further action.',
@@ -64,6 +74,7 @@ export const discordTools: Tool[] = [
   },
   {
     name: 'openclaw_discord_reply',
+    outputSchema: discordTurnOutput,
     annotations: {
       title: 'Reply in an existing Discord thread',
       readOnlyHint: false,
@@ -95,6 +106,7 @@ export const discordTools: Tool[] = [
   },
   {
     name: 'openclaw_discord_operation',
+    outputSchema: discordOperationOutput,
     description:
       'Read durable operation status after a disconnect or uncertain outcome. Does not repeat side effects.',
     inputSchema: {
@@ -106,6 +118,7 @@ export const discordTools: Tool[] = [
   },
   {
     name: 'openclaw_discord_create_channel',
+    outputSchema: discordCreationOutput,
     description:
       'Create a normal text channel under an operator-approved guild/category using the configured Gateway API, then persistently admit it for CLI coordination. Requires explicit user authorization for creation AND admission. No arbitrary tool proxy. Keep operation ID on uncertainty.',
     inputSchema: {

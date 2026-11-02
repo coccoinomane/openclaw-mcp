@@ -7,6 +7,8 @@
  */
 
 import { McpServer } from '@modelcontextprotocol/server';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
+import { errorResponse } from '../utils/response-helpers.js';
 import type { SkillCatalog } from '@modelcontextprotocol/server/ext/skills';
 import {
   ListResourcesRequestSchema,
@@ -120,6 +122,28 @@ function toolSet(
     allTools.push(...discordTools);
     for (const tool of discordTools)
       toolHandlers.set(tool.name, (input) => handleDiscord(deps.discord!, tool.name, input ?? {}));
+  }
+  // Low-level request handlers bypass the SDK's registered-tool output checks.
+  // Use the same validators for legacy and modern transports, without rewriting payloads.
+  const validator = new AjvJsonSchemaValidator();
+  for (const tool of allTools) {
+    if (!tool.outputSchema) continue;
+    const validate = validator.getValidator(tool.outputSchema);
+    const handler = toolHandlers.get(tool.name)!;
+    toolHandlers.set(tool.name, async (input) => {
+      const response = await handler(input);
+      if (
+        response.structuredContent === undefined
+          ? !response.isError
+          : !validate(response.structuredContent).valid
+      ) {
+        logError('Invalid structured output for tool ' + tool.name);
+        return errorResponse(
+          'Tool output could not be verified. Side effects may already have occurred; do not blindly retry writes.'
+        );
+      }
+      return response;
+    });
   }
   return { allTools, toolHandlers };
 }

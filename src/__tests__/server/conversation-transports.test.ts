@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { discordTools } from '../../mcp/tools/discord.js';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import {
   Client as ModernClient,
   StreamableHTTPClientTransport as ModernTransport,
@@ -231,6 +233,16 @@ describe('conversation metadata across real MCP transports', () => {
       cleanups.push(() => client.close());
       const listing = await client.listTools();
       expect(listing.tools).toHaveLength(13);
+      for (const tool of discordTools) {
+        expect(listing.tools.find((t) => t.name === tool.name)?.outputSchema).toEqual(
+          tool.outputSchema
+        );
+      }
+      expect(
+        listing.tools
+          .filter((t) => !t.name.startsWith('openclaw_discord_'))
+          .every((t) => t.outputSchema === undefined)
+      ).toBe(true);
       expect(
         listing.tools.find((t: any) => t.name === 'openclaw_discord_reply')?.inputSchema
       ).toMatchObject({
@@ -243,6 +255,31 @@ describe('conversation metadata across real MCP transports', () => {
         channels: [{ target: 'work', channel_id: channel, name: 'Allowed' }],
       });
       expect(JSON.stringify(result)).not.toContain('Private');
+      const validate = new AjvJsonSchemaValidator().getValidator(
+        listing.tools.find((t) => t.name === 'openclaw_discord_channels')!.outputSchema!
+      );
+      expect(validate(result.structuredContent).valid).toBe(true);
+      expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual(
+        result.structuredContent
+      );
+      const denied = await client.callTool({
+        name: 'openclaw_discord_create_channel',
+        arguments: {
+          policy: 'denied',
+          operation_id: 'denied-operation-01',
+          name: 'unused',
+          authorize_create: true,
+          authorize_admission: true,
+        },
+      });
+      expect(denied.isError).toBe(true);
+      const validateCreation = new AjvJsonSchemaValidator().getValidator(
+        listing.tools.find((t) => t.name === 'openclaw_discord_create_channel')!.outputSchema!
+      );
+      expect(validateCreation(denied.structuredContent).valid).toBe(true);
+      const invalid = await client.callTool({ name: 'openclaw_discord_threads', arguments: {} });
+      expect(invalid.isError).toBe(true);
+      expect(invalid.structuredContent).toBeUndefined();
       expect(requests).toEqual([
         {
           url: '/tools/invoke',
