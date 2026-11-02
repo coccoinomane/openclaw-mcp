@@ -59,6 +59,44 @@ async function connect(modern: boolean, discord: DiscordService) {
   return client;
 }
 describe.each([false, true])('Discord output validation (modern=%s)', (modern) => {
+  it('preserves typed or absent thread metadata and rejects malformed fields', async () => {
+    const item = {
+      channel_id: '500000000000000003',
+      discord_url: 'https://discord.com/channels/500000000000000001/500000000000000003',
+    };
+    const sparse = { threads: [item], has_more: false, pagination: 'none' };
+    const threads = vi.fn(async (): Promise<any> => sparse);
+    const client = await connect(modern, { threads } as unknown as DiscordService);
+    await client.listTools();
+    const request = { name: 'openclaw_discord_threads', arguments: { target: 'work' } };
+    expect((await client.callTool(request)).structuredContent).toEqual(sparse);
+    const complete = {
+      threads: [
+        { ...item, name: 'Task', archived: true, archive_timestamp: '2026-11-01T00:00:00Z' },
+      ],
+      has_more: true,
+      next_before: '2026-11-01T00:00:00Z',
+      pagination: 'archived_public_timestamp',
+    };
+    threads.mockResolvedValue(complete);
+    const valid = await client.callTool(request);
+    expect(valid.isError).not.toBe(true);
+    expect(valid.structuredContent).toEqual(complete);
+    expect(valid.content[0]).toEqual({ type: 'text', text: JSON.stringify(complete, null, 2) });
+    for (const patch of [
+      { name: null },
+      { name: 42 },
+      { archived: 'false' },
+      { archive_timestamp: 42 },
+    ]) {
+      threads.mockResolvedValue({ ...sparse, threads: [{ ...item, ...patch }] });
+      const result = await client.callTool(request);
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toBeUndefined();
+    }
+    threads.mockResolvedValue({ ...sparse, next_before: 42 });
+    expect((await client.callTool(request)).isError).toBe(true);
+  });
   it('advertises all schemas and rejects invalid success output server-side', async () => {
     const channels = vi.fn(async (): Promise<any> => ({ channels: [], creation_policies: [] }));
     const client = await connect(modern, { channels } as unknown as DiscordService);

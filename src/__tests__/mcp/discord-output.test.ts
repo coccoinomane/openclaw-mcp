@@ -184,7 +184,7 @@ describe('Discord output contracts', () => {
     f.channels.splice(0);
     expect((await checked(f.service, 'channels')).channels).toEqual([]);
   });
-  it('validates active, archived, empty and sparse thread payloads without inventing metadata types', async () => {
+  it('validates active, archived, empty and sparse thread payloads', async () => {
     const f = await fixture();
     expect((await checked(f.service, 'threads', { target: 'work' })).pagination).toBe('none');
     f.more();
@@ -199,7 +199,13 @@ describe('Discord output contracts', () => {
     await checked(f.service, 'threads', { target: 'work', archived: true });
     f.threads[0].name = null;
     f.threads[0].thread_metadata = { archived: 'upstream-value', archive_timestamp: 42 };
-    await checked(f.service, 'threads', { target: 'work', archived: true });
+    const malformed = await handleDiscord(f.service, 'openclaw_discord_threads', {
+      target: 'work',
+      archived: true,
+    });
+    expect(validators.get('openclaw_discord_threads')!(malformed.structuredContent).valid).toBe(
+      false
+    );
     f.threads.splice(0);
     expect((await checked(f.service, 'threads', { target: 'work' })).threads).toEqual([]);
   });

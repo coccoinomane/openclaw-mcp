@@ -58,11 +58,7 @@ export const discordChannelsOutput = output({
   required: ['channels', 'creation_policies'],
 });
 
-// These metadata fields pass through the CLI without type checks. Keep them
-// optional and unconstrained rather than changing existing payloads to fit a schema.
-const threadMetadata = {
-  description: 'Optional upstream metadata, passed through without type validation.',
-};
+// Metadata may be absent; malformed values are rejected by output validation.
 export const discordThreadsOutput = output({
   type: 'object',
   properties: {
@@ -72,16 +68,16 @@ export const discordThreadsOutput = output({
         type: 'object',
         properties: {
           channel_id: string,
-          name: threadMetadata,
-          archived: threadMetadata,
-          archive_timestamp: threadMetadata,
+          name: string,
+          archived: boolean,
+          archive_timestamp: string,
           discord_url: string,
         },
         required: ['channel_id', 'discord_url'],
       },
     },
     has_more: boolean,
-    next_before: threadMetadata,
+    next_before: string,
     pagination: { type: 'string', enum: ['none', 'archived_public_timestamp'] },
   },
   required: ['threads', 'has_more', 'pagination'],

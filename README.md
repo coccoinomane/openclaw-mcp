@@ -17,6 +17,8 @@ Discord is **off by default**, so its tools are hidden unless `MCP_DISCORD_ENABL
 
 `openclaw_discord_reply` adds existing-public-thread handoff to the shared tool set (13 tools with Discord enabled, 7 without). It reuses configured normal routing and Gateway-backed dispatch for active or archived unlocked public threads. See [existing-thread requirements](docs/discord-reply.md).
 
+All six Discord tools advertise MCP `outputSchema` and validate `structuredContent`, while retaining JSON text responses. Thread names and archive timestamps/cursors are optional strings; `archived` is an optional boolean. Malformed values return a tool error rather than a success payload. These schemas do not change OpenClaw CodeMode type generation; clients decide how to consume them.
+
 ## Install this fork
 
 Use the archive from [GitHub Releases](https://github.com/coccoinomane/openclaw-mcp/releases). It includes compiled JavaScript and a dependency lockfile; dependencies are installed separately. Node.js 20 or newer is required; Node.js 24 is recommended.
