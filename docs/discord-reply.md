@@ -6,9 +6,11 @@ The shared MCP tool openclaw_discord_reply accepts target, channel_id, prompt an
 
 **The stock entry point does not yet supply the required live route inspector. Replies fail closed with ROUTE_INSPECTOR_REQUIRED before publication. This feature is not production-ready.**
 
-A trusted DiscordRouteResolver must inspect live inbound routing, including runtime bindings, verify Gateway admission for the configured account/guild/parent/thread, and return the exact ordinary canonical session with admitted:true and busy:false. Static normalRouting configuration, sessions.list, sessions.resolve and a canonical-looking key do not establish this. Do not implement the inspector by asserting these values or inventing a human sender. The available Gateway source inspected during implementation exposes no read-only API that proves all these conditions. Completing that integration requires a supported Gateway capability; no plugin/config change is included here.
+A trusted DiscordRouteResolver must distinguish ordinary channel sessions from live thread-bound/subagent sessions. The operator normalRouting assertion remains the configured ordinary-route prerequisite. Gateway-backed agent --session-key already owns turn admission and queueing; no idle-state proof or custom admission flag is required.
 
-Even a read-only inspector cannot atomically reserve a Gateway turn against native Discord traffic or a concurrent binding change. The coordinator rechecks before publication and dispatch; Gateway admission and serialization must remain authoritative. A stronger atomic admission/dispatch contract is a remaining integration requirement before production approval.
+The remaining blocker is narrower: the installed public APIs do not expose the effective session key and binding kind for a Discord conversation. Canonical outbound recipient routing ignores runtime thread bindings; conversations.list checks the owning agent but does not distinguish that agent's ordinary session from its subagent binding. A same-agent bound thread can therefore look eligible while human replies go to another session. See [installed source evidence](discord-reply-routing-evidence.md).
+
+A read-only Gateway/plugin route-inspection method returning the effective session key and ordinary/bound/unknown classification is the required extension. It should reuse the installed Discord binding resolver and report an unavailable binding owner explicitly. It does not need a custom queue, idle precondition, human sender, or admission bypass. No such endpoint is invented or invoked by this branch.
 
 ## Validation and recovery
 

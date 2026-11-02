@@ -61,8 +61,6 @@ async function fixture() {
     agentId: 'main',
     sessionKey: 'agent:main:discord:channel:' + thread,
     kind: 'ordinary',
-    admitted: true,
-    busy: false,
   };
   const permissions: any = {
     channelId: thread,
@@ -261,30 +259,6 @@ describe('existing public thread replies', () => {
       'wrong account',
       (f: any) => {
         f.route.accountId = 'other';
-      },
-    ],
-    [
-      'admission denied',
-      (f: any) => {
-        f.route.admitted = false;
-      },
-    ],
-    [
-      'admission unknown',
-      (f: any) => {
-        delete f.route.admitted;
-      },
-    ],
-    [
-      'busy',
-      (f: any) => {
-        f.route.busy = true;
-      },
-    ],
-    [
-      'activity unknown',
-      (f: any) => {
-        delete f.route.busy;
       },
     ],
     [

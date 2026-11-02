@@ -1,6 +1,6 @@
 # Recovering Discord operations
 
-openclaw_discord_ask accepts only new_thread. Use openclaw_discord_reply for an existing public thread; it requires verified live routing, admission and idle state. ROUTE_INSPECTOR_REQUIRED means the service integration is missing and no request was sent. SESSION_BUSY_OR_UNCERTAIN means another operation holds a durable session claim; do not delete it to force a retry. NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED means the operator has not enabled normal routing for that parent. If an optional resolver rejects a newly created thread, retain its ID and inspect it; no agent turn was started.
+openclaw_discord_ask accepts only new_thread. Use openclaw_discord_reply for an existing public thread; it requires verified live routing. ROUTE_INSPECTOR_REQUIRED means the service integration is missing and no request was sent. SESSION_BUSY_OR_UNCERTAIN means another operation holds a durable session claim; do not delete it to force a retry. NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED means the operator has not enabled normal routing for that parent. If an optional resolver rejects a newly created thread, retain its ID and inspect it; no agent turn was started.
 
 The service records an operation before the first write and records the thread identity before starting the agent. Records survive process restarts when the operator preserves the state directory. They contain a request digest, not the prompt.
 

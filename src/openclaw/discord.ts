@@ -353,9 +353,6 @@ export type DiscordRouteResolver = (
   agentId: string;
   sessionKey: string;
   kind: 'ordinary' | 'bound' | 'subagent' | 'unknown';
-  /** Live Gateway admission, not inferred from session names or static configuration. */
-  admitted?: boolean;
-  busy?: boolean;
 }>;
 export class DiscordService {
   private readonly creation?: ChannelCreation;
@@ -424,9 +421,6 @@ export class DiscordService {
       route.sessionKey !== 'agent:' + t.agentId + ':discord:channel:' + channelId
     )
       throw new DiscordError('ROUTE_MISMATCH');
-    if (existing && route.admitted !== true) throw new DiscordError('GATEWAY_ADMISSION_UNVERIFIED');
-    if (existing && route.busy !== false)
-      throw new DiscordError(route.busy === true ? 'SESSION_BUSY' : 'SESSION_ACTIVITY_UNVERIFIED');
     return route.sessionKey;
   }
   async createChannel(input: any) {
