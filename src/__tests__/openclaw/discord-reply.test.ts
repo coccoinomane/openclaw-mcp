@@ -472,6 +472,7 @@ describe('existing public thread replies', () => {
       const f = await fixture();
       f.metadata.thread_metadata.archived = archived;
       f.config.threadMember = { accountId: 'bot', userId: '400000000000000009' };
+      f.config.forwardingRequesterName = 'owner';
       let posted: any;
       const network = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
         const address = String(url);

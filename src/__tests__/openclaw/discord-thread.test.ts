@@ -440,7 +440,7 @@ describe('operator configuration and closed inputs', () => {
     expect(tool.description).toContain('unless explicitly requested');
     expect(tool.description).toContain('report errors or partial/unknown outcomes');
     expect((tool.inputSchema.properties?.prompt as { description: string }).description).toContain(
-      'verbatim where possible'
+      'original request to forward unchanged'
     );
     expect(Object.keys(tool.inputSchema.properties!)).toEqual([
       'target',

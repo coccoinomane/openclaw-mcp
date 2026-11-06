@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { DiscordService, type DiscordConfig } from '../../openclaw/discord.js';
+import { DiscordService, loadDiscordConfig, type DiscordConfig } from '../../openclaw/discord.js';
 import { DiscordError } from '../../openclaw/discord-channels.js';
 import { requestPublisher } from '../../openclaw/discord-request.js';
 
@@ -267,8 +267,9 @@ describe('service-owned asynchronous handoff', () => {
 });
 
 describe('closed request publication', () => {
-  async function publisherFixture(prompt = input.prompt) {
+  async function publisherFixture(prompt = input.prompt, name?: string) {
     const f = await fixture();
+    f.config.forwardingRequesterName = name;
     let posted: any;
     const http = vi.fn(async (_url: any, opts: any) => {
       if (opts.method === 'POST') {
@@ -311,7 +312,7 @@ describe('closed request publication', () => {
   ])('publishes exact inline or file text, suppresses mentions, reads exact ID', async (prompt) => {
     const f = await publisherFixture(prompt);
     const sent = vi.fn(async () => {});
-    await f.send(target, thread, prompt, input.operation_id, sent);
+    await f.send(target, thread, prompt, input.operation_id, sent, true);
     expect(sent).toHaveBeenCalledWith(message);
     expect(f.http).toHaveBeenCalledTimes(2);
     expect(f.http.mock.calls[0][0]).toBe(
@@ -332,6 +333,157 @@ describe('closed request publication', () => {
       expect(body).toBeInstanceOf(FormData);
       expect(JSON.parse(body.get('payload_json')).content).toBe('');
       expect(await body.get('files[0]').text()).toBe(prompt);
+    }
+  });
+  const header = '**Forwarding sample\\-owner’s request**';
+  it.each([
+    input.prompt,
+    'x'.repeat(2000 - header.length - 2),
+    'x'.repeat(2001 - header.length - 2),
+    '😀'.repeat(Math.floor((2000 - header.length - 2) / 2)),
+    '😀'.repeat(Math.ceil((2001 - header.length - 2) / 2)),
+    '😀漢字\n '.repeat(1000),
+  ])('counts the escaped header and separator toward the UTF-16 limit', async (prompt) => {
+    const f = await publisherFixture(prompt, 'sample-owner');
+    const expectedHeader = header;
+    await f.send(target, thread, prompt, input.operation_id, async () => {}, true);
+    const body = f.http.mock.calls[0][1].body;
+    if ((expectedHeader + '\n\n' + prompt).length <= 2000) {
+      expect(JSON.parse(body).content).toBe(expectedHeader + '\n\n' + prompt);
+    } else {
+      expect(body).toBeInstanceOf(FormData);
+      expect(JSON.parse(body.get('payload_json')).content).toBe(expectedHeader);
+      expect(await body.get('files[0]').text()).toBe(prompt);
+    }
+    expect(f.http).toHaveBeenCalledTimes(2);
+  });
+  it('escapes markdown and mention syntax only in the trusted name', async () => {
+    const f = await publisherFixture(
+      input.prompt,
+      '**Owner**_<@123> [x](url) \u0060code\u0060 | @everyone'
+    );
+    await f.send(target, thread, input.prompt, input.operation_id, async () => {}, true);
+    expect(JSON.parse(f.http.mock.calls[0][1].body).content).toBe(
+      '**Forwarding \\*\\*Owner\\*\\*\\_\\<@\u200b123\\> \\[x\\]\\(url\\) \\\u0060code\\\u0060 \\| @\u200beveryone’s request**\n\n' +
+        input.prompt
+    );
+  });
+  it.each([2000, 2001])(
+    'keeps existing-thread publication unchanged at %i units',
+    async (length) => {
+      const prompt = 'x'.repeat(length);
+      const f = await publisherFixture(prompt, 'owner');
+      await f.send(target, thread, prompt, input.operation_id, async () => {}, false);
+      const body = f.http.mock.calls[0][1].body;
+      if (length === 2000) expect(JSON.parse(body).content).toBe(prompt);
+      else {
+        expect(JSON.parse(body.get('payload_json')).content).toBe('');
+        expect(await body.get('files[0]').text()).toBe(prompt);
+      }
+    }
+  );
+  it('does not republish a legacy journal record after enabling the header', async () => {
+    const f = await publisherFixture();
+    await f.service.ask(input);
+    f.generation.resolve({ status: 'ok' });
+    await f.service.drain();
+    f.config.forwardingRequesterName = 'owner';
+    const service = new DiscordService(
+      f.config,
+      f.runner,
+      undefined,
+      undefined,
+      f.reader,
+      f.create,
+      f.member,
+      requestPublisher(f.config, { DISCORD_BOT_TOKEN: 'mock-token' }, f.http)
+    );
+    expect(await service.ask(input)).toMatchObject({ status: 'completed', request_verified: true });
+    expect(f.http).not.toHaveBeenCalled();
+    expect(f.create).toHaveBeenCalledTimes(1);
+    expect(f.runner).toHaveBeenCalledTimes(1);
+  });
+  it.each(['content', 'filename', 'size'])(
+    'rejects a mismatching long-request readback %s and retains the sent ID',
+    async (field) => {
+      const prompt = '😀'.repeat(1000);
+      const f = await publisherFixture(prompt, 'owner');
+      const original = f.http.getMockImplementation()!;
+      f.http.mockImplementation(async (url, opts) => {
+        const response = await original(url, opts);
+        if (opts.method !== 'GET') return response;
+        const message: any = await response.json();
+        if (field === 'content') message.content = '';
+        else message.attachments[0][field] = field === 'filename' ? 'other.txt' : 1;
+        return Response.json(message);
+      });
+      const sent = vi.fn(async () => {});
+      await expect(f.send(target, thread, prompt, input.operation_id, sent, true)).rejects.toThrow(
+        'REQUEST_READBACK_UNVERIFIED'
+      );
+      expect(sent).toHaveBeenCalledWith(message);
+      expect(f.http).toHaveBeenCalledTimes(2);
+    }
+  );
+  it('adds one server header, leaves agent input unchanged and never republishes on restart', async () => {
+    const f = await publisherFixture(input.prompt, 'owner');
+    const make = () =>
+      new DiscordService(
+        f.config,
+        f.runner,
+        undefined,
+        undefined,
+        f.reader,
+        f.create,
+        f.member,
+        f.send
+      );
+    const service = make();
+    try {
+      expect(await service.ask({ ...input, username: 'untrusted' })).toMatchObject({
+        request_verified: true,
+      });
+      await f.started.promise;
+      expect(await readFile(f.promptFile(), 'utf8')).toBe(input.prompt);
+      expect(JSON.parse(f.http.mock.calls[0][1].body).content).toBe(
+        '**Forwarding owner’s request**\n\n' + input.prompt
+      );
+      expect(await service.ask(input)).toMatchObject({ status: 'running' });
+      f.generation.resolve({ status: 'ok' });
+      await service.drain();
+      // A later config change must not invalidate or replay the existing journal record.
+      f.config.forwardingRequesterName = 'different';
+      expect(await make().ask(input)).toMatchObject({
+        status: 'completed',
+        request_verified: true,
+      });
+      expect(f.http).toHaveBeenCalledTimes(2);
+      expect(f.create).toHaveBeenCalledTimes(1);
+      expect(f.runner).toHaveBeenCalledTimes(1);
+    } finally {
+      f.generation.resolve({ status: 'ok' });
+      await service.drain();
+    }
+  });
+  it('loads only the operator name and accepts missing or empty configuration', () => {
+    const env = {
+      MCP_DISCORD_ENABLED: 'true',
+      MCP_DISCORD_STATE_DIR: '/tmp/private-test-state',
+      MCP_DISCORD_TARGETS: JSON.stringify([target]),
+    };
+    expect(loadDiscordConfig(env)?.forwardingRequesterName).toBeUndefined();
+    expect(
+      loadDiscordConfig({ ...env, MCP_DISCORD_FORWARDING_REQUESTER_NAME: '' })
+        ?.forwardingRequesterName
+    ).toBeUndefined();
+    expect(
+      loadDiscordConfig({ ...env, MCP_DISCORD_FORWARDING_REQUESTER_NAME: 'owner' })
+        ?.forwardingRequesterName
+    ).toBe('owner');
+    for (const name of [' ', 'x'.repeat(101), 'owner\nother', '\ud800', 'owner\u202e']) {
+      expect(() =>
+        loadDiscordConfig({ ...env, MCP_DISCORD_FORWARDING_REQUESTER_NAME: name })
+      ).toThrow('FORWARDING_REQUESTER_NAME_INVALID');
     }
   });
   it('rejects scope and provenance before dispatch', async () => {

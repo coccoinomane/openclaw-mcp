@@ -52,7 +52,7 @@ export const discordTools: Tool[] = [
     outputSchema: discordTurnOutput,
     annotations: { title: 'Ask OpenClaw on Discord', readOnlyHint: false, destructiveHint: false },
     description:
-      'Create a NEW ordinary Discord thread, publish the exact request as a bot without a prefix, and return a queued Continue on Discord link, not answer content. Does not wait for generation. Preserve the user’s wording; do not add requirements or optimize the prompt unless explicitly requested. On successful handoff, reply to the user with only the Discord link, without commentary or a summary; report errors or partial/unknown outcomes instead of implying success. Use openclaw_discord_operation only when eventual status or recovery is needed, not before handing off. Select an allowed channel using openclaw_discord_channels when unspecified; ask if ambiguous. Use openclaw_discord_reply for an existing public thread. Preserve operation ID; inspect partial/unknown outcomes before further action.',
+      'Create a NEW ordinary Discord thread, publish the original request as a bot with an optional server-configured forwarding header, and return a queued Continue on Discord link, not answer content. Does not wait for generation. Pass the original prompt unchanged; the server adds any configured forwarding header, never the client. Preserve the user’s wording; do not add requirements or optimize the prompt unless explicitly requested. On successful handoff, reply to the user with only the Discord link, without commentary or a summary; report errors or partial/unknown outcomes instead of implying success. Use openclaw_discord_operation only when eventual status or recovery is needed, not before handing off. Select an allowed channel using openclaw_discord_channels when unspecified; ask if ambiguous. Use openclaw_discord_reply for an existing public thread. Preserve operation ID; inspect partial/unknown outcomes before further action.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -65,7 +65,7 @@ export const discordTools: Tool[] = [
           minLength: 1,
           maxLength: 1048576,
           description:
-            'The request to forward, verbatim where possible. Preserve the user’s wording and intent; do not add requirements, assumptions, extra context or prompt optimizations unless the user explicitly asks. Do not include channel-selection instructions addressed only to the calling client.',
+            'The original request to forward unchanged. The server adds any configured forwarding header; do not prepend one. Preserve the user’s wording and intent; do not add requirements, assumptions, extra context or prompt optimizations unless the user explicitly asks. Do not include channel-selection instructions addressed only to the calling client.',
         },
       },
       required: ['target', 'operation_id', 'mode', 'title', 'prompt'],

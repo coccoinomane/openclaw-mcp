@@ -41,6 +41,7 @@ export interface DiscordConfig {
   maxOperations?: number;
   threadCreateMode?: 'cli' | 'gateway';
   threadMember?: { userId: string; accountId: string };
+  forwardingRequesterName?: string;
   acknowledgeInboundRouting?: boolean;
   targets: Array<{
     name: string;
@@ -80,6 +81,7 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
             accountId: env.MCP_DISCORD_THREAD_MEMBER_ACCOUNT_ID || '',
           }
         : undefined,
+    forwardingRequesterName: env.MCP_DISCORD_FORWARDING_REQUESTER_NAME || undefined,
     maxOperations: Number(env.MCP_DISCORD_MAX_OPERATIONS ?? 4),
     cliTimeoutMs: env.MCP_DISCORD_CLI_TIMEOUT_MS
       ? Number(env.MCP_DISCORD_CLI_TIMEOUT_MS)
@@ -145,6 +147,16 @@ function validateConfig(config: DiscordConfig) {
     throw new DiscordError('THREAD_CREATE_MODE_INVALID');
   if (config.threadCreateMode === 'gateway' && !config.cliGatewayInstance)
     throw new DiscordError('THREAD_GATEWAY_CONFIGURATION_INVALID');
+  if (
+    config.forwardingRequesterName !== undefined &&
+    (typeof config.forwardingRequesterName !== 'string' ||
+      !config.forwardingRequesterName.trim() ||
+      config.forwardingRequesterName.length > 100 ||
+      [...config.forwardingRequesterName].some((c) => /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(c)) ||
+      new TextDecoder().decode(new TextEncoder().encode(config.forwardingRequesterName)) !==
+        config.forwardingRequesterName)
+  )
+    throw new DiscordError('FORWARDING_REQUESTER_NAME_INVALID');
   if (config.threadMember) {
     check(config.threadMember.userId, snowflake, 'thread member user ID');
     check(config.threadMember.accountId, slug, 'thread member account');
@@ -965,11 +977,18 @@ export class DiscordService {
       op.request_status = 'publishing';
       await save();
       try {
-        await this.publishRequest!(t, id, input.prompt, input.operation_id, async (messageId) => {
-          op.request_message_ids = [messageId];
-          op.request_status = 'sent';
-          await save();
-        });
+        await this.publishRequest!(
+          t,
+          id,
+          input.prompt,
+          input.operation_id,
+          async (messageId) => {
+            op.request_message_ids = [messageId];
+            op.request_status = 'sent';
+            await save();
+          },
+          input.mode === 'new_thread'
+        );
         if (!op.request_message_ids?.length)
           throw new DiscordError('REQUEST_RESULT_UNVERIFIED', true);
         op.request_status = 'verified';

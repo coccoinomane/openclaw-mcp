@@ -9,7 +9,8 @@ export type RequestPublisher = (
   threadId: string,
   prompt: string,
   operation: string,
-  sent: (messageId: string) => Promise<void>
+  sent: (messageId: string) => Promise<void>,
+  newThread?: boolean
 ) => Promise<void>;
 
 /** Fixed bot POST + exact-ID GET. Native message/send has no public allowed-mentions field. */
@@ -24,7 +25,12 @@ export function requestPublisher(
   const token = env.DISCORD_BOT_TOKEN;
   if (!token || /\s/.test(token)) throw new DiscordError('REQUEST_CREDENTIAL_MISSING');
   const account = config.threadMember.accountId;
-  return async (target, threadId, prompt, operation, sent) => {
+  // Operator configuration only: never derive attribution from prompt or OAuth client metadata.
+  const name = config.forwardingRequesterName
+    ?.replace(/([\\`*_{}[\]()#+.!|~<>-])/g, '\\$1')
+    .replace(/@/g, '@\u200b');
+  const header = name ? '**Forwarding ' + name + '’s request**' : '';
+  return async (target, threadId, prompt, operation, sent, newThread = false) => {
     assertServiceProvenance();
     assertTargetAllowed(config, target, threadId, 'REQUEST_SCOPE_DENIED');
     if (target.accountId !== account || !snowflake.test(threadId) || threadId === target.channelId)
@@ -38,8 +44,10 @@ export function requestPublisher(
       !/^[a-zA-Z0-9_-]{16,100}$/.test(operation)
     )
       throw new DiscordError('REQUEST_ARGUMENTS_INVALID');
-    const attachment = prompt.length > 2000;
-    const content = attachment ? '' : prompt;
+    const caption = newThread ? header : '';
+    const inline = caption ? caption + '\n\n' + prompt : prompt;
+    const attachment = inline.length > 2000;
+    const content = attachment ? caption : inline;
     const payload = {
       content,
       allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
