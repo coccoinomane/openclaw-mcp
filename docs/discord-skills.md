@@ -12,6 +12,8 @@ Creating the thread and asking an agent to work in it are separate steps:
 
 The CLI dependency belongs to this implementation, not to a Discord restriction. Switching thread creation to HTTP does not remove the CLI needed by those other steps. Replacing them requires preserving session continuity, queued execution, delivery reporting and recovery after uncertain results.
 
+A [Gateway SDK migration assessment](gateway-sdk-feasibility.md) describes how these remaining CLI calls could be replaced. That migration has not been implemented.
+
 ## One Discord Gateway connection per MCP service
 
 The current Discord integration uses one configured CLI executable, one Gateway association (`MCP_DISCORD_CLI_GATEWAY_INSTANCE`) and one bot account. It can serve several agents and permitted Discord servers through that setup.
