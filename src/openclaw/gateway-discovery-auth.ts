@@ -88,7 +88,7 @@ export function gatewayDiscoveryAuth(
   instance: string,
   url: string,
   env: NodeJS.ProcessEnv,
-  options: { existingOnly?: boolean } = {}
+  options: { existingOnly?: boolean; identityOnly?: boolean } = {}
 ): {
   identity: DeviceIdentity;
   hasToken: boolean;
@@ -187,5 +187,20 @@ export function gatewayDiscoveryAuth(
     // SDK logging is deliberately silent; callers receive only fixed error categories.
     redactForLog: () => '[gateway discovery]',
   };
+  if (options.identityOnly) {
+    // Shared-token mode must neither consume nor alter a device-token grant.
+    return {
+      identity,
+      hasToken: false,
+      hostDeps: {
+        signDevicePayload: hostDeps.signDevicePayload,
+        publicKeyRawBase64UrlFromPem: hostDeps.publicKeyRawBase64UrlFromPem,
+        redactForLog: hostDeps.redactForLog,
+        loadDeviceAuthToken: () => null,
+        storeDeviceAuthToken: () => {},
+        clearDeviceAuthToken: () => {},
+      },
+    };
+  }
   return { identity, hasToken: loadToken() !== null, hostDeps };
 }

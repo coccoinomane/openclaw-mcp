@@ -14,6 +14,7 @@ MCP_DISCORD_THREAD_CREATE_MODE=gateway
 MCP_DISCORD_GATEWAY_READS_ENABLED=true
 MCP_DISCORD_CLI_GATEWAY_INSTANCE=default
 MCP_DISCORD_SDK_STATE_DIR=/absolute/private/approved-discord-device
+MCP_DISCORD_SDK_AUTH=device
 ~~~
 
 The instance name must match an existing OPENCLAW_INSTANCES entry (or default for a single instance). The historical CLI_GATEWAY_INSTANCE name still selects that one Gateway; it does not cause a CLI launch in SDK mode. HTTPS or loopback HTTP is required. A local CLI executable need not exist in this mode. Do not enable CLI roster discovery if the entire service must be CLI-free; use the separately configured Gateway roster or explicit catalog.
@@ -22,16 +23,30 @@ SDK mode requires both Gateway creation and Gateway reads. Missing adapters or i
 
 ## Service authentication
 
-Two existing authentication surfaces remain separate:
+HTTP reads/creation use the selected instance's configured Gateway bearer credential and its tool policy. The read adapter sends no conversationReadOrigin, runtime identity or direct-operator override. HTTP server policy supplies the read context. It is selected up front, not used as a fallback for a denied WebSocket read.
 
-- HTTP reads/creation use the selected instance's configured Gateway bearer credential and its tool policy. The read adapter sends no conversationReadOrigin, runtime identity or direct-operator override. HTTP server policy supplies the read context. It is selected up front, not used as a fallback for a denied WebSocket read.
-- SDK calls require a pre-provisioned, operator-approved **integration-owned device identity and operator device token**. The requested scopes are exactly operator.read and operator.write. Both must be recorded in the stored grant and granted by hello. The client identifies itself as gateway-client/backend with no capabilities; it never impersonates cli or requests operator.admin.
+SDK authentication is selected explicitly with MCP_DISCORD_SDK_AUTH:
 
-MCP_DISCORD_SDK_STATE_DIR must be private (0700); its identity/token files must be private (0600), regular, owner-controlled files. The default is gateway-sdk inside MCP_DISCORD_STATE_DIR. Storage uses the existing gatewayDiscoveryAuth format: the filename prefix is SHA-256(JSON.stringify([instanceName, normalizedWebSocketURL])). The identity file is <prefix>.identity.json and the device token is <prefix>.operator.json. The helper owns key validation, signing and conditional token updates. No CLI identity files are opened.
+- **device (default):** requires a pre-provisioned integration-owned identity and an operator-approved device token containing operator.read and operator.write for the exact instance/endpoint. It never supplies the shared instance token if device authentication fails.
+- **local-shared-token (opt-in):** uses that same dedicated identity to sign the official SDK handshake and authenticates with the existing selected instance token. Only literal loopback endpoints, 127.0.0.1 or [::1], are allowed, over HTTP or HTTPS; localhost and remote hostnames are rejected to avoid DNS or hosts-file changes disclosing the shared token. No device token or paired record is required. Device-token loading, storage and clearing are disabled in this mode, including SDK credential retries. This mode never becomes a fallback for another failed authentication attempt.
 
-Provisioning is a separate operator action, **not a service startup side effect**. Use an integration-owned identity from this helper and the supported Gateway SDK/device approval flow, request the two scopes above, and persist the Gateway-issued device token through the helper's storeDeviceAuthToken callback. An existing discovery identity is usable only if its operator-approved device token already has both scopes for the exact instance and endpoint. Do not edit a token's scope array to manufacture permission, copy the CLI's identity, auto-approve pairing, or silently add admin. If no such approved credential exists, stop and obtain the operator's authorization for provisioning.
+Both modes identify the client honestly as gateway-client/backend, role operator, caps=[], and request exactly operator.read and operator.write. Hello must grant exactly those two scopes and the operator role. Missing scopes, extras (including operator.admin), duplicate grants, or server denial stop the operation. No model/tool request is sent after a rejected handshake.
 
-The SDK adapter uses existingOnly state loading: it does not create an identity/directory, bootstrap with the HTTP/shared Gateway token, pair or request a scope upgrade. Missing or insufficient state returns SDK_APPROVED_DEVICE_REQUIRED before any Discord mutation. A readiness handshake also verifies the granted scopes before thread creation or prompt publication. The host can call discordAgentTransport(...).ready() to check this gate without a model turn. Run it only from the authorized service/operator host; never strip agent provenance to run it from an agent shell.
+OpenClaw 2026.10.9 supports local backend shared authentication without self-pairing: shouldSkipLocalBackendSelfPairing permits an authenticated local gateway-client/backend connection, and a device token need not be issued when there is no paired record. A successful scoped hello without a device token is therefore valid in the explicitly selected local-shared-token mode; it is not a missing-permission workaround. The server still decides locality, admission, ownership and tool authority. A genuine pairing/authentication denial is not bypassed.
+
+For an authorized local service using an existing dedicated identity, add:
+
+~~~dotenv
+MCP_DISCORD_SDK_AUTH=local-shared-token
+~~~
+
+Keep the selected instance's token in its existing private configuration; do not copy it into a new variable, source file or operation journal. The service does not turn the shared token into a device token or change Gateway configuration. To return to device authentication, explicitly set MCP_DISCORD_SDK_AUTH=device and provide its previously approved device grant. Neither mode switches automatically.
+
+MCP_DISCORD_SDK_STATE_DIR must be private (0700); its identity/token files must be private (0600), regular, owner-controlled files. The default is gateway-sdk inside MCP_DISCORD_STATE_DIR. Storage uses the existing gatewayDiscoveryAuth format: the filename prefix is SHA-256(JSON.stringify([instanceName, normalizedWebSocketURL])). The identity file is <prefix>.identity.json and the device token, when used, is <prefix>.operator.json. The helper owns key validation, signing and conditional device-token updates. No CLI identity files are opened.
+
+Identity creation and device-token provisioning are separate operator actions, not service startup effects. Both modes load an existing integration-owned identity and never generate a replacement. Device mode requires the supported Gateway approval/token flow; local-shared-token mode requires the operator's explicit authorization to use the configured shared credential locally. Do not edit token scope arrays, copy the CLI's identity, auto-approve pairing, or add admin.
+
+Missing identity state returns SDK_SERVICE_IDENTITY_REQUIRED in local-shared-token mode; missing/insufficient device state returns SDK_APPROVED_DEVICE_REQUIRED in device mode. A readiness handshake verifies grants before thread creation or prompt publication. The host can call discordAgentTransport(...).ready() to check this gate without a model turn. Run it only from the authorized service/operator host; never strip agent provenance to run it from an agent shell.
 
 A write scope does not grant local-admin tool parity. Gateway role ceilings, ownership/sharing, session lifecycle and send policy remain authoritative. A revoked or denied grant is a failure, not a reason to switch transports. /new and /reset can require admin and are not elevated by this adapter.
 

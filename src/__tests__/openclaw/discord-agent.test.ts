@@ -3,7 +3,7 @@ import {
   type GatewayProtocolSocketHandlers,
 } from '@openclaw/gateway-client/browser';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GatewayClientRequestError } from '@openclaw/gateway-client';
@@ -74,6 +74,7 @@ async function fixture(grant: string[] | null = ['operator.read', 'operator.writ
   const options: any[] = [];
   const stops = vi.fn(async () => undefined);
   let helloScopes = ['operator.read', 'operator.write'];
+  let helloRole = 'operator';
   let handler: (method: string, params: any, options: any) => Promise<any> = async () => ({
     status: 'ok',
     runId: accepted.runId,
@@ -82,7 +83,7 @@ async function fixture(grant: string[] | null = ['operator.read', 'operator.writ
     options.push(opts);
     return {
       start() {
-        opts.onHelloOk!({ auth: { scopes: helloScopes } } as any);
+        opts.onHelloOk!({ auth: { role: helloRole, scopes: helloScopes } } as any);
       },
       request: vi.fn(async (method, params, opts) => {
         calls.push({ method, params, options: opts });
@@ -92,10 +93,8 @@ async function fixture(grant: string[] | null = ['operator.read', 'operator.writ
     };
   });
   const make = (
-    overrides = env,
-    list = [
-      { name: 'home', url: 'http://127.0.0.1:18789', token: 'must-not-use-shared-admin-token' },
-    ]
+    overrides: NodeJS.ProcessEnv = env,
+    list = [{ name: 'home', url: 'http://127.0.0.1:18789', token: 'fixture-shared-token' }]
   ) => discordAgentTransport(list, config, overrides, factory)!;
   return {
     dir,
@@ -110,8 +109,9 @@ async function fixture(grant: string[] | null = ['operator.read', 'operator.writ
     handler: (fn: typeof handler) => {
       handler = fn;
     },
-    hello: (scopes: string[]) => {
+    hello: (scopes: string[], role = 'operator') => {
       helloScopes = scopes;
+      helloRole = role;
     },
   };
 }
@@ -168,6 +168,189 @@ describe('SDK service authentication', () => {
     expect(() => f.make(undefined, [{ name: 'home', url, token: '' }])).toThrow(
       'INSECURE_GATEWAY_URL'
     );
+  });
+});
+
+describe('explicit local shared-token authentication', () => {
+  const localEnv = (dir: string): NodeJS.ProcessEnv => ({
+    MCP_DISCORD_SDK_STATE_DIR: dir,
+    MCP_DISCORD_SDK_AUTH: 'local-shared-token',
+  });
+  it('uses the existing dedicated identity and instance token without a paired token', async () => {
+    const f = await fixture(null);
+    await f.make(localEnv(f.dir)).ready();
+    expect(f.options[0]).toMatchObject({
+      token: 'fixture-shared-token',
+      clientName: 'gateway-client',
+      mode: 'backend',
+      role: 'operator',
+      scopes: ['operator.read', 'operator.write'],
+      caps: [],
+    });
+    expect(f.options[0].deviceIdentity.deviceId).toBe(f.auth.identity.deviceId);
+    expect(await readdir(f.dir)).toHaveLength(1);
+    expect(f.options[0].origin).toBeUndefined();
+    expect(f.options[0].deviceToken).toBeUndefined();
+    expect(
+      await f.options[0].hostDeps.loadDeviceAuthToken({
+        deviceId: f.auth.identity.deviceId,
+        role: 'operator',
+      })
+    ).toBeNull();
+    expect(f.calls).toHaveLength(0);
+  });
+  it('does not consume, update or clear existing device-token state in shared mode', async () => {
+    const f = await fixture();
+    const tokenFile = (await readdir(f.dir)).find((name) => name.endsWith('.operator.json'))!;
+    const path = join(f.dir, tokenFile);
+    // Even malformed state is irrelevant when the operator explicitly selected shared auth.
+    await writeFile(path, 'fixture invalid device token');
+    await f.make(localEnv(f.dir)).ready();
+    const hooks = f.options[0].hostDeps;
+    expect(
+      await hooks.loadDeviceAuthToken({ deviceId: f.auth.identity.deviceId, role: 'operator' })
+    ).toBeNull();
+    await hooks.storeDeviceAuthToken({
+      deviceId: f.auth.identity.deviceId,
+      role: 'operator',
+      token: 'fixture-issued',
+      scopes: ['operator.admin'],
+    });
+    await hooks.clearDeviceAuthToken({ deviceId: f.auth.identity.deviceId, role: 'operator' });
+    expect(await readFile(path, 'utf8')).toBe('fixture invalid device token');
+    await expect(f.transport.ready()).rejects.toThrow('SDK_APPROVED_DEVICE_REQUIRED');
+    expect(f.factory).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    'https://gateway.example',
+    'https://127.0.0.1.example',
+    'http://localhost',
+    'https://localhost',
+    'https://[::2]',
+  ])('rejects nonliteral-loopback endpoint %s before connecting', async (url) => {
+    const f = await fixture(null);
+    expect(() =>
+      f.make(localEnv(f.dir), [{ name: 'home', url, token: 'fixture-shared-token' }])
+    ).toThrow('SDK_SHARED_TOKEN_LOOPBACK_REQUIRED');
+    expect(f.factory).not.toHaveBeenCalled();
+  });
+  it('supports literal IPv6 loopback with its endpoint-bound identity', async () => {
+    const f = await fixture(null);
+    const auth = gatewayDiscoveryAuth('home', 'ws://[::1]:18789/', {
+      MCP_AGENT_DISCOVERY_STATE_DIR: f.dir,
+    });
+    await f
+      .make(localEnv(f.dir), [
+        { name: 'home', url: 'http://[::1]:18789', token: 'fixture-shared-token' },
+      ])
+      .ready();
+    expect(f.options[0].deviceIdentity.deviceId).toBe(auth.identity.deviceId);
+  });
+  it.each(['', undefined, '   ', 'token with whitespace'])(
+    'rejects missing or malformed shared token %j',
+    async (token) => {
+      const f = await fixture(null);
+      expect(() =>
+        f.make(localEnv(f.dir), [{ name: 'home', url: 'http://127.0.0.1:18789', token }])
+      ).toThrow('SDK_SHARED_TOKEN_REQUIRED');
+      expect(f.factory).not.toHaveBeenCalled();
+    }
+  );
+  it.each(['shared-token', '', 'automatic', 'true'])(
+    'rejects undocumented mode %j',
+    async (mode) => {
+      const f = await fixture(null);
+      expect(() => f.make({ ...localEnv(f.dir), MCP_DISCORD_SDK_AUTH: mode })).toThrow(
+        'SDK_AUTH_MODE_INVALID'
+      );
+      expect(f.factory).not.toHaveBeenCalled();
+    }
+  );
+  it('never generates a replacement identity in shared mode', async () => {
+    const f = await fixture(null);
+    await expect(f.make(localEnv(join(f.dir, 'absent'))).ready()).rejects.toThrow(
+      'SDK_SERVICE_IDENTITY_REQUIRED'
+    );
+    expect(await readdir(f.dir)).toHaveLength(1);
+    expect(f.factory).not.toHaveBeenCalled();
+  });
+  it.each(['device', 'local-shared-token'])(
+    'rejects extra, missing or duplicated grants and a wrong role in %s mode',
+    async (mode) => {
+      const f = await fixture();
+      const transport = f.make({ ...localEnv(f.dir), MCP_DISCORD_SDK_AUTH: mode });
+      for (const grant of [
+        [],
+        ['operator.read'],
+        ['operator.admin'],
+        ['operator.read', 'operator.write', 'operator.admin'],
+        ['operator.read', 'operator.write', 'operator.sessions.write'],
+        ['operator.read', 'operator.read'],
+      ]) {
+        f.hello(grant);
+        await expect(transport.ready()).rejects.toThrow('SDK_SCOPE_DENIED');
+      }
+      f.hello(['operator.read', 'operator.write'], 'node');
+      await expect(transport.ready()).rejects.toThrow('SDK_SCOPE_DENIED');
+      expect(f.calls).toHaveLength(0);
+    }
+  );
+  it.each(['device', 'local-shared-token'])(
+    'does not switch credentials after server auth denial in %s mode',
+    async (mode) => {
+      const f = await fixture();
+      vi.mocked(f.factory).mockImplementationOnce((opts) => ({
+        start() {
+          opts.onConnectError!(
+            new GatewayClientRequestError({ code: 'FORBIDDEN', message: 'fixture denial' })
+          );
+        },
+        request: vi.fn(),
+        stopAndWait: f.stops,
+      }));
+      await expect(
+        f.make({ ...localEnv(f.dir), MCP_DISCORD_SDK_AUTH: mode }).ready()
+      ).rejects.toThrow('SDK_AUTH_FAILED');
+      expect(f.factory).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(f.factory).mock.calls[0][0].token).toBe(
+        mode === 'device' ? undefined : 'fixture-shared-token'
+      );
+    }
+  );
+  it('preserves provenance before connecting and at each connection attempt', async () => {
+    const f = await fixture(null);
+    const transport = f.make(localEnv(f.dir));
+    await transport.ready();
+    vi.stubEnv('OPENCLAW_SHELL', 'agent-origin');
+    expect(() => f.options[0].hostDeps.beforeConnect()).toThrow('AGENT_PROVENANCE_DENIED');
+    await expect(transport.ready()).rejects.toThrow('AGENT_PROVENANCE_DENIED');
+    expect(f.factory).toHaveBeenCalledTimes(1);
+  });
+  it('uses the same explicit auth mode for observation without replay after acceptance', async () => {
+    const f = await fixture(null);
+    f.handler(async (method, _params, options) => {
+      if (method === 'agent') {
+        options.onAccepted(accepted);
+        throw new Error('fixture disconnect');
+      }
+      return { runId: accepted.runId, status: 'ok' };
+    });
+    expect(
+      (
+        await f.make(localEnv(f.dir)).run(
+          input,
+          vi.fn(async () => undefined)
+        )
+      ).status
+    ).toBe('ok');
+    expect(f.calls.map((call) => call.method)).toEqual(['agent', 'agent.wait']);
+    expect(f.options).toHaveLength(2);
+    for (const options of f.options) {
+      expect(options.token).toBe('fixture-shared-token');
+      expect(options.deviceIdentity.deviceId).toBe(f.auth.identity.deviceId);
+      expect(options.scopes).toEqual(['operator.read', 'operator.write']);
+    }
+    expect(await readdir(f.dir)).toHaveLength(1);
   });
 });
 describe('SDK agent lifecycle', () => {

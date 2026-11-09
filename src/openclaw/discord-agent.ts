@@ -57,7 +57,7 @@ function requestFailure(error: unknown, uncertain: boolean): DiscordError {
   return new DiscordError('SDK_OUTCOME_UNKNOWN', true);
 }
 
-/** Fixed agent/wait/abort calls, using an operator-approved service device. */
+/** Fixed agent/wait/abort calls with explicit service authentication. */
 export function discordAgentTransport(
   instances: InstanceConfig[],
   config: DiscordConfig,
@@ -65,9 +65,13 @@ export function discordAgentTransport(
   createClient: AgentClientFactory = (options) => new GatewayClient(options)
 ): DiscordAgentTransport | undefined {
   if (config.agentTransport !== 'sdk') return undefined;
+  const authMode = env.MCP_DISCORD_SDK_AUTH ?? 'device';
+  if (!['device', 'local-shared-token'].includes(authMode))
+    throw new DiscordError('SDK_AUTH_MODE_INVALID');
+  const localSharedToken = authMode === 'local-shared-token';
   const matches = instances.filter((i) => i.name === config.cliGatewayInstance);
   if (matches.length !== 1) throw new DiscordError('SDK_GATEWAY_CONFIGURATION_INVALID');
-  const instance = matches[0];
+  const instance = { ...matches[0] };
   let url: URL;
   try {
     url = new URL(instance.url);
@@ -85,6 +89,14 @@ export function discordAgentTransport(
     throw new DiscordError('INSECURE_GATEWAY_URL');
   }
 
+  if (localSharedToken) {
+    // Literal loopback addresses avoid DNS or hosts-file changes sending the shared secret off-host.
+    if (!['127.0.0.1', '[::1]'].includes(url.hostname))
+      throw new DiscordError('SDK_SHARED_TOKEN_LOOPBACK_REQUIRED');
+    if (typeof instance.token !== 'string' || !instance.token || /\s/.test(instance.token))
+      throw new DiscordError('SDK_SHARED_TOKEN_REQUIRED');
+  }
+
   async function connect(): Promise<AgentClient> {
     assertServiceProvenance(env);
     assertServiceProvenance();
@@ -98,16 +110,20 @@ export function discordAgentTransport(
           MCP_AGENT_DISCOVERY_STATE_DIR:
             env.MCP_DISCORD_SDK_STATE_DIR || join(config.stateDir, 'gateway-sdk'),
         },
-        { existingOnly: true }
+        { existingOnly: true, identityOnly: localSharedToken }
       );
-      const token = await auth.hostDeps.loadDeviceAuthToken!({
-        deviceId: auth.identity.deviceId,
-        role: 'operator',
-      });
-      if (!token?.token || !scopes.every((scope) => token.scopes?.includes(scope)))
-        throw new Error();
+      if (!localSharedToken) {
+        const token = await auth.hostDeps.loadDeviceAuthToken!({
+          deviceId: auth.identity.deviceId,
+          role: 'operator',
+        });
+        if (!token?.token || !scopes.every((scope) => token.scopes?.includes(scope)))
+          throw new Error();
+      }
     } catch {
-      throw new DiscordError('SDK_APPROVED_DEVICE_REQUIRED');
+      throw new DiscordError(
+        localSharedToken ? 'SDK_SERVICE_IDENTITY_REQUIRED' : 'SDK_APPROVED_DEVICE_REQUIRED'
+      );
     }
     let resolve!: () => void;
     let reject!: (error: Error) => void;
@@ -119,6 +135,7 @@ export function discordAgentTransport(
     let client: AgentClient | undefined;
     const options: GatewayClientOptions = {
       url: url.toString(),
+      ...(localSharedToken ? { token: instance.token } : {}),
       deviceIdentity: auth.identity,
       hostDeps: {
         ...auth.hostDeps,
@@ -138,7 +155,13 @@ export function discordAgentTransport(
       maxProtocol: 4,
       requestTimeoutMs: 30_000,
       onHelloOk: (hello) => {
-        if (!scopes.every((scope) => hello.auth?.scopes?.includes(scope)))
+        const granted = hello.auth?.scopes;
+        if (
+          hello.auth?.role !== 'operator' ||
+          !Array.isArray(granted) ||
+          granted.length !== scopes.length ||
+          !scopes.every((scope) => granted.includes(scope))
+        )
           reject(new DiscordError('SDK_SCOPE_DENIED'));
         else resolve();
       },
