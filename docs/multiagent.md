@@ -65,9 +65,9 @@ The separate exports are not an atomic snapshot. Keep routing configuration stab
 
 `is_default` identifies the locally known configured/model default, not a live availability probe. The discovery tool declares and validates an object output schema on every transport.
 
-Pass optional `agent_id` with `instance` to `openclaw_chat` or `openclaw_chat_async`. Save the returned instance, agent ID and session key. An explicit agent that conflicts with a supplied `agent:<id>:` session fails before submission. Without an explicit selector, existing supplied-session behavior is preserved. Worker execution retains the queued explicit agent without mutating a shared client.
+Pass optional `agent_id` with `instance` to `openclaw_chat` or `openclaw_chat_async`. Save the returned instance, agent ID and session key. An explicit agent that conflicts with a supplied `agent:<id>:` session fails before submission. Without an explicit selector, existing supplied-session behavior is preserved. If a legacy session names an agent absent from the catalog, continuation metadata omits `agent_id`; reuse its unchanged `session_id` and `instance`. Explicit selection of that unknown agent remains rejected. Worker execution retains the queued explicit agent without mutating a shared client.
 
-`openclaw_status` accepts the same selection but still measures Gateway reachability. Task status/cancel infer the stored route; optional `instance` and `agent_id` assert it and reject conflicts. Task list can filter by agent. Ownership checks are unchanged.
+`openclaw_status` accepts the same selection but still measures Gateway reachability. Task status/cancel infer the stored route; optional `instance` and `agent_id` assert it and reject conflicts. Task list can filter by agent. Agent selectors normalize to lowercase across enqueue, status, cancel and list; instance names remain case-sensitive. Ownership checks are unchanged.
 
 Discord channels accepts optional `instance` and `agent_id` filters. Ask, reply, thread reads and channel creation select their route from the existing target or policy; optional selectors must agree. Operation status infers its stored route and rejects conflicting selectors. Reuse the exact original operation ID and arguments for recovery.
 

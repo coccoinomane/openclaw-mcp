@@ -80,8 +80,97 @@ describe('generic agent routing without Discord', () => {
       session_id: 'agent:legacy:mcp:old',
     });
     expect(response.isError).toBeUndefined();
-    expect(response.structuredContent?.agent_id).toBe('legacy');
-    expect(calls[0]).toMatchObject({ agent: 'alpha', session: 'agent:legacy:mcp:old' });
+    expect(response.structuredContent).not.toHaveProperty('agent_id');
+    const followup = await handleOpenclawChat(registry, {
+      ...response.structuredContent,
+      message: 'followup',
+    });
+    expect(followup.isError).toBeUndefined();
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => call.session === 'agent:legacy:mcp:old')).toBe(true);
+    expect(
+      (
+        await handleOpenclawChat(registry, {
+          message: 'explicit legacy denied',
+          session_id: 'agent:legacy:mcp:old',
+          agent_id: 'legacy',
+        })
+      ).isError
+    ).toBe(true);
+  });
+
+  it('reuses legacy async continuation metadata without exporting an unknown selector', async () => {
+    const queued = await handleOpenclawChatAsync(
+      registry,
+      { message: 'legacy async', session_id: 'agent:legacy:mcp:old' },
+      owner
+    );
+    expect(queued.isError).toBeUndefined();
+    expect(queued.structuredContent).not.toHaveProperty('agent_id');
+    const id = queued.structuredContent!.task_id as string;
+    await vi.waitFor(() => expect(taskManager.get(id, owner)?.status).toBe('completed'));
+    const status = await handleOpenclawTaskStatus(registry, { task_id: id }, owner);
+    expect(status.structuredContent).not.toHaveProperty('agent_id');
+    const { session_id, instance, agent_id } = status.structuredContent!;
+    const second = await handleOpenclawChatAsync(
+      registry,
+      { message: 'legacy async followup', session_id, instance, agent_id },
+      owner
+    );
+    expect(second.isError).toBeUndefined();
+    expect(second.structuredContent).not.toHaveProperty('agent_id');
+    await vi.waitFor(() =>
+      expect(taskManager.get(second.structuredContent!.task_id as string, owner)?.status).toBe(
+        'completed'
+      )
+    );
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => call.session === session_id)).toBe(true);
+    expect(
+      (await handleOpenclawChatAsync(registry, { message: 'denied', agent_id: 'legacy' }, owner))
+        .isError
+    ).toBe(true);
+  });
+
+  it('normalizes task agent selectors without normalizing instance names', async () => {
+    const queued = await handleOpenclawChatAsync(
+      registry,
+      { message: 'uppercase', agent_id: 'BETA' },
+      owner
+    );
+    const id = queued.structuredContent!.task_id as string;
+    expect(queued.structuredContent?.agent_id).toBe('beta');
+    expect(
+      (await handleOpenclawTaskStatus(registry, { task_id: id, agent_id: 'BETA' }, owner)).isError
+    ).toBeUndefined();
+    expect(
+      (await handleOpenclawTaskStatus(registry, { task_id: id, instance: 'LOCAL' }, owner)).isError
+    ).toBe(true);
+    const listed = await handleOpenclawTaskList(registry, { agent_id: 'BETA' }, owner);
+    expect(listed.structuredContent?.tasks).toEqual([
+      expect.objectContaining({ task_id: id, agent_id: 'beta' }),
+    ]);
+    expect(
+      (await handleOpenclawTaskList(registry, { instance: 'LOCAL' }, owner)).structuredContent
+        ?.tasks
+    ).toEqual([]);
+    const pending = taskManager.create({
+      type: 'chat',
+      input: {},
+      ownerId: owner,
+      instanceId: 'local',
+      agentId: 'beta',
+    });
+    expect(
+      (await handleOpenclawTaskCancel(registry, { task_id: pending.id, instance: 'LOCAL' }, owner))
+        .isError
+    ).toBe(true);
+    expect(
+      (await handleOpenclawTaskCancel(registry, { task_id: pending.id, agent_id: 'BETA' }, owner))
+        .isError
+    ).toBeUndefined();
+    expect(pending.status).toBe('cancelled');
+    await vi.waitFor(() => expect(taskManager.get(id, owner)?.status).toBe('completed'));
   });
 
   it('returns only safe catalog metadata with schema-valid output', async () => {

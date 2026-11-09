@@ -361,7 +361,7 @@ export async function handleOpenclawTaskList(
   if (input.agent_id !== undefined) {
     const checked = validateId(input.agent_id, 'agent_id');
     if (!checked.valid) return errorResponse(checked.error);
-    agentFilter = checked.value;
+    agentFilter = checked.value.toLowerCase();
   }
 
   const tasks = taskManager.list(ownerId, {
@@ -447,7 +447,8 @@ function taskSelectorConflict(input: Record<string, unknown>, task: Task): strin
     if (input[key] === undefined) continue;
     const checked = validateId(input[key], key);
     if (!checked.valid) return checked.error;
-    if (checked.value !== stored) return `${key} conflicts with the stored task route`;
+    const normalized = key === 'agent_id' ? checked.value.toLowerCase() : checked.value;
+    if (normalized !== stored) return `${key} conflicts with the stored task route`;
   }
   return undefined;
 }

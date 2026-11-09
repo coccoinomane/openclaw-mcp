@@ -60,9 +60,17 @@ export function resolveConversation(
     throw new Error('agent_id conflicts with the agent in session_id');
   }
   const resolved = registry.resolve(instance, selected);
+  const normalizedSessionAgent = sessionAgent?.toLowerCase();
+  // Returned agent_id must be reusable as an explicit selector. Legacy keys
+  // can name agents outside the local catalog without making them selectable.
+  const agentId = normalizedSessionAgent
+    ? registry.listAgents(resolved.name).some((agent) => agent.agentId === normalizedSessionAgent)
+      ? normalizedSessionAgent
+      : undefined
+    : resolved.agentId;
   return {
     ...resolved,
     routingAgentId: selected ? resolved.agentId : undefined,
-    agentId: sessionAgent ?? resolved.agentId,
+    agentId,
   };
 }
