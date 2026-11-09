@@ -213,4 +213,4 @@ Generated conversation keys use the configured issuer hostname (`MCP_ISSUER_URL`
 
 ## Agent selection
 
-See [multiagent configuration](multiagent.md) for explicit catalogs, opt-in local CLI discovery, `agent_id` selectors, Discord mapping precedence and the shared trust model. Every authenticated client can select every configured agent; generic chat requires no Discord mapping.
+See [multiagent configuration](multiagent.md) for Gateway SDK roster discovery, explicit catalogs, legacy local CLI discovery, `agent_id` selectors, Discord mapping precedence and the shared trust model. Every authenticated client can select every configured agent; generic chat requires no Discord mapping.

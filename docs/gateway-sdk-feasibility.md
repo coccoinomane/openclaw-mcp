@@ -1,6 +1,6 @@
 # Can we replace the OpenClaw CLI with the Gateway SDK?
 
-Assessment: 9 November 2026. This is a migration proposal, not an implemented feature. It is based on documentation, published package inspection and the installed Gateway’s code. No authenticated connection or end-to-end migration test was performed.
+Assessment: 9 November 2026. Gateway **roster discovery only** is now implemented behind `MCP_AGENT_DISCOVERY=gateway`; see the [setup guide](multiagent.md). It uses the pinned 2026.10.9 SDK and requires Node >=22.19.0. The remaining migrations below are proposals. Tests use fake transports; no production authenticated connection or end-to-end Discord migration test is claimed.
 
 ## Conclusion
 
@@ -14,7 +14,7 @@ Thread creation itself already has an HTTP implementation. Keep it initially; se
 
 Create one SDK connection for each configured OpenClaw instance. Use that instance’s address and credentials, and call `agents.list`. Several agents on the same instance can share its connection. Keep credentials, cached agent lists and pending runs separate between instances.
 
-Return only the agent details the MCP client needs. The Gateway response can include more information than an agent ID. It also reports default-selection information, including `selectionRequired`; respect that flag rather than treating the first agent or a compatibility default as an intentional choice. This could support installations where every new request must choose an agent, but the MCP adapter still needs to implement that behavior.
+The roster implementation returns IDs only and preserves existing configured/model defaults. It does not adopt a Gateway `defaultId` or introduce required-selection enforcement. The Gateway also reports `selectionRequired`; any future change to that behavior needs a separate design rather than treating the first agent as an intentional choice.
 
 Bindings are separate. `agents.list` does not include them, and no dedicated bindings-list RPC was found in the audited method registry. `config.get` can supply them, but reads the full redacted configuration: it has no bindings-only selector. Both calls require `operator.read` in the inspected Gateway.
 
@@ -22,10 +22,10 @@ Recommend making configuration-derived binding import explicit opt-in. If enable
 
 ## What must change before using the SDK?
 
-- **Node version:** the inspected SDK packages require Node 22.19 or later. This repository currently declares Node 20 support and uses Node 20 Docker images. Update that requirement and the images, or explicitly separate SDK support from the existing compatibility target.
+- **Node version:** updated for roster discovery: Node >=22.19.0, Node 24 Docker images, and CI covering the minimum release and Node 24.
 - **Authentication:** a token that works for HTTP does not guarantee a remote WebSocket connection with the required permissions. Provision a persistent device identity and handle pairing where required. Store its credentials separately for each instance.
 - **Permissions:** request explicit scopes. The inspected SDK defaults to `operator.admin`; discovery only needs `operator.read`. Discord tool/action RPCs require `operator.write`, even for read-only actions. Existing channel restrictions still apply.
-- **Reconnects:** wait for a successful authenticated handshake. Refresh validated discovery data after reconnection, and close connections cleanly on shutdown. Never repeat an agent request merely because its connection dropped.
+- **Connection lifetime:** current discovery waits for authentication, reads once at startup and closes every connection. Failures stop startup; there is no live roster refresh. Future long-lived clients would need reconnect recovery, and must never repeat an agent request merely because its connection dropped.
 
 The npm stable version observed during this assessment was 2026.11.2. A 2026.10.9 package matching the installed Gateway was also available. Use an exact, compatibility-tested version rather than upgrading the Gateway as part of this migration.
 

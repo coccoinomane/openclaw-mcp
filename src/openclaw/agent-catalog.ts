@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { discoverGatewayAgents, type GatewayRosterLoader } from './gateway-discovery.js';
 import type { DiscordConfig } from './discord.js';
 import type { AgentBinding, InstanceConfig } from './types.js';
 
@@ -58,8 +59,19 @@ function bindings(value: unknown, roster: Array<{ id: string }>): AgentBinding[]
 export async function loadAgentCatalog(
   configs: InstanceConfig[],
   env: NodeJS.ProcessEnv = process.env,
-  runner: CatalogRunner = runCatalogCommand
+  runner: CatalogRunner = runCatalogCommand,
+  gatewayLoader: GatewayRosterLoader = discoverGatewayAgents
 ): Promise<InstanceConfig[]> {
+  const gateway = env.MCP_AGENT_DISCOVERY === 'gateway';
+  if (env.MCP_AGENT_DISCOVERY && !['cli', 'gateway'].includes(env.MCP_AGENT_DISCOVERY))
+    throw new Error('MCP_AGENT_DISCOVERY must be cli or gateway when enabled');
+  if (
+    env.MCP_AGENT_DISCOVERY !== 'cli' &&
+    (env.MCP_AGENT_DISCOVERY_INSTANCE || env.MCP_AGENT_DISCOVERY_EXECUTABLE)
+  )
+    throw new Error('Agent discovery instance/executable requires MCP_AGENT_DISCOVERY=cli');
+  if (!gateway && env.MCP_AGENT_DISCOVERY_STATE_DIR)
+    throw new Error('Agent discovery state directory requires MCP_AGENT_DISCOVERY=gateway');
   const result = configs.map((config) => ({ ...config }));
   const assigned = new Set<string>();
   const apply = (instance: unknown, rawAgents: unknown, rawBindings: unknown) => {
@@ -69,8 +81,13 @@ export async function loadAgentCatalog(
     if (assigned.has(instance) || config.agents !== undefined || config.bindings !== undefined)
       throw new Error(`Multiple agent catalog sources for instance "${instance}"`);
     assigned.add(instance);
-    config.agents = agents(rawAgents);
-    if (rawBindings !== undefined) config.bindings = bindings(rawBindings, config.agents);
+    if (gateway && rawAgents === undefined && rawBindings !== undefined) {
+      // Bindings remain operator supplied; validate them against the fetched roster below.
+      config.bindings = rawBindings as AgentBinding[];
+    } else {
+      config.agents = agents(rawAgents);
+      if (rawBindings !== undefined) config.bindings = bindings(rawBindings, config.agents);
+    }
   };
   if (env.MCP_AGENT_CATALOG) {
     let catalog: unknown;
@@ -89,8 +106,36 @@ export async function loadAgentCatalog(
       apply(entry.instance, entry.agents, entry.bindings);
     }
   }
-  if (env.MCP_AGENT_DISCOVERY && env.MCP_AGENT_DISCOVERY !== 'cli')
-    throw new Error('MCP_AGENT_DISCOVERY must be cli when enabled');
+  if (gateway) {
+    for (const config of result) {
+      if (config.agents !== undefined)
+        throw new Error('Gateway discovery cannot be combined with a static agent roster');
+    }
+    // Await every connection's cleanup even if one instance fails. No partial catalog is installed.
+    const rosters = await Promise.allSettled(result.map((config) => gatewayLoader(config, env)));
+    for (let index = 0; index < result.length; index++) {
+      const roster = rosters[index];
+      if (roster.status === 'rejected') throw roster.reason;
+      try {
+        const value = roster.value;
+        if (!object(value) || !Array.isArray(value.agents)) throw new Error();
+        const visible = value.agents.filter((entry: unknown) => {
+          if (
+            !object(entry) ||
+            (entry.kind !== undefined && entry.kind !== 'agent' && entry.kind !== 'system')
+          )
+            throw new Error();
+          return entry.kind !== 'system';
+        });
+        result[index].agents = agents(visible);
+      } catch {
+        throw new Error(
+          'Gateway returned an invalid agent roster for instance "' + result[index].name + '"'
+        );
+      }
+      // defaultId/selectionRequired are not new routing rules: retain configured/model defaults.
+    }
+  }
   if (env.MCP_AGENT_DISCOVERY === 'cli') {
     const instance = env.MCP_AGENT_DISCOVERY_INSTANCE;
     if (!instance || !result.some((config) => config.name === instance))
@@ -105,8 +150,6 @@ export async function loadAgentCatalog(
     const roster = await runner(executable, ['agents', 'list', '--json']);
     const routes = await runner(executable, ['agents', 'bindings', '--json']);
     apply(instance, roster, routes);
-  } else if (env.MCP_AGENT_DISCOVERY_INSTANCE || env.MCP_AGENT_DISCOVERY_EXECUTABLE) {
-    throw new Error('Agent discovery instance/executable requires MCP_AGENT_DISCOVERY=cli');
   }
   // Validate inline per-instance catalogs too.
   for (const config of result) {

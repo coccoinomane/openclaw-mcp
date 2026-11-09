@@ -35,6 +35,36 @@ The instance must already exist in `OPENCLAW_INSTANCES`. With the legacy single-
 
 Alternatively add the same `agents` and optional `bindings` properties directly to an `OPENCLAW_INSTANCES` item. Do not combine inline, explicit catalog and CLI sources for the same instance. Duplicate agents, unknown instances and bindings to absent roster agents fail startup. Catalog order and roster `isDefault` do not replace the instance's existing default/model selection.
 
+### Gateway SDK roster
+
+Set `MCP_AGENT_DISCOVERY=gateway` to read `agents.list` from **every configured instance**, using its existing URL and token. No CLI command, `config.get`, binding lookup, or model turn is used. The service creates a separate short-lived authenticated connection per instance, requests `operator.read`, waits up to 15 seconds for readiness and up to 30 seconds for the roster, then closes it. Startup waits for all connection cleanup and fails if any instance fails. There is no automatic CLI fallback or runtime refresh.
+
+Both official packages are pinned to `2026.10.9`, targeting the matching Gateway’s v4 protocol. Node >=22.19.0 is required; Docker uses Node 24. Fake-transport tests cover the adapter; deployments still need an authenticated read-only compatibility check with their actual Gateway. Gateways behind edge-auth proxies requiring extra headers are not configured by this minimal adapter.
+
+The loader keeps agent IDs only and excludes system agents. It does not adopt `defaultId`, enforce `selectionRequired`, or change an existing configured/model default. `is_default` keeps its existing meaning. Remote URLs must use HTTPS; HTTP is limited to loopback, and embedded URL credentials, query strings and fragments are rejected. The URL’s path is preserved for WebSocket connection.
+
+On first use, a persistent Ed25519 device identity is created. If approval is required, the error identifies the device; approve its current request on that Gateway and restart the MCP service. The client identifies itself as `openclaw-mcp agent discovery` in the supported backend category, with its own signed identity. Device keys and tokens are private files under `~/.openclaw-mcp/gateway-discovery`; `MCP_AGENT_DISCOVERY_STATE_DIR` optionally selects an absolute persistent directory. Instance name and endpoint both partition storage. Keep one running service per state directory; use a new directory for an independent deployment. POSIX permissions are checked (0700 directory, 0600 files); on Windows, the operator must restrict the directory’s ACL.
+
+The state-directory setting is only valid in Gateway mode. `MCP_AGENT_DISCOVERY_INSTANCE` and `MCP_AGENT_DISCOVERY_EXECUTABLE` are CLI-only and must be removed when switching. Existing static catalogs and CLI mode remain supported when Gateway discovery is off. A static `agents` list cannot be combined with Gateway discovery; duplicate sources fail before connection.
+
+Bindings remain manual. Omit `bindings` to retain existing Discord targets/scopes, or provide a bindings-only `MCP_AGENT_CATALOG` entry in Gateway mode:
+
+```json
+[
+  {
+    "instance": "default",
+    "bindings": [
+      {
+        "agentId": "writer",
+        "match": {"channel": "discord", "accountId": "default", "guildId": "111111111111111111"}
+      }
+    ]
+  }
+]
+```
+
+Inline instance `bindings` are also supported. Every binding agent must exist in the discovered roster; existing binding validation and Discord permissions are unchanged. An explicit empty `bindings` array still means no imported routes, so do not add one merely to enable discovery. No Discord adapter or chat transport changes are included.
+
 ### Local CLI snapshot
 
 Set these operator-side environment variables:

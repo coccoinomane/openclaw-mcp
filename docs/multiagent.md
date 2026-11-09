@@ -17,35 +17,34 @@ Two names appear in the settings below:
 - **Agent ID** identifies an assistant inside OpenClaw, for example `alice`.
 - **Instance** is this MCP server’s label for an OpenClaw connection. If you connect to one OpenClaw installation using `OPENCLAW_URL`, that label is `default`. You do not need one instance per agent.
 
-The instructions below use one installation, with the MCP server running on the same machine as OpenClaw. If they run on different machines, use [the manual option](#if-the-mcp-server-cannot-read-your-openclaw-installation).
+The instructions below use one installation. The same discovery setting also works with every connection in `OPENCLAW_INSTANCES`, including remote Gateways. You do not need a local OpenClaw CLI to retrieve the roster.
 
-## 1. Check that OpenClaw can list the agents
+## 1. Enable agent discovery
 
-On the machine running the MCP server, run:
+Use Node.js 22.19 or newer (Node 24 recommended). This build pins the official Gateway SDK to 2026.10.9 and targets the matching Gateway release, using protocol v4. Other Gateway releases need a compatibility check before use.
 
-```sh
-openclaw agents list --json
-openclaw agents bindings --json
-```
-
-The first command should include the agent IDs you want to use. The second lists rules that connect channels, such as Discord servers, to agents. An empty list of those rules is fine if you do not use Discord.
-
-Run these checks as the same operating-system user that runs the MCP service. A successful command in your personal shell does not prove that the service can find the same OpenClaw installation.
-
-## 2. Let the MCP server read that list
-
-Add these environment variables to the configuration that starts your **MCP service**, alongside its existing Gateway credentials:
+Add this variable to the configuration that starts your **MCP service**, alongside its existing Gateway URL and token:
 
 ```sh
-MCP_AGENT_DISCOVERY=cli
-MCP_AGENT_DISCOVERY_INSTANCE=default
+MCP_AGENT_DISCOVERY=gateway
 ```
 
-These are MCP server settings, not entries to paste into OpenClaw’s agent configuration. If you start the MCP server from a shell, export them there; if you use a service manager or container, add them to its environment. Leave your existing credentials and default agent unchanged.
+Leave your existing default agent and credentials unchanged. Remote URLs must use HTTPS and accept WebSocket upgrades; loopback HTTP is supported. Remove the old `MCP_AGENT_DISCOVERY_INSTANCE` and `MCP_AGENT_DISCOVERY_EXECUTABLE` settings if switching from CLI discovery.
 
-If the service cannot find the `openclaw` command, also set `MCP_AGENT_DISCOVERY_EXECUTABLE` to its absolute path.
+The service reads only the agent roster, once at startup. It does not read OpenClaw configuration or channel bindings. Restart **the MCP service** after agent-list changes; the Gateway does not need a restart. If any configured connection fails discovery, startup fails with that instance’s name rather than serving a partial list.
 
-Restart **the MCP service** after saving the settings. You do not need to restart the OpenClaw Gateway. The MCP service reads agents and channel assignments at startup; restart it again when those assignments change. Clients may need to reconnect and refresh their tool list after an update.
+## 2. Pair the MCP service when requested
+
+Start the MCP service. On its first connection, the Gateway may require approval of the service’s device identity. The startup error identifies the device. On that Gateway’s host, review the pending requests:
+
+```sh
+openclaw devices list
+openclaw devices approve <requestId>
+```
+
+Approve only the current request matching that device and the display name `openclaw-mcp agent discovery`. It requests `operator.read`, not admin access. Then start the MCP service again. Repeat for each Gateway that asks for pairing; do not disable device checks to make discovery work.
+
+The service keeps its own keys and device tokens in `~/.openclaw-mcp/gateway-discovery`, separately for each instance and endpoint. It does not reuse the CLI’s identity. Keep this directory private to the service user and persistent across restarts. For containers or a dedicated state volume, set `MCP_AGENT_DISCOVERY_STATE_DIR` to an absolute directory owned by that user (0700 directory, 0600 files on POSIX; restrict access with ACLs on Windows). Do not commit or share these files. A paired token is reused on later starts.
 
 ## 3. Check the agents from your MCP client
 
@@ -87,7 +86,7 @@ If you do not use Discord, setup is complete.
 
 Suppose Alice’s agent works in one Discord server and Marco’s works in another. OpenClaw stores those assignments as **bindings**: rules that say which agent receives messages from a server or channel.
 
-With local discovery enabled, the MCP server reads those existing rules. You do not need a second independent set of routing rules. An agent can have no Discord assignment, one server, several servers, or specific channels.
+Gateway roster discovery does not import those rules. Keep your existing manual Discord routes, or supply explicit `bindings` alongside the discovered roster as shown in the [configuration reference](multiagent-reference.md#gateway-sdk-roster). An agent can have no Discord assignment, one server, several servers, or specific channels. The older `cli` discovery mode still imports its local binding snapshot; choose one discovery mode, not both.
 
 You still need to configure **where the MCP server is allowed to act**. Reading a binding does not grant permission to post in that Discord server.
 
@@ -102,7 +101,7 @@ For writes, the existing Discord setup also requires confirmation that ordinary 
 
 ## If the MCP server cannot read your OpenClaw installation
 
-For example, the MCP server may run in a container without the OpenClaw CLI, or connect to a remote Gateway. In that case, provide the agent list yourself instead of enabling CLI discovery.
+If you prefer a fixed list, or cannot pair the service with a Gateway, provide the roster yourself instead of enabling discovery. This option does not need a WebSocket connection or a local CLI.
 
 Set `MCP_AGENT_CATALOG` to this JSON string in the MCP service’s environment:
 
@@ -115,14 +114,14 @@ Set `MCP_AGENT_CATALOG` to this JSON string in the MCP service’s environment:
 ]
 ```
 
-Replace the IDs with agents that already exist in OpenClaw. This setting lists agents; it does not create them. Omit the CLI discovery variables when using this option for the same instance. Keep credentials in the existing connection settings, not in this list.
+Replace the IDs with agents that already exist in OpenClaw. This setting lists agents; it does not create them. Omit `MCP_AGENT_DISCOVERY` and its related variables when using a static roster. Keep credentials in the existing connection settings, not in this list.
 
 If you use multiple OpenClaw installations, replace `default` with the appropriate connection name from `OPENCLAW_INSTANCES`. The [configuration reference](multiagent-reference.md) explains manual Discord bindings, multiple connections and routing details.
 
 ## If something does not work
 
 - **Only the old tools appear:** confirm you are running a build with `openclaw_agents`, then reconnect or refresh the client’s MCP tool list.
-- **The MCP service fails to start:** run both CLI commands from step 1 as the service user. Check the executable path and instance name. Do not configure two agent-list sources for the same connection.
-- **An agent is missing:** check the CLI output or your manual list, then restart the MCP service. Agent IDs are case-insensitive; instance names are case-sensitive.
+- **The MCP service fails to start:** check the named instance’s URL, token and pairing approval, and the private state directory. A working HTTP connection does not prove WebSocket access. Do not combine a static roster with Gateway discovery. Legacy CLI setup is documented in the reference.
+- **An agent is missing:** check the Gateway roster or your manual list, then restart the MCP service. Agent IDs are case-insensitive; instance names are case-sensitive.
 - **An agent is listed but has no Discord channels:** it may have no Discord assignment, or its destinations may be excluded by MCP permissions. This does not prevent direct chat.
 - **A follow-up reports a conflict:** use the instance, agent and session returned by the original request, rather than switching agents midway through that conversation.

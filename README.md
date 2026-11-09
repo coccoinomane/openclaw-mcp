@@ -21,7 +21,7 @@ All six Discord tools advertise MCP `outputSchema` and validate `structuredConte
 
 ## Install this fork
 
-Use the archive from [GitHub Releases](https://github.com/coccoinomane/openclaw-mcp/releases). It includes compiled JavaScript and a dependency lockfile; dependencies are installed separately. Node.js 20 or newer is required; Node.js 24 is recommended.
+Use the archive from [GitHub Releases](https://github.com/coccoinomane/openclaw-mcp/releases). It includes compiled JavaScript and a dependency lockfile; dependencies are installed separately. Node.js 22.19 or newer is required; Node.js 24 is recommended.
 
 ```sh
 mkdir openclaw-mcp && cd openclaw-mcp

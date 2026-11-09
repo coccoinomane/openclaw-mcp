@@ -146,3 +146,88 @@ describe('configured Discord agents in generic catalog', () => {
     ).toThrow('unknown instance');
   });
 });
+
+describe('Gateway catalog configuration', () => {
+  const env = { MCP_AGENT_DISCOVERY: 'gateway' };
+  const roster = {
+    agents: [{ id: 'main' }, { id: 'writer' }],
+    defaultId: 'writer',
+    selectionRequired: true,
+  };
+  it('combines a Gateway roster with bindings-only catalog without importing configuration', async () => {
+    const runner = vi.fn();
+    const loader = vi.fn().mockResolvedValue(roster);
+    const routes = [{ agentId: 'writer', match: { channel: 'discord', guildId: '123' } }];
+    const result = await loadAgentCatalog(
+      instances,
+      {
+        ...env,
+        MCP_AGENT_CATALOG: JSON.stringify([{ instance: 'local', bindings: routes }]),
+      },
+      runner,
+      loader
+    );
+    expect(result[0].agents).toEqual(roster.agents);
+    expect(result[0].bindings).toEqual(routes);
+    expect(new InstanceRegistry(result).resolve().agentId).toBe('main');
+    expect(runner).not.toHaveBeenCalled();
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+  it('retains unknown-default behavior and does not enforce selectionRequired', async () => {
+    const result = await loadAgentCatalog(
+      [{ name: 'local', url: 'https://gateway.example' }],
+      env,
+      vi.fn(),
+      async () => roster
+    );
+    const registry = new InstanceRegistry(result);
+    expect(registry.resolve().agentId).toBeUndefined();
+    expect(registry.listAgents().every((agent) => !agent.isDefault)).toBe(true);
+    expect(registry.resolve('local', 'writer').agentId).toBe('writer');
+  });
+  it('rejects conflicting roster sources and obsolete CLI-only knobs before connecting', async () => {
+    const loader = vi.fn();
+    for (const extra of [
+      { MCP_AGENT_DISCOVERY_INSTANCE: 'local' },
+      { MCP_AGENT_DISCOVERY_EXECUTABLE: 'openclaw' },
+      { MCP_AGENT_CATALOG: JSON.stringify([{ instance: 'local', agents: [{ id: 'main' }] }]) },
+    ])
+      await expect(
+        loadAgentCatalog(instances, { ...env, ...extra }, vi.fn(), loader)
+      ).rejects.toThrow();
+    await expect(
+      loadAgentCatalog([{ ...instances[0], agents: [] }], env, vi.fn(), loader)
+    ).rejects.toThrow('static agent roster');
+    expect(loader).not.toHaveBeenCalled();
+  });
+  it.each([
+    null,
+    [],
+    {},
+    { agents: null },
+    { agents: [null] },
+    { agents: [{ id: '../bad' }] },
+    { agents: [{ id: 'MAIN' }, { id: 'main' }] },
+    { agents: [{ id: 'main', kind: 'unknown' }] },
+  ])('rejects malformed Gateway response %j without default fallback', async (value) => {
+    await expect(loadAgentCatalog(instances, env, vi.fn(), async () => value)).rejects.toThrow();
+    expect(instances[0]).not.toHaveProperty('agents');
+  });
+  it('validates manual bindings against the returned roster and preserves explicit empty routes', async () => {
+    await expect(
+      loadAgentCatalog(
+        [{ ...instances[0], bindings: [{ agentId: 'missing', match: {} }] }],
+        env,
+        vi.fn(),
+        async () => roster
+      )
+    ).rejects.toThrow('unknown agent');
+    const result = await loadAgentCatalog(
+      [{ ...instances[0], bindings: [] }],
+      env,
+      vi.fn(),
+      async () => roster
+    );
+    expect(result[0].bindings).toEqual([]);
+  });
+});
