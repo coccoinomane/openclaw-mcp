@@ -232,7 +232,7 @@ describe('conversation metadata across real MCP transports', () => {
       }
       cleanups.push(() => client.close());
       const listing = await client.listTools();
-      expect(listing.tools).toHaveLength(13);
+      expect(listing.tools).toHaveLength(14);
       for (const tool of discordTools) {
         expect(listing.tools.find((t) => t.name === tool.name)?.outputSchema).toEqual(
           tool.outputSchema
@@ -240,7 +240,7 @@ describe('conversation metadata across real MCP transports', () => {
       }
       expect(
         listing.tools
-          .filter((t) => !t.name.startsWith('openclaw_discord_'))
+          .filter((t) => !t.name.startsWith('openclaw_discord_') && t.name !== 'openclaw_agents')
           .every((t) => t.outputSchema === undefined)
       ).toBe(true);
       expect(
@@ -326,6 +326,7 @@ describe('conversation metadata across real MCP transports', () => {
       expect(mock.requests.map((request) => request.key).sort()).toEqual([...keys].sort());
       const tools = (await first.listTools()).tools;
       expect(tools.map((tool) => tool.name).sort()).toEqual([
+        'openclaw_agents',
         'openclaw_chat',
         'openclaw_chat_async',
         'openclaw_instances',
@@ -334,7 +335,20 @@ describe('conversation metadata across real MCP transports', () => {
         'openclaw_task_list',
         'openclaw_task_status',
       ]);
-      expect(tools.every((tool) => tool.outputSchema === undefined)).toBe(true);
+      expect(
+        tools
+          .filter((tool) => tool.name !== 'openclaw_agents')
+          .every((tool) => tool.outputSchema === undefined)
+      ).toBe(true);
+      const discovery = await call(first, 'openclaw_agents', {});
+      expect(discovery.structuredContent).toEqual({
+        agents: [{ instance: 'default', agent_id: 'research', is_default: true }],
+        total: 1,
+      });
+      const validateAgents = new AjvJsonSchemaValidator().getValidator(
+        tools.find((tool) => tool.name === 'openclaw_agents')!.outputSchema!
+      );
+      expect(validateAgents(discovery.structuredContent).valid).toBe(true);
       expect(tools.find((tool) => tool.name === 'openclaw_chat')!.description).toContain('reuse');
       const invalid = await call(first, 'openclaw_chat', { message: 'hello', session_id: '' });
       expect(invalid.isError).toBe(true);

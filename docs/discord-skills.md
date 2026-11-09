@@ -132,3 +132,7 @@ created_unadmitted retains a known channel ID when post-create verification fail
 Run npm run lint, npm run typecheck, npm run test:run and npm run build. Tests use mock CLI and mock HTTP gateway servers; they do not create Discord channels, threads or messages. npm pack --dry-run must include skills/openclaw-coordinator/SKILL.md and references/recovery.md.
 
 Then review the actual service account permissions, allowlist, private state directory, provenance, launcher environment, installed CLI response shapes and ingress Origin/Host behavior. A separately authorized external-client canary should verify thread creation, first-response delivery and a human reply in Discord retaining context. No production changes or canary writes were performed during implementation.
+
+## Agent selection
+
+See [multiagent configuration](multiagent.md) for explicit catalogs, opt-in local CLI discovery, `agent_id` selectors, Discord mapping precedence and the shared trust model. Every authenticated client can select every configured agent; generic chat requires no Discord mapping.

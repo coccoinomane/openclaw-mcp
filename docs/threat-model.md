@@ -1,116 +1,39 @@
-# Threat Model
+# Threat model
 
-## Architecture Overview
+## Shared trust
 
-```
-Claude (Desktop / Claude.ai)
-    |
-    | MCP Protocol (stdio or Streamable HTTP)
-    v
-OpenClaw MCP Server (this project)
-    |
-    | OpenAI-compatible REST API (POST /v1/chat/completions)
-    v
-OpenClaw Gateway (user-controlled)
-```
+Every authenticated MCP client may select every configured instance and agent. Agent IDs select routing; they provide no per-user ACL or tenant isolation. Configure a separate MCP deployment and narrower Gateway credentials when callers must have different access. stdio trusts the local process owner. HTTP authentication remains controlled by the existing OAuth configuration.
 
-The MCP server is a **stateless proxy** — it translates MCP tool calls into OpenAI-compatible API requests and returns the response. It does not execute code, access the filesystem, or modify any external state on its own.
+The operator-configured forwarding requester name attributes new Discord requests to the single service owner. It is independent of the selected agent and is not an authenticated caller identity. MCP client names and generated session labels are display metadata.
 
-## What Claude Can Do (via MCP tools)
+## Capabilities and effects
 
-| Tool | Action | Side Effects |
-|------|--------|--------------|
-| `openclaw_chat` | Send a text message to OpenClaw, receive a text response | None — read-only query |
-| `openclaw_status` | Check if the OpenClaw gateway is reachable | None — health check only |
-| `openclaw_chat_async` | Queue a message for async processing, receive a task ID | Creates an in-memory task |
-| `openclaw_task_status` | Check the status of an async task by ID | None — read-only |
-| `openclaw_task_list` | List all async tasks and their statuses | None — read-only |
-| `openclaw_task_cancel` | Cancel a pending async task by ID | Removes an in-memory task |
+Generic chat sends messages to the selected Gateway. Its agents may run tools and change external state according to Gateway policy. Async chat queues the same work in process memory. Gateway health reports reachability, including some HTTP authentication failures; it does not verify agent readiness or authorization.
 
-**Key point:** All tools either read data or send text messages to OpenClaw. The MCP server itself has **no write access** to any filesystem, database, or external service beyond the OpenClaw gateway.
+Optional Discord tools read allowed destinations, create threads, publish requests and replies, and invoke agents. Separately configured creation policies permit channel creation and persistent admission after explicit request flags. The service invokes a fixed CLI command set and fixed Gateway message actions, and writes operation/admission records to a private state directory. It requires the operator's acknowledgement of local CLI identity and ordinary inbound routing. Durable records and fingerprints support recovery without blindly repeating writes.
 
-## What Claude Cannot Do
+Optional local agent discovery invokes fixed read-only roster and binding export commands at startup. It accepts an operator-selected executable and projects the output to agent IDs and supported static binding matches. Discovery responses exclude filesystem paths and credentials. Remote catalogs are explicit operator configuration; discovery performs no remote administrative export.
 
-- **Execute shell commands** — the server has no shell execution capability
-- **Read or write files** — no filesystem access (Docker enforces `read_only: true`)
-- **Access the network** — can only reach the configured OpenClaw gateway URL
-- **Modify server configuration** — environment variables are set at startup, not changeable at runtime
-- **Bypass authentication** — OAuth tokens are validated per-request when auth is enabled
-- **Access other users' sessions** — sessions are isolated by MCP session ID
+## Ownership and continuity
 
-## Trust Boundaries
+Async task ownership retains the existing transport behavior: modern HTTP uses a token-derived owner, while legacy and stdio sessions use server-local ownership. Token refresh changes the modern task owner. Tasks and their selected agents remain process-local and disappear on restart.
 
-### Boundary 1: Claude <-> MCP Server
+Discord operation ownership is service-lifecycle ownership, not per-client authorization. All clients share the configured Discord capabilities. Operation IDs are unguessable recovery identifiers and must be kept with their original arguments. Status checks retain current target/policy authorization and never retarget an operation.
 
-- **stdio transport (local):** Trusted — communication stays on the local machine. No authentication required.
-- **HTTP transport (remote):** Untrusted network — requires OAuth 2.1 authentication, HTTPS (via reverse proxy), and CORS restrictions.
+Caller-supplied Gateway session keys retain existing access semantics. The bridge rejects a supplied agent-qualified key when it conflicts with an explicit agent selector, but it does not introduce session ownership. Legacy transport sessions are not newly bound to authenticated principals by this feature. Do not treat possession of a task ID, operation ID or session key as a general authorization mechanism.
 
-### Boundary 2: MCP Server <-> OpenClaw Gateway
+## Routing and Discord permissions
 
-- The MCP server authenticates to the gateway using a Bearer token (`OPENCLAW_GATEWAY_TOKEN`).
-- The server validates the gateway URL at startup and blocks requests to private IP ranges (SSRF protection).
-- Responses from the gateway are size-limited (10 MB max) and parsed as JSON — no raw pass-through.
+The registry resolves instance and explicit agent together without changing a shared client. Unknown explicit agents fail before submission. Generic agents need no Discord mapping.
 
-### Boundary 3: User <-> Claude
+Imported Discord bindings can restrict or reassign routing only inside explicit MCP scopes. Channel blacklist/whitelist checks, verified thread ancestry, creation-policy admission, and normal-routing acknowledgement still apply. Adding an agent or binding does not admit a guild or enable creation. The CLI-backed Discord adapters remain associated with one configured instance and existing bot-account configuration.
 
-- Claude decides which MCP tools to call and with what arguments. The MCP server validates all tool inputs (string length, type, format) but **cannot control Claude's intent**.
-- If OpenClaw can perform actions with real-world consequences (e.g., sending emails, modifying data), those consequences are ultimately triggered by Claude's tool calls through the gateway.
+Catalogs and bindings are startup snapshots. Runtime thread rebindings and session overrides are unsupported. The CLI binding export omits session overrides; the operator must verify ordinary routing before acknowledging it. A snapshot cannot prove that Gateway configuration has remained unchanged. Reload the service through the operator's deployment process after changing routing, and inspect uncertain operations before issuing more writes.
 
-## Attack Surfaces
+## Network and input boundaries
 
-### 1. Malicious MCP Tool Input
+Gateway destinations and discovery executables come from operator configuration, not tool arguments. The registry accepts HTTP/HTTPS URLs; it does not block all private addresses. Local Gateways are supported. Discord adapters apply their existing HTTPS/loopback restrictions. Restrict service network access at deployment level where required.
 
-**Risk:** Crafted tool arguments could exploit the OpenClaw gateway.
+Tool argument validation, response limits, request timeouts, task limits, private Discord state, and durable operation fingerprints reduce accidental misuse. They do not constrain the intent or permissions of a Gateway agent. Debug logging may include message content; control log access accordingly.
 
-**Mitigations:**
-- All tool inputs are validated: type checks, string length limits, control character rejection
-- The MCP server does not interpret message content — it passes validated strings to the gateway
-
-### 2. Compromised OpenClaw Gateway
-
-**Risk:** A compromised gateway could return malicious responses.
-
-**Mitigations:**
-- Response size limit (10 MB) prevents memory exhaustion
-- Responses are parsed as JSON — no script execution
-- Error messages from the gateway are sanitized before being returned to Claude
-
-### 3. Network-Level Attacks (HTTP transport)
-
-**Risk:** Man-in-the-middle, replay attacks, unauthorized access.
-
-**Mitigations:**
-- OAuth 2.1 with client credentials (required for production)
-- HTTPS via reverse proxy (Caddy or nginx)
-- CORS restricted to configured origins (default: `https://claude.ai`)
-- DNS rebinding protection via MCP SDK's Express middleware
-
-### 4. Server-Side Request Forgery (SSRF)
-
-**Risk:** Attacker could trick the server into making requests to internal services.
-
-**Mitigations:**
-- Only one outbound destination: the configured `OPENCLAW_URL`
-- Private IP ranges are blocked at the client level
-- URL is set at startup via environment variable, not controllable via tool input
-
-### 5. Denial of Service
-
-**Risk:** Resource exhaustion through excessive requests or large payloads.
-
-**Mitigations:**
-- Request timeout: 30 seconds per gateway call
-- Response size limit: 10 MB
-- Docker memory limit: 256 MB (configurable)
-- Async task queue is in-memory with bounded processing
-
-## Production Recommendations
-
-If you expose this server beyond localhost:
-
-1. **Enable OAuth 2.1** — set `AUTH_ENABLED=true` with strong client credentials
-2. **Use HTTPS** — terminate TLS at a reverse proxy (Caddy recommended)
-3. **Restrict CORS** — set `CORS_ORIGINS=https://claude.ai` (or your specific origin)
-4. **Run in Docker** — use the provided `docker-compose.yml` with `read_only` and `no-new-privileges`
-5. **Review gateway permissions** — the MCP server is only as safe as what the OpenClaw gateway allows. If OpenClaw can perform destructive actions, consider adding tool allowlists and human approval on the gateway side
-6. **Monitor logs** — see [Logging](./logging.md) for what gets logged and where
+For remotely reachable HTTP deployments, enable authentication, terminate HTTPS at the trusted proxy, restrict origins, and disable development-only dynamic client registration. Review the permissions of every selectable agent and the configured Discord account before admitting callers into this shared trust domain.

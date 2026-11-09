@@ -210,3 +210,7 @@ For production with Claude.ai, keep DCR disabled and use the pre-configured `MCP
 ## Conversation labels and routing
 
 Generated conversation keys use the configured issuer hostname (`MCP_ISSUER_URL` / `--issuer-url`), or the OS hostname when no issuer is configured. Client initialize names supply display labels only. An explicit target agent is included in generated keys; if none is known locally, Gateway default routing applies. For deterministic multi-agent routing, configure `agentId` on each instance and reuse the returned `instance` and `session_id` together. See [conversation continuity](conversation-continuity.md) for the full response contract and limitations.
+
+## Agent selection
+
+See [multiagent configuration](multiagent.md) for explicit catalogs, opt-in local CLI discovery, `agent_id` selectors, Discord mapping precedence and the shared trust model. Every authenticated client can select every configured agent; generic chat requires no Discord mapping.

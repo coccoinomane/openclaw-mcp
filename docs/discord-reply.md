@@ -17,3 +17,7 @@ Like new-thread handoffs, replies use operator-configured normalRouting and ackn
 - queued means publication was verified and service-owned generation was accepted, not that the answer was delivered. Return only the Discord link on queued handoff. Use openclaw_discord_operation after disconnect or when the eventual result is requested.
 
 No live Discord writes, Gateway admission tests or production changes were performed for this implementation.
+
+## Agent selection
+
+See [multiagent configuration](multiagent.md) for explicit catalogs, opt-in local CLI discovery, `agent_id` selectors, Discord mapping precedence and the shared trust model. Every authenticated client can select every configured agent; generic chat requires no Discord mapping.

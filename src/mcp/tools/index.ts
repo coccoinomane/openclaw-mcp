@@ -14,3 +14,5 @@ export {
   handleOpenclawTaskCancel,
   startTaskProcessor,
 } from './tasks.js';
+
+export { openclawAgentsTool, handleOpenclawAgents } from './agents.js';

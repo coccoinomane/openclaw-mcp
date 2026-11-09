@@ -84,6 +84,9 @@ describe('closed metadata reader', () => {
     const result = await f.service.channels();
     expect(result.channels).toEqual([
       {
+        instance: 'home',
+        agent_id: 'main',
+        account_id: 'bot',
         target: 'work',
         channel_id: channel,
         guild_id: guild,

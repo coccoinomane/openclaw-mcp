@@ -2,7 +2,12 @@ import { assertServiceProvenance, DiscordError } from './discord-channels.js';
 import type { DiscordConfig } from './discord.js';
 import type { InstanceConfig } from './types.js';
 
-type ReadScope = { guildId: string; accountId: string; agentId: string };
+type ReadScope = {
+  guildId: string;
+  accountId: string;
+  agentId: string;
+  permissionAgentId?: string;
+};
 type ReadRequest = { action: 'channel-list' } | { action: 'channel-info'; channelId: string };
 export type DiscordReader = (scope: ReadScope, request: ReadRequest) => Promise<any>;
 const snowflake = /^[1-9][0-9]{16,19}$/;
@@ -35,7 +40,12 @@ export function channelReader(
     throw new DiscordError('INSECURE_GATEWAY_URL');
   return async (scope, request) => {
     assertServiceProvenance();
-    if (!scope || !scopes.has(scopeKey(scope))) throw new DiscordError('READ_SCOPE_DENIED');
+    const permissionScope =
+      scope && config.importedRouteAgent && scope.permissionAgentId
+        ? { ...scope, agentId: scope.permissionAgentId }
+        : scope;
+    if (!permissionScope || !scopes.has(scopeKey(permissionScope)))
+      throw new DiscordError('READ_SCOPE_DENIED');
     if (
       !request ||
       !['channel-list', 'channel-info'].includes(request.action) ||

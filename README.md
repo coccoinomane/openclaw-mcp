@@ -44,3 +44,7 @@ For details, see [conversation continuity](docs/conversation-continuity.md), [Di
 ## Credits
 
 Fork of [freema/openclaw-mcp](https://github.com/freema/openclaw-mcp), created by [Tomáš Grasl](https://www.tomasgrasl.cz/). MIT license; original attribution retained.
+
+## Agent selection
+
+See [multiagent configuration](docs/multiagent.md) for explicit catalogs, opt-in local CLI discovery, `agent_id` selectors, Discord mapping precedence and the shared trust model. Every authenticated client can select every configured agent; generic chat requires no Discord mapping.

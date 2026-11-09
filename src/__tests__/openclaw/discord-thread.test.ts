@@ -443,6 +443,8 @@ describe('operator configuration and closed inputs', () => {
       'original request to forward unchanged'
     );
     expect(Object.keys(tool.inputSchema.properties!)).toEqual([
+      'instance',
+      'agent_id',
       'target',
       'operation_id',
       'mode',

@@ -92,6 +92,8 @@ export function channelInvoker(instances: InstanceConfig[], fetcher = fetch): Ch
   };
 }
 export type AdmittedTarget = {
+  /** Original MCP permission scope, retained across imported route reassignment. */
+  permissionAgentId?: string;
   name: string;
   guildId: string;
   channelId: string;
@@ -200,6 +202,8 @@ export class ChannelCreation {
     }
     const record: any = {
       kind: 'channel_create',
+      instance: p.instance,
+      agent_id: p.agentId,
       policy: p.name,
       policy_digest: hash(p),
       fingerprint,

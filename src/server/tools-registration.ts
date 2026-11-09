@@ -18,6 +18,7 @@ import { readSkillResource, skillResources } from './skills.js';
 import type { DiscordService } from '../openclaw/discord.js';
 import { discordTools, handleDiscord } from '../mcp/tools/discord.js';
 import { randomUUID } from 'node:crypto';
+import { validateId, validateInputIsObject } from '../utils/validation.js';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -105,6 +106,7 @@ function toolSet(
     ['openclaw_task_status', (input) => tools.handleOpenclawTaskStatus(registry, input, ownerId)],
     ['openclaw_task_list', (input) => tools.handleOpenclawTaskList(registry, input, ownerId)],
     ['openclaw_task_cancel', (input) => tools.handleOpenclawTaskCancel(registry, input, ownerId)],
+    ['openclaw_agents', (input) => tools.handleOpenclawAgents(registry, input)],
     ['openclaw_instances', (input) => tools.handleOpenclawInstances(registry, input)],
   ]);
 
@@ -116,12 +118,36 @@ function toolSet(
     tools.openclawTaskListTool,
     tools.openclawTaskCancelTool,
     tools.openclawInstancesTool,
+    tools.openclawAgentsTool,
   ];
 
   if (deps.discord) {
     allTools.push(...discordTools);
     for (const tool of discordTools)
-      toolHandlers.set(tool.name, (input) => handleDiscord(deps.discord!, tool.name, input ?? {}));
+      toolHandlers.set(tool.name, async (input) => {
+        if (
+          validateInputIsObject(input) &&
+          (input.instance !== undefined || input.agent_id !== undefined)
+        ) {
+          for (const field of ['instance', 'agent_id']) {
+            if (input[field] !== undefined) {
+              const checked = validateId(input[field], field);
+              if (!checked.valid) return errorResponse(checked.error);
+            }
+          }
+          try {
+            registry.resolve(
+              (input.instance as string | undefined) ?? deps.discord!.config.cliGatewayInstance,
+              input.agent_id as string | undefined
+            );
+          } catch (error) {
+            return errorResponse(
+              error instanceof Error ? error.message : 'Invalid Discord route selector'
+            );
+          }
+        }
+        return handleDiscord(deps.discord!, tool.name, input ?? {});
+      });
   }
   // Low-level request handlers bypass the SDK's registered-tool output checks.
   // Use the same validators for legacy and modern transports, without rewriting payloads.

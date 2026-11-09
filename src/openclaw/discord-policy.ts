@@ -37,12 +37,17 @@ export function assertTargetAllowed(
 ) {
   assertChannelAllowed(config, target.channelId);
   if (id && config.channelBlacklist?.includes(id)) throw new DiscordError('CHANNEL_POLICY_DENIED');
+  const admittedScope = (scope: DiscoveryScope) =>
+    sameScope(scope, {
+      ...target,
+      agentId: config.importedRouteAgent
+        ? (target.permissionAgentId ?? target.agentId)
+        : target.agentId,
+    });
   if (
-    !config.targets.some((t) => t.channelId === target.channelId && sameScope(t, target)) &&
-    !config.discoveryScopes?.some((s) => sameScope(s, target)) &&
-    !config.creationPolicies?.some(
-      (p) => p.categoryId === target.categoryId && sameScope(p, target)
-    )
+    !config.targets.some((t) => t.channelId === target.channelId && admittedScope(t)) &&
+    !config.discoveryScopes?.some((s) => admittedScope(s)) &&
+    !config.creationPolicies?.some((p) => p.categoryId === target.categoryId && admittedScope(p))
   )
     throw new DiscordError(scopeError);
 }

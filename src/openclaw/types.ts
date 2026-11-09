@@ -7,6 +7,8 @@ export interface InstanceConfig {
   agentId?: string;
   timeout?: number;
   default?: boolean;
+  agents?: Array<{ id: string }>;
+  bindings?: AgentBinding[];
 }
 
 // OpenAI-compatible API types
@@ -46,4 +48,10 @@ export interface OpenClawChatResponse {
 export interface OpenClawHealthResponse {
   status: 'ok' | 'error';
   message?: string;
+}
+
+/** Static routing fields from the sanitized CLI bindings export. */
+export interface AgentBinding {
+  agentId: string;
+  match: Record<string, unknown>;
 }

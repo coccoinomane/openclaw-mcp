@@ -30,9 +30,10 @@ export function structuredJsonResponse(data: Record<string, unknown>): ToolRespo
 export function withConversation(
   response: ToolResponse,
   sessionId: string,
-  instance: string
+  instance: string,
+  agentId?: string
 ): ToolResponse {
-  const metadata = { session_id: sessionId, instance };
+  const metadata = { session_id: sessionId, instance, ...(agentId ? { agent_id: agentId } : {}) };
   return {
     ...response,
     content: [...response.content, { type: 'text', text: `\n\n${JSON.stringify(metadata)}` }],

@@ -38,6 +38,9 @@ export interface Task {
   ownerId: string;
   sessionId?: string;
   instanceId?: string;
+  agentId?: string;
+  /** Immutable request route; may differ from a legacy supplied session agent. */
+  routingAgentId?: string;
   priority: number;
 }
 
@@ -48,6 +51,9 @@ export interface TaskCreateOptions {
   ownerId: string;
   sessionId?: string;
   instanceId?: string;
+  agentId?: string;
+  /** Immutable request route; may differ from a legacy supplied session agent. */
+  routingAgentId?: string;
   priority?: number;
 }
 
@@ -93,6 +99,8 @@ class TaskManager {
       ownerId: options.ownerId,
       sessionId: options.sessionId,
       instanceId: options.instanceId,
+      agentId: options.agentId,
+      routingAgentId: options.routingAgentId,
       priority: options.priority ?? 0,
     };
 
@@ -118,7 +126,7 @@ class TaskManager {
    */
   list(
     ownerId: string,
-    filter?: { status?: TaskStatus; sessionId?: string; instanceId?: string }
+    filter?: { status?: TaskStatus; sessionId?: string; instanceId?: string; agentId?: string }
   ): Task[] {
     let tasks = Array.from(this.tasks.values()).filter((t) => t.ownerId === ownerId);
 
@@ -131,6 +139,8 @@ class TaskManager {
     if (filter?.instanceId) {
       tasks = tasks.filter((t) => t.instanceId === filter.instanceId);
     }
+
+    if (filter?.agentId) tasks = tasks.filter((t) => t.agentId === filter.agentId);
 
     // Sort by priority (desc) then creation time (asc)
     return tasks.sort((a, b) => {

@@ -3,6 +3,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 type OutputSchema = NonNullable<Tool['outputSchema']>;
 const string = { type: 'string' };
 const boolean = { type: 'boolean' };
+const route = { instance: string, agent_id: string, account_id: string };
 const nullableString = { type: ['string', 'null'] };
 const retrySafe = { type: 'boolean', const: false };
 const error = {
@@ -25,6 +26,7 @@ export const discordChannelsOutput = output({
       items: {
         type: 'object',
         properties: {
+          ...route,
           target: string,
           channel_id: string,
           guild_id: string,
@@ -50,7 +52,13 @@ export const discordChannelsOutput = output({
       type: 'array',
       items: {
         type: 'object',
-        properties: { policy: string, guild_id: string, category_id: string, agent: string },
+        properties: {
+          ...route,
+          policy: string,
+          guild_id: string,
+          category_id: string,
+          agent: string,
+        },
         required: ['policy', 'guild_id', 'category_id', 'agent'],
       },
     },
@@ -62,6 +70,7 @@ export const discordChannelsOutput = output({
 export const discordThreadsOutput = output({
   type: 'object',
   properties: {
+    ...route,
     threads: {
       type: 'array',
       items: {
@@ -86,6 +95,7 @@ export const discordThreadsOutput = output({
 const turn: OutputSchema = {
   type: 'object',
   properties: {
+    ...route,
     kind: { type: 'string', const: 'thread_reply' },
     operation_id: string,
     target: string,
@@ -135,6 +145,7 @@ const turn: OutputSchema = {
 const creation: OutputSchema = {
   type: 'object',
   properties: {
+    ...route,
     kind: { type: 'string', const: 'channel_create' },
     policy: string,
     operation_id: string,

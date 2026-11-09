@@ -9,6 +9,19 @@ import { DiscordError } from '../../openclaw/discord-channels.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { DiscordService } from '../../openclaw/discord.js';
 import { errorResponse, structuredJsonResponse } from '../../utils/response-helpers.js';
+const selectors = {
+  instance: {
+    type: 'string',
+    minLength: 1,
+    description: 'Configured Discord Gateway instance; asserts the selected route.',
+  },
+  agent_id: {
+    type: 'string',
+    pattern: '^[a-z0-9][a-z0-9_-]{0,63}$',
+    description:
+      'Agent filter for discovery; route assertion for targets, policies and operations.',
+  },
+};
 const target = {
   type: 'string',
   description:
@@ -28,7 +41,7 @@ export const discordTools: Tool[] = [
     outputSchema: discordChannelsOutput,
     description:
       "List verified operator-allowed Discord channels. Use their names, topics and categories to choose the most suitable channel for a new thread about the user's request; ask for clarification only when the destination is ambiguous. Requires service opt-in.",
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    inputSchema: { type: 'object', properties: { ...selectors }, additionalProperties: false },
   },
   {
     name: 'openclaw_discord_threads',
@@ -38,6 +51,7 @@ export const discordTools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
+        ...selectors,
         target,
         archived: { type: 'boolean' },
         before: { type: 'string', description: 'Archive timestamp cursor, not a snowflake.' },
@@ -56,6 +70,7 @@ export const discordTools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
+        ...selectors,
         target,
         operation_id: operation,
         mode: { type: 'string', enum: ['new_thread'] },
@@ -85,6 +100,7 @@ export const discordTools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
+        ...selectors,
         target,
         channel_id: {
           type: 'string',
@@ -111,7 +127,7 @@ export const discordTools: Tool[] = [
       'Read durable operation status after a disconnect or uncertain outcome. Does not repeat side effects.',
     inputSchema: {
       type: 'object',
-      properties: { operation_id: operation },
+      properties: { ...selectors, operation_id: operation },
       required: ['operation_id'],
       additionalProperties: false,
     },
@@ -124,6 +140,7 @@ export const discordTools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
+        ...selectors,
         policy: {
           type: 'string',
           description: 'Creation policy returned by openclaw_discord_channels.',
@@ -147,23 +164,32 @@ export async function handleDiscord(service: DiscordService, name: string, input
     !input ||
     typeof input !== 'object' ||
     Array.isArray(input) ||
-    Object.keys(input).some((key) => !(key in (schema.properties || {}))) ||
+    Object.keys(input).some(
+      (key) => !Object.prototype.hasOwnProperty.call(schema.properties || {}, key)
+    ) ||
     schema.required?.some((key) => input[key] === undefined)
   )
     return errorResponse('Invalid Discord tool arguments');
   try {
+    if (
+      (input.instance !== undefined &&
+        (typeof input.instance !== 'string' || !input.instance.trim())) ||
+      (input.agent_id !== undefined &&
+        (typeof input.agent_id !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(input.agent_id)))
+    )
+      return errorResponse('Invalid Discord route selectors');
     if (name === 'openclaw_discord_create_channel')
       return structuredJsonResponse(await service.createChannel(input));
     const result =
       name === 'openclaw_discord_channels'
-        ? await service.channels()
+        ? await service.channels(input)
         : name === 'openclaw_discord_threads'
           ? await service.threads(input)
           : name === 'openclaw_discord_ask'
             ? await service.ask(input)
             : name === 'openclaw_discord_reply'
               ? await service.reply(input)
-              : await service.status(input.operation_id);
+              : await service.status(input.operation_id, input);
     return structuredJsonResponse(result);
   } catch (error) {
     if (error instanceof DiscordError)

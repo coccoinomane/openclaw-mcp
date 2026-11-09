@@ -7,12 +7,16 @@ import {
   type ToolResponse,
 } from '../../utils/response-helpers.js';
 import { validateInputIsObject, validateMessage, validateId } from '../../utils/validation.js';
-import { createConversationKey, type ConversationContext } from '../conversation.js';
+import {
+  createConversationKey,
+  resolveConversation,
+  type ConversationContext,
+} from '../conversation.js';
 
 export const openclawChatTool: Tool = {
   name: 'openclaw_chat',
   description:
-    'Send a message to OpenClaw and get a response. Save the returned session_id and instance and reuse both for follow-up turns. Omitting session_id starts a new conversation. The key is returned in structuredContent and an additional text block, including on Gateway errors; errors may follow accepted work, so do not automatically resend.',
+    'Send a message to OpenClaw and get a response. Save the returned session_id, instance and agent_id (when present) and reuse them for follow-up turns. Omitting session_id starts a new conversation. The key is returned in structuredContent and an additional text block, including on Gateway errors; errors may follow accepted work, so do not automatically resend.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -25,6 +29,7 @@ export const openclawChatTool: Tool = {
         description:
           'Gateway conversation key returned by a previous chat. Reuse it unchanged for follow-up turns; omit for a new conversation. Distinct from MCP transport session and task IDs.',
       },
+      agent_id: { type: 'string', description: 'Configured agent ID from openclaw_agents.' },
       instance: {
         type: 'string',
         description:
@@ -68,18 +73,21 @@ export async function handleOpenclawChat(
   }
 
   let effectiveInstance: string;
+  let agentId: string | undefined;
   try {
-    const { client, name } = registry.resolve(instanceName);
+    const resolved = resolveConversation(registry, instanceName, input.agent_id, sessionId);
+    const { client, name } = resolved;
+    agentId = resolved.agentId;
     effectiveInstance = name;
-    sessionId ??= createConversationKey(name, context, client.getConversationAgentId());
+    sessionId ??= createConversationKey(name, context, agentId);
     const response = await client.chat(msgResult.value, sessionId);
-    return withConversation(successResponse(response.response), sessionId, name);
+    return withConversation(successResponse(response.response), sessionId, name, agentId);
   } catch (error) {
     const response = errorResponse(
       error instanceof Error ? error.message : 'Failed to chat with OpenClaw'
     );
     return sessionId && effectiveInstance
-      ? withConversation(response, sessionId, effectiveInstance)
+      ? withConversation(response, sessionId, effectiveInstance, agentId)
       : response;
   }
 }

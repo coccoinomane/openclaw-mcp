@@ -28,7 +28,13 @@ import { lstat, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'no
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
+export interface DiscordSelectors {
+  instance?: string;
+  agent_id?: string;
+}
 export interface DiscordConfig {
+  /** Imported static bindings only restrict/reassign already admitted routes. */
+  importedRouteAgent?: (target: AdmittedTarget, channelId: string) => string | undefined;
   executable: string;
   stateDir: string;
   discoveryScopes?: DiscoveryScope[];
@@ -309,6 +315,8 @@ function payload(value: any): any {
   return result;
 }
 interface Operation {
+  instance?: string;
+  agent_id?: string;
   fingerprint: string;
   kind?: 'thread_reply';
   owner?: string;
@@ -400,8 +408,14 @@ export class DiscordService {
         config.creationPolicies,
         invoke,
         async (p, id) => {
-          if (id !== p.categoryId) assertChannelAllowed(this.config, id);
-          else if (this.config.channelBlacklist?.includes(id))
+          if (id !== p.categoryId) {
+            assertChannelAllowed(this.config, id);
+            if (
+              this.config.importedRouteAgent &&
+              this.config.importedRouteAgent({ ...p, channelId: id }, id) !== p.agentId
+            )
+              throw new DiscordError('CREATION_ROUTE_CONFLICT');
+          } else if (this.config.channelBlacklist?.includes(id))
             throw new DiscordError('CHANNEL_POLICY_DENIED');
           return (await this.readInfo({ ...p, channelId: id }, id)).channel;
         }
@@ -409,6 +423,11 @@ export class DiscordService {
     }
   }
   private async ordinaryRoute(t: AdmittedTarget, channelId: string) {
+    if (
+      this.config.importedRouteAgent &&
+      this.config.importedRouteAgent(t, channelId) !== t.agentId
+    )
+      throw new DiscordError('ROUTE_MISMATCH');
     if (!this.resolveRoute) return 'agent:' + t.agentId + ':discord:channel:' + channelId;
     let route;
     try {
@@ -431,14 +450,44 @@ export class DiscordService {
       throw new DiscordError('ROUTE_MISMATCH');
     return route.sessionKey;
   }
+  private route(t: AdmittedTarget, channelId = t.channelId): AdmittedTarget {
+    if (!this.config.importedRouteAgent) return t;
+    const agentId = this.config.importedRouteAgent(t, channelId);
+    if (!agentId) throw new DiscordError('IMPORTED_ROUTE_UNMAPPED');
+    return { ...t, permissionAgentId: t.permissionAgentId ?? t.agentId, agentId };
+  }
+  private matches(t: { agentId: string; instance?: string }, input: DiscordSelectors) {
+    return (
+      (input.agent_id === undefined || input.agent_id === t.agentId) &&
+      (input.instance === undefined ||
+        input.instance === (t.instance ?? this.config.cliGatewayInstance))
+    );
+  }
+  private assertSelectors(t: { agentId: string; instance?: string }, input: DiscordSelectors) {
+    if (!this.matches(t, input)) throw new DiscordError('ROUTE_SELECTOR_CONFLICT');
+  }
+  private policyRoute(p: CreationPolicy) {
+    // A new channel has no peer binding. Its guild/account route must match the policy.
+    if (
+      this.config.importedRouteAgent &&
+      this.config.importedRouteAgent({ ...p, channelId: '' }, '') !== p.agentId
+    )
+      throw new DiscordError('CREATION_ROUTE_CONFLICT');
+    return p;
+  }
   async createChannel(input: any) {
     if (!this.creation) throw new DiscordError('CHANNEL_CREATION_DISABLED');
     const policy = this.config.creationPolicies?.find((p) => p.name === input.policy);
+    if (policy) {
+      this.assertSelectors(policy, input);
+      this.policyRoute(policy);
+    }
     if (policy && this.config.channelBlacklist?.includes(policy.categoryId))
       throw new DiscordError('CHANNEL_POLICY_DENIED');
-    return this.creation.create(input);
+    const result = await this.creation.create(input);
+    return { ...result, instance: policy?.instance, agent_id: policy?.agentId };
   }
-  private async target(name: unknown) {
+  private async target(name: unknown, channelId?: string) {
     const targets = [...this.config.targets, ...((await this.creation?.admitted()) ?? [])];
     let t = targets.find((item) => item.name === name);
     if (!t && typeof name === 'string') {
@@ -458,7 +507,7 @@ export class DiscordService {
     }
     if (!t) throw new Error('Target is not allowlisted');
     assertTargetAllowed(this.config, t);
-    return t;
+    return this.route(t, channelId);
   }
   private async cli(t: DiscordConfig['targets'][number], args: string[]) {
     return payload(
@@ -497,7 +546,7 @@ export class DiscordService {
     assertTargetAllowed(this.config, t, id);
     return this.verifyChannel(t, id, (await this.readInfo(t, id)).channel, parent);
   }
-  async channels() {
+  async channels(input: DiscordSelectors = {}) {
     const channels = [];
     const targets = [...this.config.targets, ...((await this.creation?.admitted()) ?? [])].filter(
       (t) => channelAllowed(this.config, t.channelId)
@@ -565,7 +614,18 @@ export class DiscordService {
         (category && typeof category.name !== 'string')
       )
         throw new DiscordError('CHANNEL_METADATA_UNVERIFIED');
+      let routed;
+      try {
+        routed = this.route(t);
+      } catch (error) {
+        if (error instanceof DiscordError && error.code === 'IMPORTED_ROUTE_UNMAPPED') continue;
+        throw error;
+      }
+      if (!this.matches(routed, input)) continue;
       channels.push({
+        instance: this.config.cliGatewayInstance,
+        agent_id: routed.agentId,
+        account_id: routed.accountId,
         target: t.name,
         channel_id: c.id,
         guild_id: t.guildId,
@@ -578,16 +638,30 @@ export class DiscordService {
     }
     return {
       channels,
-      creation_policies: (this.config.creationPolicies ?? []).map((p) => ({
-        policy: p.name,
-        guild_id: p.guildId,
-        category_id: p.categoryId,
-        agent: p.agentId,
-      })),
+      creation_policies: (this.config.creationPolicies ?? [])
+        .filter((p) => {
+          if (!this.matches(p, input)) return false;
+          try {
+            this.policyRoute(p);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .map((p) => ({
+          instance: p.instance,
+          agent_id: p.agentId,
+          account_id: p.accountId,
+          policy: p.name,
+          guild_id: p.guildId,
+          category_id: p.categoryId,
+          agent: p.agentId,
+        })),
     };
   }
   async threads(input: any) {
     const t = await this.target(input.target);
+    this.assertSelectors(t, input);
     if (input.archived !== undefined && typeof input.archived !== 'boolean')
       throw new Error('Invalid archived flag');
     if (
@@ -631,6 +705,9 @@ export class DiscordService {
         discord_url: 'https://discord.com/channels/' + t.guildId + '/' + c.id,
       }));
     return {
+      instance: this.config.cliGatewayInstance,
+      agent_id: t.agentId,
+      account_id: t.accountId,
       threads,
       has_more: raw.has_more === true,
       next_before:
@@ -642,7 +719,7 @@ export class DiscordService {
     check(id, /^[a-zA-Z0-9_-]{16,100}$/, 'operation ID');
     return join(this.config.stateDir, id + '.json');
   }
-  async status(id: unknown) {
+  async status(id: unknown, input: DiscordSelectors = {}) {
     const result: Operation = JSON.parse(await readFile(this.path(id), 'utf8'));
     if ((result as any).kind === 'channel_create') {
       if (
@@ -651,11 +728,48 @@ export class DiscordService {
       )
         throw new DiscordError('CREATION_POLICY_DENIED');
       if (result.channel_id) assertChannelAllowed(this.config, result.channel_id);
-      return this.creation.publicResult(result);
+      const policy = this.config.creationPolicies!.find((p) => p.name === (result as any).policy)!;
+      this.assertSelectors(
+        {
+          agentId: result.agent_id ?? policy.agentId,
+          instance: result.instance ?? policy.instance,
+        },
+        input
+      );
+      if (
+        (result.agent_id && result.agent_id !== policy.agentId) ||
+        (result.instance && result.instance !== policy.instance)
+      )
+        throw new DiscordError('ROUTE_MISMATCH');
+      this.policyRoute(policy);
+      return {
+        ...this.creation.publicResult(result),
+        instance: policy.instance,
+        agent_id: policy.agentId,
+      };
     }
-    const t = await this.target(result.target);
+    const t = await this.target(result.target, result.channel_id);
+    const sessionAgent =
+      typeof result.session_key === 'string'
+        ? /^agent:([a-z0-9][a-z0-9_-]{0,63}):discord:channel:/.exec(result.session_key)?.[1]
+        : undefined;
+    const storedAgent = result.agent_id ?? sessionAgent;
+    if (result.agent_id && sessionAgent && result.agent_id !== sessionAgent)
+      throw new DiscordError('ROUTE_MISMATCH');
+    this.assertSelectors(
+      {
+        agentId: storedAgent ?? t.agentId,
+        instance: result.instance ?? this.config.cliGatewayInstance,
+      },
+      input
+    );
+    if (
+      (storedAgent && storedAgent !== t.agentId) ||
+      (result.instance && result.instance !== this.config.cliGatewayInstance)
+    )
+      throw new DiscordError('ROUTE_MISMATCH');
     assertTargetAllowed(this.config, t, result.channel_id);
-    return this.publicResult(result);
+    return this.publicResult({ ...result, ...(storedAgent ? { agent_id: storedAgent } : {}) });
   }
   private publicResult(op: Operation) {
     const result: Partial<Operation> = { ...op };
@@ -692,7 +806,8 @@ export class DiscordService {
     if (
       !input ||
       Object.keys(input).some(
-        (key) => !['target', 'channel_id', 'operation_id', 'prompt'].includes(key)
+        (key) =>
+          !['target', 'channel_id', 'operation_id', 'prompt', 'instance', 'agent_id'].includes(key)
       )
     )
       throw new DiscordError('REPLY_ARGUMENTS_INVALID');
@@ -803,7 +918,8 @@ export class DiscordService {
     const replying = input.mode === 'reply';
     if (replying || this.config.threadCreateMode === 'gateway' || this.config.threadMember)
       assertServiceProvenance();
-    const t = await this.target(input.target);
+    const t = await this.target(input.target, replying ? input.channel_id : undefined);
+    this.assertSelectors(t, input);
     const path = this.path(input.operation_id);
 
     if (
@@ -861,6 +977,8 @@ export class DiscordService {
     }
     const op: Operation = {
       fingerprint,
+      instance: this.config.cliGatewayInstance,
+      agent_id: t.agentId,
       ...(replying ? { kind: 'thread_reply' as const } : {}),
       owner: this.owner,
       request_status: 'pending',

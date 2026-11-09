@@ -6,23 +6,26 @@
  */
 
 import { OpenClawClient } from './client.js';
-import type { InstanceConfig } from './types.js';
+import type { AgentBinding, InstanceConfig } from './types.js';
 
 const INSTANCE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
 export class InstanceRegistry {
   private instances: Map<string, { config: InstanceConfig; client: OpenClawClient }> = new Map();
   private defaultName: string;
+  private agentClients = new Map<string, OpenClawClient>();
+  private model: string | undefined;
 
   constructor(configs: InstanceConfig[], model?: string) {
     if (configs.length === 0) {
       throw new Error('At least one OpenClaw instance must be configured');
     }
 
+    this.model = model;
     const names = new Set<string>();
     let explicitDefault: string | undefined;
 
-    for (const config of configs) {
+    for (let config of configs) {
       if (!INSTANCE_NAME_RE.test(config.name)) {
         throw new Error(
           `Invalid instance name "${config.name}": must be 1-64 chars, alphanumeric/dashes/underscores, start with alphanumeric`
@@ -64,6 +67,16 @@ export class InstanceRegistry {
         timeoutMs: config.timeout,
         model,
       });
+      const ids = new Set<string>();
+      for (const agent of config.agents ?? []) {
+        if (!agent || !INSTANCE_NAME_RE.test(agent.id)) throw new Error('Invalid catalog agent ID');
+        const id = agent.id.toLowerCase();
+        if (ids.has(id)) throw new Error(`Duplicate agent "${id}" in instance "${config.name}"`);
+        ids.add(id);
+      }
+      const defaultAgent = client.getConversationAgentId();
+      if (defaultAgent) ids.add(defaultAgent);
+      config = { ...config, agents: [...ids].map((id) => ({ id })) };
       this.instances.set(config.name, { config, client });
     }
 
@@ -99,16 +112,56 @@ export class InstanceRegistry {
    * Resolve an optional instance name to a concrete client.
    * Falls back to default when name is undefined.
    */
-  resolve(name?: string): { name: string; client: OpenClawClient } {
-    if (!name) {
-      return { name: this.defaultName, client: this.getDefault() };
-    }
-    const client = this.get(name);
+  resolve(
+    name?: string,
+    agentId?: string
+  ): { name: string; client: OpenClawClient; agentId?: string } {
+    const resolvedName = name ?? this.defaultName;
+    const entry = this.instances.get(resolvedName);
+    if (!entry)
+      throw new Error(
+        `Unknown instance "${resolvedName}". Available: ${this.listNames().join(', ')}`
+      );
+    if (agentId === undefined)
+      return {
+        name: resolvedName,
+        client: entry.client,
+        agentId: entry.client.getConversationAgentId(),
+      };
+    if (!INSTANCE_NAME_RE.test(agentId)) throw new Error('Invalid agent ID');
+    const id = agentId.toLowerCase();
+    if (!entry.config.agents?.some((agent) => agent.id === id))
+      throw new Error(`Unknown agent "${id}" for instance "${resolvedName}"`);
+    const key = `${resolvedName}:${id}`;
+    let client = this.agentClients.get(key);
     if (!client) {
-      const available = this.listNames().join(', ');
-      throw new Error(`Unknown instance "${name}". Available: ${available}`);
+      client = new OpenClawClient(entry.config.url, {
+        gatewayToken: entry.config.token,
+        agentId: id,
+        timeoutMs: entry.config.timeout,
+        model: this.model,
+      });
+      this.agentClients.set(key, client);
     }
-    return { name, client };
+    return { name: resolvedName, client, agentId: id };
+  }
+
+  listAgents(name?: string): Array<{ instance: string; agentId: string; isDefault: boolean }> {
+    if (name !== undefined) this.resolve(name);
+    return [...this.instances.entries()]
+      .filter(([instance]) => name === undefined || name === instance)
+      .flatMap(([instance, entry]) =>
+        (entry.config.agents ?? []).map(({ id }) => ({
+          instance,
+          agentId: id,
+          isDefault: entry.client.getConversationAgentId() === id,
+        }))
+      );
+  }
+
+  getBindings(name: string): AgentBinding[] | undefined {
+    this.resolve(name);
+    return this.instances.get(name)?.config.bindings;
   }
 
   /**

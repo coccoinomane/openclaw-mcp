@@ -59,6 +59,20 @@ async function connect(modern: boolean, discord: DiscordService) {
   return client;
 }
 describe.each([false, true])('Discord output validation (modern=%s)', (modern) => {
+  it('rejects unknown selector agents before dispatch on every transport', async () => {
+    const channels = vi.fn(async () => ({ channels: [], creation_policies: [] }));
+    const client = await connect(modern, {
+      config: { cliGatewayInstance: 'default' },
+      channels,
+    } as unknown as DiscordService);
+    const result = await client.callTool({
+      name: 'openclaw_discord_channels',
+      arguments: { agent_id: 'missing' },
+    });
+    expect(result.isError).toBe(true);
+    expect(channels).not.toHaveBeenCalled();
+  });
+
   it('preserves typed or absent thread metadata and rejects malformed fields', async () => {
     const item = {
       channel_id: '500000000000000003',

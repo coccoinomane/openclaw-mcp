@@ -173,8 +173,9 @@ describe('sync Gateway conversation continuity', () => {
     for (const input of [null, { message: '' }, { message: 'hello', instance: 'missing' }]) {
       expect((await handleOpenclawChat(registry, input)).isError).toBe(true);
     }
-    const invalid = new InstanceRegistry([{ name: 'invalid', url, agentId: 'cron:attack' }]);
-    expect((await handleOpenclawChat(invalid, { message: 'hello' })).isError).toBe(true);
+    expect(() => new InstanceRegistry([{ name: 'invalid', url, agentId: 'cron:attack' }])).toThrow(
+      'Configured agent ID must be'
+    );
     expect(calls).toHaveLength(0);
   });
 

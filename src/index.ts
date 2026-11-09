@@ -9,6 +9,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { SERVER_NAME, SERVER_VERSION } from './config/constants.js';
 import { log, logError, setDebugEnabled } from './utils/logger.js';
 import { parseArguments } from './cli.js';
+import { discordBindingResolver } from './openclaw/discord-bindings.js';
+import { includeConfiguredDiscordAgents, loadAgentCatalog } from './openclaw/agent-catalog.js';
 import { InstanceRegistry } from './openclaw/registry.js';
 import { createMcpServer, type ToolRegistrationDeps } from './server/tools-registration.js';
 import { createHttpServer, parseTrustProxy, type HttpServerConfig } from './server/http.js';
@@ -27,21 +29,32 @@ if (!trimmedModel) {
 }
 args.model = trimmedModel;
 
-// Create instance registry (single or multi-instance)
-const registry = new InstanceRegistry(args.instances, args.model);
-
-// Shared dependencies for tool registration
-const deps: ToolRegistrationDeps = {
-  registry,
-  serverName: SERVER_NAME,
-  serverVersion: SERVER_VERSION,
-  issuerUrl: args.issuerUrl,
-};
-
 async function main() {
-  deps.skills = await loadPackagedSkills();
   const discordConfig = loadDiscordConfig();
+  args.instances = includeConfiguredDiscordAgents(
+    await loadAgentCatalog(args.instances),
+    discordConfig
+  );
+  const registry = new InstanceRegistry(args.instances, args.model);
+  const deps: ToolRegistrationDeps = {
+    registry,
+    serverName: SERVER_NAME,
+    serverVersion: SERVER_VERSION,
+    issuerUrl: args.issuerUrl,
+  };
+  deps.skills = await loadPackagedSkills();
   if (discordConfig) {
+    if (
+      !discordConfig.cliGatewayInstance &&
+      args.instances.some((instance) => instance.bindings !== undefined)
+    ) {
+      throw new Error('Imported Discord routing requires MCP_DISCORD_CLI_GATEWAY_INSTANCE');
+    }
+    if (discordConfig.cliGatewayInstance) {
+      const bindings = registry.getBindings(discordConfig.cliGatewayInstance);
+      if (bindings !== undefined)
+        discordConfig.importedRouteAgent = discordBindingResolver(bindings);
+    }
     if (
       discordConfig.creationPolicies?.some(
         (p) => !args.instances.some((i) => i.name === p.instance && i.token)

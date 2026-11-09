@@ -1,3 +1,5 @@
+import type { InstanceRegistry } from '../openclaw/registry.js';
+import { validateId } from '../utils/validation.js';
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 
@@ -38,4 +40,29 @@ export function createConversationKey(
   const instance = sessionLabel(instanceName, 'default');
   const key = `mcp:${server}:${client}:${instance}:${randomUUID()}`;
   return agentId ? `agent:${agentId}:${key}` : key;
+}
+
+/** Resolve routing once while preserving legacy caller-supplied session semantics. */
+export function resolveConversation(
+  registry: InstanceRegistry,
+  instance: string | undefined,
+  selector: unknown,
+  sessionId?: string
+) {
+  let selected: string | undefined;
+  if (selector !== undefined) {
+    const checked = validateId(selector, 'agent_id');
+    if (!checked.valid) throw new Error(checked.error);
+    selected = checked.value.toLowerCase();
+  }
+  const sessionAgent = sessionId?.match(/^agent:([^:]+):/i)?.[1];
+  if (selected && sessionAgent && selected !== sessionAgent.toLowerCase()) {
+    throw new Error('agent_id conflicts with the agent in session_id');
+  }
+  const resolved = registry.resolve(instance, selected);
+  return {
+    ...resolved,
+    routingAgentId: selected ? resolved.agentId : undefined,
+    agentId: sessionAgent ?? resolved.agentId,
+  };
 }
