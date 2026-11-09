@@ -2,7 +2,7 @@
 
 The opt-in SDK path covers ordinary new-thread and existing-thread workflows. It uses @openclaw/gateway-client 2026.10.9 for agent execution, observation and explicit cancellation. Channel discovery, thread lists, permissions and exact-ID readback use the existing authenticated Gateway HTTP /tools/invoke adapter. Thread creation stays on that HTTP adapter; membership and exact request publication stay on Discord REST.
 
-This is not a pure-SDK implementation. CLI remains the default and the explicit rollback transport. Generic chat, MCP OAuth, roster discovery and configured routing are unchanged. Local tests use fake transports; live authority, history and delivery canaries are still release gates.
+This is not a pure-SDK implementation. CLI remains the default and the explicit rollback transport. Generic chat, MCP OAuth, roster discovery and configured routing are unchanged. Automated tests use fake transports. On 9 November 2026, a live local-shared-token canary created a new thread, continued the same session and recalled a code supplied only in the first turn. Repeating the first operation reused its original run and thread. Gateway delivery reported sent for both turns; independent Discord message readback was unavailable in the test session. Channel/thread discovery and blacklist enforcement passed without CLI invocations. Production reconnect and cancellation remain untested; their protocol behavior is covered by automated tests. Revalidate these gates for each deployment.
 
 ## Opt in
 
