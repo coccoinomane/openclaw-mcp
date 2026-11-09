@@ -106,7 +106,21 @@ services:
       - MCP_CLIENT_SECRET=${MCP_CLIENT_SECRET}
 ```
 
-**Backward compatibility:** When `OPENCLAW_INSTANCES` is not set, the server creates a single `"default"` instance from `OPENCLAW_URL` + `OPENCLAW_GATEWAY_TOKEN`. Existing deployments work without any configuration change — zero migration required.
+**Backward compatibility:** When `OPENCLAW_INSTANCES` is not set, the server creates a single `"default"` instance from `OPENCLAW_URL` + `OPENCLAW_GATEWAY_TOKEN`. This preserves single-instance chat routing. Discord and discovery upgrades must still remove the obsolete CLI settings described in the [migration guide](discord-sdk.md#upgrade-from-cli-based-releases).
+
+### Discord and Gateway SDK settings
+
+The bridge never invokes the OpenClaw CLI. Discord uses SDK agent calls plus fixed Gateway HTTP and Discord REST adapters. These settings supplement the existing Gateway URL/token, bot credentials, allowed destinations and private operation state:
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `MCP_AGENT_DISCOVERY` | `gateway` reads every configured Gateway roster at startup; unset uses static catalogs/configured agents. No `cli` mode. | Unset |
+| `MCP_AGENT_DISCOVERY_STATE_DIR` | Private persistent discovery identity/token directory; valid only with Gateway discovery. | `~/.openclaw-mcp/gateway-discovery` |
+| `MCP_DISCORD_GATEWAY_INSTANCE` | Required when Discord is enabled; existing instance name, or `default` for one instance. | None |
+| `MCP_DISCORD_SDK_AUTH` | `device`, or explicitly authorized `local-shared-token` on literal loopback only. | `device` |
+| `MCP_DISCORD_SDK_STATE_DIR` | Private pre-provisioned Discord integration identity/device state. | `gateway-sdk` inside `MCP_DISCORD_STATE_DIR` |
+
+See [Discord configuration](discord-skills.md), [SDK authentication](discord-sdk.md#service-authentication) and [multi-agent configuration](multiagent-reference.md). The removed transport/executable/read/create selectors have no compatibility aliases; follow the [upgrade checklist](discord-sdk.md#upgrade-from-cli-based-releases).
 
 ### Server Settings (HTTP transport)
 
@@ -213,4 +227,4 @@ Generated conversation keys use the configured issuer hostname (`MCP_ISSUER_URL`
 
 ## Agent selection
 
-See [multiagent configuration](multiagent.md) for Gateway SDK roster discovery, explicit catalogs, legacy local CLI discovery, `agent_id` selectors, Discord mapping precedence and the shared trust model. Every authenticated client can select every configured agent; generic chat requires no Discord mapping.
+See [multiagent configuration](multiagent.md) for Gateway SDK roster discovery, explicit catalogs, `agent_id` selectors, Discord mapping precedence and the shared trust model. Every authenticated client can select every configured agent; generic chat requires no Discord mapping.

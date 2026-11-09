@@ -6,6 +6,7 @@ import { DiscordService, loadDiscordConfig, type DiscordConfig } from '../../ope
 import { channelReader } from '../../openclaw/discord-read.js';
 import { threadInvoker } from '../../openclaw/discord-thread.js';
 import { DiscordError } from '../../openclaw/discord-channels.js';
+import { discordTurnOutput } from '../../mcp/tools/discord-output.js';
 import type {
   DiscordAgentTransport,
   DiscordAgentRequest,
@@ -64,13 +65,9 @@ afterEach(async () => {
 async function fixture(archived = false) {
   const dir = await mkdtemp(join(tmpdir(), 'discord-sdk-workflow-'));
   const config: DiscordConfig = {
-    executable: '/does-not-exist',
     stateDir: dir,
     targets: [target],
-    cliGatewayInstance: 'home',
-    gatewayReadsEnabled: true,
-    threadCreateMode: 'gateway',
-    agentTransport: 'sdk',
+    gatewayInstance: 'home',
     acknowledgeInboundRouting: true,
     threadMember: { userId: '400000000000000006', accountId: 'bot' },
   };
@@ -112,9 +109,6 @@ async function fixture(archived = false) {
   });
   const generation = deferred<any>();
   const started = deferred<void>();
-  const runner = vi.fn(async () => {
-    throw new Error('CLI must never execute');
-  });
   const agent = {
     ready: vi.fn(async () => {
       events.push('ready');
@@ -147,7 +141,6 @@ async function fixture(archived = false) {
   const make = () =>
     new DiscordService(
       config,
-      runner,
       undefined,
       undefined,
       channelReader(instances, config, fetcher),
@@ -164,7 +157,6 @@ async function fixture(archived = false) {
     fetcher,
     generation,
     started,
-    runner,
     agent,
     member,
     publish,
@@ -174,33 +166,64 @@ async function fixture(archived = false) {
   fixtures.push(f);
   return f;
 }
-describe('SDK opt-in and rollback', () => {
-  it('keeps CLI default and rejects incomplete SDK opt-in', () => {
+describe('required SDK adapters', () => {
+  it('requires an explicit single Gateway instance', () => {
     const env = {
       MCP_DISCORD_ENABLED: 'true',
       MCP_DISCORD_STATE_DIR: '/fixture',
       MCP_DISCORD_TARGETS: JSON.stringify([target]),
     };
-    expect(loadDiscordConfig(env)?.agentTransport).toBe('cli');
-    expect(() => loadDiscordConfig({ ...env, MCP_DISCORD_AGENT_TRANSPORT: 'automatic' })).toThrow(
-      'AGENT_TRANSPORT_INVALID'
-    );
-    expect(() => loadDiscordConfig({ ...env, MCP_DISCORD_AGENT_TRANSPORT: 'sdk' })).toThrow(
-      'SDK_REQUIRES_GATEWAY_READS_AND_CREATE'
-    );
+    expect(() => loadDiscordConfig(env)).toThrow('DISCORD_GATEWAY_INSTANCE_REQUIRED');
     expect(
-      loadDiscordConfig({
-        ...env,
-        MCP_DISCORD_AGENT_TRANSPORT: 'sdk',
-        MCP_DISCORD_THREAD_CREATE_MODE: 'gateway',
-        MCP_DISCORD_GATEWAY_READS_ENABLED: 'true',
-        MCP_DISCORD_CLI_GATEWAY_INSTANCE: 'home',
-      })?.agentTransport
-    ).toBe('sdk');
+      loadDiscordConfig({ ...env, MCP_DISCORD_GATEWAY_INSTANCE: 'home' })?.gatewayInstance
+    ).toBe('home');
   });
-  it('requires the SDK and read adapters rather than falling back to CLI', async () => {
+  it.each(['', ' ', '../default', 'home/remote'])(
+    'rejects invalid Gateway association %j',
+    (instance) => {
+      expect(() =>
+        loadDiscordConfig({
+          MCP_DISCORD_ENABLED: 'true',
+          MCP_DISCORD_STATE_DIR: '/fixture',
+          MCP_DISCORD_TARGETS: JSON.stringify([target]),
+          MCP_DISCORD_GATEWAY_INSTANCE: instance,
+        })
+      ).toThrow('DISCORD_GATEWAY_INSTANCE_REQUIRED');
+    }
+  );
+  it('does not accept the removed instance alias or expose transport selection', () => {
+    const env = {
+      MCP_DISCORD_ENABLED: 'true',
+      MCP_DISCORD_STATE_DIR: '/fixture',
+      MCP_DISCORD_TARGETS: JSON.stringify([target]),
+    };
+    expect(() => loadDiscordConfig({ ...env, MCP_DISCORD_CLI_GATEWAY_INSTANCE: 'home' })).toThrow(
+      'DISCORD_GATEWAY_INSTANCE_REQUIRED'
+    );
+    const config = loadDiscordConfig({
+      ...env,
+      MCP_DISCORD_GATEWAY_INSTANCE: 'home',
+      MCP_DISCORD_AGENT_TRANSPORT: 'cli',
+      MCP_DISCORD_EXECUTABLE: '/never/run',
+      MCP_DISCORD_CLI_TIMEOUT_MS: '1',
+      MCP_DISCORD_THREAD_CREATE_MODE: 'cli',
+      MCP_DISCORD_GATEWAY_READS_ENABLED: 'false',
+    });
+    for (const key of [
+      'agentTransport',
+      'executable',
+      'cliTimeoutMs',
+      'threadCreateMode',
+      'gatewayReadsEnabled',
+      'cliGatewayInstance',
+    ])
+      expect(config).not.toHaveProperty(key);
+    expect(JSON.stringify(discordTurnOutput)).not.toContain('"cli"');
+    expect(JSON.stringify(discordTurnOutput)).not.toContain('thread_create_fallback');
+  });
+  it('requires the SDK and read adapters without a fallback', async () => {
     const f = await fixture();
-    expect(() => new DiscordService(f.config, f.runner)).toThrow('SDK_ADAPTER_REQUIRED');
+    expect(() => new DiscordService(f.config)).toThrow('SDK_ADAPTER_REQUIRED');
   });
 });
 describe('ordinary Discord workflows without subprocesses', () => {
@@ -274,7 +297,6 @@ describe('ordinary Discord workflows without subprocesses', () => {
       });
       expect(read).not.toHaveProperty('conversationReadOrigin');
       expect(read.args).not.toHaveProperty('conversationReadOrigin');
-      expect(f.runner).not.toHaveBeenCalled();
       expect(f.agent.run).toHaveBeenCalledOnce();
       expect(f.publish).toHaveBeenCalledOnce();
       expect(await readFile(join(f.dir, input.operation_id + '.json'), 'utf8')).not.toContain(
@@ -302,7 +324,6 @@ describe('ordinary Discord workflows without subprocesses', () => {
       limit: 10,
     });
     await expect(f.service.threads({ target: 'work', before })).rejects.toThrow('Pagination');
-    expect(f.runner).not.toHaveBeenCalled();
   });
   it('blocks lack of SDK authority before creation, member-add or publication', async () => {
     const f = await fixture();
@@ -314,7 +335,6 @@ describe('ordinary Discord workflows without subprocesses', () => {
     expect(f.fetcher).not.toHaveBeenCalled();
     expect(f.publish).not.toHaveBeenCalled();
     expect(f.member).not.toHaveBeenCalled();
-    expect(f.runner).not.toHaveBeenCalled();
   });
   it.each([401, 403, 429])(
     'fails closed on HTTP preflight %i without CLI fallback',
@@ -327,7 +347,6 @@ describe('ordinary Discord workflows without subprocesses', () => {
       });
       expect(f.publish).not.toHaveBeenCalled();
       expect(f.agent.run).not.toHaveBeenCalled();
-      expect(f.runner).not.toHaveBeenCalled();
     }
   );
   it('never falls back to CLI thread creation even on a proven connection refusal in SDK mode', async () => {
@@ -343,7 +362,6 @@ describe('ordinary Discord workflows without subprocesses', () => {
       error_code: 'THREAD_GATEWAY_UNREACHABLE',
       thread_create_transport: 'gateway',
     });
-    expect(f.runner).not.toHaveBeenCalled();
     expect(f.publish).not.toHaveBeenCalled();
   });
   it('retains policy denials, route assertions and imported binding checks', async () => {
@@ -394,7 +412,7 @@ describe('ordinary Discord workflows without subprocesses', () => {
     expect(f.publish).not.toHaveBeenCalled();
     expect(f.agent.run).not.toHaveBeenCalled();
   });
-  it('keeps uncertain SDK dispatch and restart read-only across explicit CLI rollback', async () => {
+  it('keeps uncertain SDK dispatch and restart read-only after a service restart', async () => {
     const f = await fixture();
     f.agent.run.mockRejectedValue(new DiscordError('SDK_OUTCOME_UNKNOWN', true));
     await f.service.reply(reply);
@@ -404,7 +422,6 @@ describe('ordinary Discord workflows without subprocesses', () => {
       error_code: 'SDK_OUTCOME_UNKNOWN',
     });
     const before = await readFile(join(f.dir, input.operation_id + '.json'), 'utf8');
-    f.config.agentTransport = 'cli';
     const restarted = f.make();
     expect(await restarted.reply(reply)).toMatchObject({
       status: 'run_unknown',
@@ -414,7 +431,6 @@ describe('ordinary Discord workflows without subprocesses', () => {
     expect((await readdir(f.dir)).some((name) => name.endsWith('.lock'))).toBe(true);
     expect(f.publish).toHaveBeenCalledOnce();
     expect(f.agent.run).toHaveBeenCalledOnce();
-    expect(f.runner).not.toHaveBeenCalled();
   });
   it('persists denied agent admission as failed and keeps publication evidence', async () => {
     const f = await fixture();
@@ -426,7 +442,6 @@ describe('ordinary Discord workflows without subprocesses', () => {
       error_code: 'SDK_REQUEST_REJECTED',
       request_verified: true,
     });
-    expect(f.runner).not.toHaveBeenCalled();
   });
   it('does not invent exact-ID delivery verification', async () => {
     const f = await fixture();
@@ -483,6 +498,5 @@ describe('ordinary Discord workflows without subprocesses', () => {
     });
     await expect(f.service.cancel(input.operation_id)).rejects.toThrow('SDK_CANCEL_UNCONFIRMED');
     expect(f.agent.cancel).toHaveBeenCalledOnce();
-    expect(f.runner).not.toHaveBeenCalled();
   });
 });

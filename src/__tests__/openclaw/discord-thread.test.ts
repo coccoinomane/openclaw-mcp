@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DiscordService, loadDiscordConfig, type DiscordConfig } from '../../openclaw/discord.js';
 import { threadInvoker, threadMemberAdder } from '../../openclaw/discord-thread.js';
+import type { DiscordAgentRequest, DiscordAgentTransport } from '../../openclaw/discord-agent.js';
 import { channelReader } from '../../openclaw/discord-read.js';
 import { discordTools, handleDiscord } from '../../mcp/tools/discord.js';
 
@@ -20,12 +21,9 @@ const target = {
   normalRouting: true,
 };
 const base: DiscordConfig = {
-  executable: 'never-executed',
   stateDir: '/unused-test-state',
   targets: [target],
-  cliGatewayInstance: 'home',
-  gatewayReadsEnabled: true,
-  threadCreateMode: 'gateway',
+  gatewayInstance: 'home',
   threadMember: { userId: owner, accountId: 'bot' },
   acknowledgeInboundRouting: true,
 };
@@ -88,22 +86,21 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
       ? new Response(null, { status: 204 })
       : new Response(JSON.stringify({ id: thread, user_id: owner }));
   });
-  const runner = vi.fn(async (_exe: string, args: string[]) => {
-    events.push(args[0]);
-    if (args[0] === 'agent') {
+  const agent = {
+    ready: vi.fn(async () => {}),
+    run: vi.fn(async (_request: DiscordAgentRequest) => {
+      events.push('agent');
       expect(await record()).toMatchObject({
         member_status: config.threadMember ? 'verified' : 'disabled',
         status: 'running',
       });
       return { status: 'ok', runId: 'mock-run' };
-    }
-    if (args[2] === 'create') return { payload: { ok: true, thread: { id: thread } } };
-    throw new Error('Unexpected CLI');
-  });
+    }),
+    cancel: vi.fn(async () => {}),
+  } satisfies DiscordAgentTransport;
   const service = () => {
     const instance = new DiscordService(
       config,
-      runner,
       undefined,
       undefined,
       channelReader(instances, config, gateway),
@@ -112,16 +109,17 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
       async (_t, _id, _prompt, _op, sent) => {
         events.push('publish');
         await sent('300000000000000004');
-      }
+      },
+      agent
     );
     services.push(instance);
     return instance;
   };
-  return { config, events, gateway, member, runner, record, service: service(), restart: service };
+  return { config, events, gateway, member, agent, record, service: service(), restart: service };
 }
 
-describe('Gateway-first new threads', () => {
-  it('persists thread then verified owner membership before unchanged ordinary CLI turn; replay is read-only', async () => {
+describe('Gateway-only new threads', () => {
+  it('persists thread then verified owner membership before ordinary SDK turn; replay is read-only', async () => {
     const f = await fixture();
     const result = await finished(f.service, input);
     expect(result).toMatchObject({
@@ -165,34 +163,24 @@ describe('Gateway-first new threads', () => {
       redirect: 'error',
       headers: { Authorization: 'Bot mock-bot-secret' },
     });
-    expect(f.runner.mock.calls[0][1]).toEqual([
-      'agent',
-      '--agent',
-      'main',
-      '--session-key',
-      'agent:main:discord:channel:' + thread,
-      '--message-file',
-      expect.any(String),
-      '--deliver',
-      '--reply-channel',
-      'discord',
-      '--reply-to',
-      'channel:' + thread,
-      '--reply-account',
-      'bot',
-      '--timeout',
-      '600',
-      '--json',
-    ]);
+    expect(f.agent.run.mock.calls[0][0]).toEqual({
+      message: input.prompt,
+      agentId: 'main',
+      sessionKey: 'agent:main:discord:channel:' + thread,
+      threadId: thread,
+      accountId: 'bot',
+      idempotencyKey: expect.any(String),
+    });
+    expect(f.agent.ready).toHaveBeenCalledOnce();
     expect(await f.restart().ask(input)).toEqual(result);
     expect(await f.service.status(input.operation_id)).toEqual(result);
     expect(f.gateway).toHaveBeenCalledTimes(3);
     expect(f.member).toHaveBeenCalledTimes(2);
-    expect(f.runner).toHaveBeenCalledTimes(1);
+    expect(f.agent.run).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(await f.record())).not.toContain('secret');
     expect(JSON.stringify(result)).not.toContain('secret');
   });
-  it('uses CLI only on proven pre-dispatch connection refusal', async () => {
+  it('fails closed on proven pre-dispatch connection refusal without a second create', async () => {
     const f = await fixture();
     f.gateway.mockResolvedValueOnce(
       envelope({ ok: true, channel: { id: channel, guild_id: guild, type: 0 } })
@@ -201,19 +189,28 @@ describe('Gateway-first new threads', () => {
       Object.assign(new Error('private'), { cause: { code: 'ECONNREFUSED' } })
     );
     expect(await finished(f.service, input)).toMatchObject({
-      status: 'completed',
-      thread_create_transport: 'cli',
-      thread_create_fallback: 'THREAD_GATEWAY_UNREACHABLE',
+      status: 'creation_unknown',
+      thread_create_transport: 'gateway',
+      error_code: 'THREAD_GATEWAY_UNREACHABLE',
     });
-    expect(f.runner.mock.calls.map((c) => c[1][0])).toEqual(['message', 'agent']);
+    expect(f.gateway).toHaveBeenCalledTimes(2);
+    expect(f.agent.run).not.toHaveBeenCalled();
+    expect(f.member).not.toHaveBeenCalled();
+    expect(await f.restart().ask(input)).toMatchObject({
+      error_code: 'THREAD_GATEWAY_UNREACHABLE',
+    });
+    expect(f.gateway).toHaveBeenCalledTimes(2);
   });
-  it('respects explicit CLI mode', async () => {
-    const f = await fixture({ threadCreateMode: 'cli' });
+  it('uses the Gateway create adapter without membership when not configured', async () => {
+    const f = await fixture({ threadMember: undefined });
     expect(await finished(f.service, input)).toMatchObject({
       status: 'completed',
-      thread_create_transport: 'cli',
+      thread_create_transport: 'gateway',
+      member_status: 'disabled',
     });
-    expect(f.events).not.toContain('thread-create');
+    expect(f.events).toContain('thread-create');
+    expect(f.member).not.toHaveBeenCalled();
+    expect(f.agent.run).toHaveBeenCalledOnce();
   });
   it.each([401, 403, 404, 429, 500, 'timeout', 'reset', 'malformed', 'denied'])(
     'never falls back after %s',
@@ -239,7 +236,7 @@ describe('Gateway-first new threads', () => {
       expect(JSON.stringify(result)).not.toContain('private-secret');
       expect(await f.restart().ask(input)).toEqual(result);
       expect(f.gateway).toHaveBeenCalledTimes(2);
-      expect(f.runner).not.toHaveBeenCalled();
+      expect(f.agent.run).not.toHaveBeenCalled();
       expect(f.member).not.toHaveBeenCalled();
     }
   );
@@ -251,7 +248,7 @@ describe('Gateway-first new threads', () => {
       error_code: 'GATEWAY_READ_FAILED',
     });
     expect(f.gateway).toHaveBeenCalledTimes(1);
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
   it.each([true, false])(
     'retains partial known thread, even failed envelope=%s',
@@ -279,7 +276,7 @@ describe('Gateway-first new threads', () => {
         member_verified: false,
       });
       expect(await f.restart().ask(input)).toEqual(result);
-      expect(f.runner).not.toHaveBeenCalled();
+      expect(f.agent.run).not.toHaveBeenCalled();
       expect(f.member).not.toHaveBeenCalled();
     }
   );
@@ -303,7 +300,7 @@ describe('Gateway-first new threads', () => {
         member_verified: false,
       });
       expect(f.member).not.toHaveBeenCalled();
-      expect(f.runner).not.toHaveBeenCalled();
+      expect(f.agent.run).not.toHaveBeenCalled();
     }
   );
   it.each(['put-denied', 'put-timeout', 'get-absent', 'get-wrong-user', 'get-malformed'])(
@@ -334,7 +331,7 @@ describe('Gateway-first new threads', () => {
         error_code: 'THREAD_MEMBER_NOT_VERIFIED',
       });
       expect(await f.restart().ask(input)).toEqual(result);
-      expect(f.runner).not.toHaveBeenCalled();
+      expect(f.agent.run).not.toHaveBeenCalled();
       expect(JSON.stringify(result)).not.toContain('secret');
       expect(f.member).toHaveBeenCalledTimes(failure.startsWith('put') ? 1 : 2);
     }
@@ -345,18 +342,17 @@ describe('operator configuration and closed inputs', () => {
   it('requires explicit opt-in with bounded configuration and credentials', () => {
     const vars = {
       MCP_DISCORD_ENABLED: 'true',
+      MCP_DISCORD_GATEWAY_INSTANCE: 'home',
       MCP_DISCORD_STATE_DIR: '/unused-test-state',
       MCP_DISCORD_TARGETS: JSON.stringify([target]),
     };
     expect(loadDiscordConfig(vars)).toMatchObject({
-      threadCreateMode: 'cli',
+      gatewayInstance: 'home',
       threadMember: undefined,
     });
-    expect(threadInvoker(instances, { ...base, threadCreateMode: 'cli' })).toBeUndefined();
+    expect(threadInvoker(instances, base)).toEqual(expect.any(Function));
     expect(threadMemberAdder({ ...base, threadMember: undefined }, env)).toBeUndefined();
-    expect(() =>
-      loadDiscordConfig({ ...vars, MCP_DISCORD_THREAD_CREATE_MODE: 'anything' })
-    ).toThrow();
+    expect(() => loadDiscordConfig({ ...vars, MCP_DISCORD_GATEWAY_INSTANCE: undefined })).toThrow();
     expect(() =>
       loadDiscordConfig({ ...vars, MCP_DISCORD_THREAD_MEMBER_ENABLED: 'true' })
     ).toThrow();

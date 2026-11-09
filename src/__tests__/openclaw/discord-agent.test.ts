@@ -54,10 +54,8 @@ async function fixture(grant: string[] | null = ['operator.read', 'operator.writ
   dirs.push(dir);
   const config: DiscordConfig = {
     stateDir: dir,
-    executable: 'never',
     targets: [],
-    agentTransport: 'sdk',
-    cliGatewayInstance: 'home',
+    gatewayInstance: 'home',
   };
   const env = { MCP_DISCORD_SDK_STATE_DIR: dir };
   const auth = gatewayDiscoveryAuth('home', 'ws://127.0.0.1:18789/', {

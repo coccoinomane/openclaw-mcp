@@ -1,27 +1,6 @@
-import { execFile } from 'node:child_process';
 import { discoverGatewayAgents, type GatewayRosterLoader } from './gateway-discovery.js';
 import type { DiscordConfig } from './discord.js';
 import type { AgentBinding, InstanceConfig } from './types.js';
-
-export type CatalogRunner = (executable: string, args: string[]) => Promise<unknown>;
-
-const runCatalogCommand: CatalogRunner = (executable, args) =>
-  new Promise((resolve, reject) => {
-    execFile(
-      executable,
-      args,
-      { timeout: 30_000, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' },
-      (error, stdout) => {
-        // Do not expose subprocess stderr or source data, which can contain local paths.
-        if (error) return reject(new Error('OpenClaw agent discovery command failed'));
-        try {
-          resolve(JSON.parse(stdout));
-        } catch {
-          reject(new Error('OpenClaw agent discovery returned invalid JSON'));
-        }
-      }
-    );
-  });
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -45,7 +24,7 @@ function bindings(value: unknown, roster: Array<{ id: string }>): AgentBinding[]
   if (!Array.isArray(value)) throw new Error('Agent catalog bindings must be an array');
   return value.map((entry: unknown) => {
     if (!object(entry) || !object(entry.match)) throw new Error('Invalid catalog binding');
-    // description is emitted by the official CLI; routing overrides are unsupported.
+    // Descriptions are display-only; routing overrides are unsupported.
     if (Object.keys(entry).some((key) => !['agentId', 'match', 'description'].includes(key)))
       throw new Error('Unsupported catalog binding field');
     const agentId = id(entry.agentId);
@@ -59,17 +38,11 @@ function bindings(value: unknown, roster: Array<{ id: string }>): AgentBinding[]
 export async function loadAgentCatalog(
   configs: InstanceConfig[],
   env: NodeJS.ProcessEnv = process.env,
-  runner: CatalogRunner = runCatalogCommand,
   gatewayLoader: GatewayRosterLoader = discoverGatewayAgents
 ): Promise<InstanceConfig[]> {
   const gateway = env.MCP_AGENT_DISCOVERY === 'gateway';
-  if (env.MCP_AGENT_DISCOVERY && !['cli', 'gateway'].includes(env.MCP_AGENT_DISCOVERY))
-    throw new Error('MCP_AGENT_DISCOVERY must be cli or gateway when enabled');
-  if (
-    env.MCP_AGENT_DISCOVERY !== 'cli' &&
-    (env.MCP_AGENT_DISCOVERY_INSTANCE || env.MCP_AGENT_DISCOVERY_EXECUTABLE)
-  )
-    throw new Error('Agent discovery instance/executable requires MCP_AGENT_DISCOVERY=cli');
+  if (env.MCP_AGENT_DISCOVERY && env.MCP_AGENT_DISCOVERY !== 'gateway')
+    throw new Error('MCP_AGENT_DISCOVERY must be gateway when enabled');
   if (!gateway && env.MCP_AGENT_DISCOVERY_STATE_DIR)
     throw new Error('Agent discovery state directory requires MCP_AGENT_DISCOVERY=gateway');
   const result = configs.map((config) => ({ ...config }));
@@ -136,21 +109,6 @@ export async function loadAgentCatalog(
       // defaultId/selectionRequired are not new routing rules: retain configured/model defaults.
     }
   }
-  if (env.MCP_AGENT_DISCOVERY === 'cli') {
-    const instance = env.MCP_AGENT_DISCOVERY_INSTANCE;
-    if (!instance || !result.some((config) => config.name === instance))
-      throw new Error('MCP_AGENT_DISCOVERY_INSTANCE must name a configured instance');
-    if (
-      assigned.has(instance) ||
-      result.find((config) => config.name === instance)?.agents !== undefined
-    )
-      throw new Error(`Multiple agent catalog sources for instance "${instance}"`);
-    const executable = env.MCP_AGENT_DISCOVERY_EXECUTABLE || 'openclaw';
-    // Separate commands are required: list --bindings emits descriptions, not raw matches.
-    const roster = await runner(executable, ['agents', 'list', '--json']);
-    const routes = await runner(executable, ['agents', 'bindings', '--json']);
-    apply(instance, roster, routes);
-  }
   // Validate inline per-instance catalogs too.
   for (const config of result) {
     if (config.agents !== undefined) config.agents = agents(config.agents);
@@ -175,7 +133,7 @@ export function includeConfiguredDiscordAgents(
     if (!config.agents.some((agent) => agent.id.toLowerCase() === normalized))
       config.agents.push({ id: normalized });
   };
-  const local = discord.cliGatewayInstance ?? (configs.length === 1 ? configs[0].name : undefined);
+  const local = discord.gatewayInstance ?? (configs.length === 1 ? configs[0].name : undefined);
   for (const mapping of [...discord.targets, ...(discord.discoveryScopes ?? [])])
     add(local, mapping.agentId);
   for (const policy of discord.creationPolicies ?? []) add(policy.instance, policy.agentId);

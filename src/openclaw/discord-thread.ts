@@ -9,21 +9,13 @@ export type ThreadInvoker = (
   operation: string
 ) => Promise<any>;
 
-/** Only this pre-dispatch failure authorizes CLI fallback. */
-export class ThreadGatewayUnavailable extends DiscordError {
-  constructor() {
-    super('THREAD_GATEWAY_UNREACHABLE');
-  }
-}
-
 /** Fixed message/thread-create request; never a general Gateway proxy. */
 export function threadInvoker(
   instances: InstanceConfig[],
   config: DiscordConfig,
   fetcher = fetch
-): ThreadInvoker | undefined {
-  if (config.threadCreateMode !== 'gateway') return undefined;
-  const matches = instances.filter((i) => i.name === config.cliGatewayInstance);
+): ThreadInvoker {
+  const matches = instances.filter((i) => i.name === config.gatewayInstance);
   if (matches.length !== 1 || !matches[0].token)
     throw new DiscordError('THREAD_GATEWAY_CONFIGURATION_INVALID');
   const instance = { ...matches[0] };
@@ -70,7 +62,7 @@ export function threadInvoker(
     } catch (error) {
       // A refused connection cannot have dispatched the mutation. Timeouts/reset errors can.
       if ((error as any)?.code === 'ECONNREFUSED' || (error as any)?.cause?.code === 'ECONNREFUSED')
-        throw new ThreadGatewayUnavailable();
+        throw new DiscordError('THREAD_GATEWAY_UNREACHABLE');
       throw new DiscordError('GATEWAY_OUTCOME_UNKNOWN', true);
     }
     // Even a 404 may conceal a policy denial; no HTTP reply authorizes another create.

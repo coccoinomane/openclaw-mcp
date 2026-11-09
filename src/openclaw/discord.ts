@@ -17,16 +17,10 @@ import {
 } from './discord-channels.js';
 import type { DiscordAgentTransport } from './discord-agent.js';
 import type { DiscordReader } from './discord-read.js';
-import {
-  ThreadGatewayUnavailable,
-  type ThreadInvoker,
-  type ThreadMemberAdder,
-} from './discord-thread.js';
+import type { ThreadInvoker, ThreadMemberAdder } from './discord-thread.js';
 import { log } from '../utils/logger.js';
-import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 
 export interface DiscordSelectors {
@@ -36,18 +30,13 @@ export interface DiscordSelectors {
 export interface DiscordConfig {
   /** Imported static bindings only restrict/reassign already admitted routes. */
   importedRouteAgent?: (target: AdmittedTarget, channelId: string) => string | undefined;
-  agentTransport?: 'cli' | 'sdk';
-  executable: string;
   stateDir: string;
   discoveryScopes?: DiscoveryScope[];
   channelWhitelist?: string[];
   channelBlacklist?: string[];
   creationPolicies?: CreationPolicy[];
-  cliGatewayInstance?: string;
-  gatewayReadsEnabled?: boolean;
-  cliTimeoutMs?: number;
+  gatewayInstance?: string;
   maxOperations?: number;
-  threadCreateMode?: 'cli' | 'gateway';
   threadMember?: { userId: string; accountId: string };
   forwardingRequesterName?: string;
   acknowledgeInboundRouting?: boolean;
@@ -60,7 +49,6 @@ export interface DiscordConfig {
     normalRouting?: boolean;
   }>;
 }
-export type CliRunner = (executable: string, args: string[], timeout: number) => Promise<unknown>;
 const snowflake = /^[1-9][0-9]{16,19}$/;
 const slug = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 function check(value: unknown, pattern: RegExp, label: string): asserts value is string {
@@ -69,8 +57,6 @@ function check(value: unknown, pattern: RegExp, label: string): asserts value is
 export function loadDiscordConfig(env = process.env): DiscordConfig | undefined {
   if (env.MCP_DISCORD_ENABLED !== 'true') return undefined;
   const config: DiscordConfig = {
-    agentTransport: (env.MCP_DISCORD_AGENT_TRANSPORT || 'cli') as 'cli' | 'sdk',
-    executable: env.MCP_DISCORD_EXECUTABLE || 'openclaw',
     stateDir: env.MCP_DISCORD_STATE_DIR || '',
     targets: JSON.parse(env.MCP_DISCORD_TARGETS || '[]'),
     discoveryScopes: JSON.parse(env.MCP_DISCORD_DISCOVERY_SCOPES ?? '[]'),
@@ -80,9 +66,7 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
       env.MCP_DISCORD_CHANNEL_CREATE_ENABLED === 'true'
         ? JSON.parse(env.MCP_DISCORD_CREATION_POLICIES || '[]')
         : undefined,
-    cliGatewayInstance: env.MCP_DISCORD_CLI_GATEWAY_INSTANCE,
-    gatewayReadsEnabled: env.MCP_DISCORD_GATEWAY_READS_ENABLED === 'true',
-    threadCreateMode: (env.MCP_DISCORD_THREAD_CREATE_MODE || 'cli') as 'cli' | 'gateway',
+    gatewayInstance: env.MCP_DISCORD_GATEWAY_INSTANCE,
     threadMember:
       env.MCP_DISCORD_THREAD_MEMBER_ENABLED === 'true'
         ? {
@@ -92,24 +76,14 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
         : undefined,
     forwardingRequesterName: env.MCP_DISCORD_FORWARDING_REQUESTER_NAME || undefined,
     maxOperations: Number(env.MCP_DISCORD_MAX_OPERATIONS ?? 4),
-    cliTimeoutMs: env.MCP_DISCORD_CLI_TIMEOUT_MS
-      ? Number(env.MCP_DISCORD_CLI_TIMEOUT_MS)
-      : undefined,
     acknowledgeInboundRouting: env.MCP_DISCORD_ACKNOWLEDGE_INBOUND_ROUTING === 'true',
   };
   validateConfig(config);
   return config;
 }
 function validateConfig(config: DiscordConfig) {
-  if (config.agentTransport !== undefined && !['cli', 'sdk'].includes(config.agentTransport))
-    throw new DiscordError('AGENT_TRANSPORT_INVALID');
-  if (
-    config.agentTransport === 'sdk' &&
-    (!config.cliGatewayInstance ||
-      !config.gatewayReadsEnabled ||
-      config.threadCreateMode !== 'gateway')
-  )
-    throw new DiscordError('SDK_REQUIRES_GATEWAY_READS_AND_CREATE');
+  if (typeof config.gatewayInstance !== 'string' || !slug.test(config.gatewayInstance))
+    throw new DiscordError('DISCORD_GATEWAY_INSTANCE_REQUIRED');
   for (const [label, values] of Object.entries({
     targets: config.targets,
     discoveryScopes: config.discoveryScopes === undefined ? [] : config.discoveryScopes,
@@ -159,13 +133,6 @@ function validateConfig(config: DiscordConfig) {
   )
     throw new DiscordError('OPERATION_LIMIT_INVALID');
   if (
-    config.threadCreateMode !== undefined &&
-    !['cli', 'gateway'].includes(config.threadCreateMode)
-  )
-    throw new DiscordError('THREAD_CREATE_MODE_INVALID');
-  if (config.threadCreateMode === 'gateway' && !config.cliGatewayInstance)
-    throw new DiscordError('THREAD_GATEWAY_CONFIGURATION_INVALID');
-  if (
     config.forwardingRequesterName !== undefined &&
     (typeof config.forwardingRequesterName !== 'string' ||
       !config.forwardingRequesterName.trim() ||
@@ -187,15 +154,7 @@ function validateConfig(config: DiscordConfig) {
     )
       throw new DiscordError('THREAD_MEMBER_ACCOUNT_MISMATCH');
   }
-  if (
-    config.cliTimeoutMs !== undefined &&
-    (!Number.isInteger(config.cliTimeoutMs) ||
-      config.cliTimeoutMs < 1000 ||
-      config.cliTimeoutMs > 180000)
-  )
-    throw new Error('MCP_DISCORD_CLI_TIMEOUT_MS must be an integer from 1000 to 180000');
   if (!isAbsolute(config.stateDir)) throw new Error('MCP_DISCORD_STATE_DIR must be absolute');
-  if (!config.executable || config.executable.includes('\0')) throw new Error('Invalid executable');
   if (
     !Array.isArray(config.targets) ||
     (!config.targets.length && !config.discoveryScopes?.length && !config.creationPolicies?.length)
@@ -204,7 +163,7 @@ function validateConfig(config: DiscordConfig) {
   if (config.creationPolicies) {
     if (
       !config.creationPolicies.length ||
-      !config.cliGatewayInstance ||
+      !config.gatewayInstance ||
       config.acknowledgeInboundRouting !== true
     )
       throw new DiscordError('CREATION_ROUTING_ACKNOWLEDGEMENT_REQUIRED');
@@ -215,7 +174,7 @@ function validateConfig(config: DiscordConfig) {
       check(p.categoryId, snowflake, 'category ID');
       check(p.accountId, slug, 'account');
       check(p.agentId, /^[a-z0-9][a-z0-9_-]{0,63}$/, 'agent');
-      if (p.instance !== config.cliGatewayInstance || policies.has(p.name))
+      if (p.instance !== config.gatewayInstance || policies.has(p.name))
         throw new DiscordError('CREATION_GATEWAY_MISMATCH');
       policies.add(p.name);
     }
@@ -231,100 +190,6 @@ function validateConfig(config: DiscordConfig) {
     if (names.has(t.name)) throw new Error('Duplicate target name');
     names.add(t.name);
   }
-}
-export const runCli: CliRunner = (executable, args, timeout) =>
-  new Promise((resolve, reject) => {
-    const started = performance.now();
-    const elapsed = () => Math.round(performance.now() - started);
-    let firstStdoutMs: number | null = null;
-    let exitMs: number | null = null;
-    let closeMs: number | null = null;
-    // Inherit provenance unchanged, including OPENCLAW_SHELL and caller identity.
-    const child = execFile(
-      executable,
-      args,
-      { shell: false, env: process.env, timeout, maxBuffer: 4 * 1024 * 1024 },
-      (error, stdout, stderr) => {
-        const callbackMs = elapsed();
-        let parsed: any;
-        let validJson = false;
-        try {
-          parsed = JSON.parse(stdout);
-          validJson = true;
-        } catch {
-          /* Never log process output. */
-        }
-        if (error) {
-          const timedOut = error.killed && error.code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
-          const classification = timedOut ? 'CLI_TIMEOUT' : 'CLI_EXIT_NONZERO';
-          log(
-            'Discord CLI diagnostic ' +
-              JSON.stringify({
-                classification,
-                elapsed_ms: callbackMs,
-                first_stdout_ms: firstStdoutMs,
-                exit_ms: exitMs,
-                close_ms: closeMs,
-                callback_ms: callbackMs,
-                signal: ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGABRT'].includes(error.signal ?? '')
-                  ? error.signal
-                  : error.signal
-                    ? 'OTHER'
-                    : null,
-                code:
-                  typeof error.code === 'number'
-                    ? error.code
-                    : ['ENOENT', 'EACCES', 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'].includes(
-                          error.code ?? ''
-                        )
-                      ? error.code
-                      : error.code
-                        ? 'OTHER'
-                        : null,
-                stdout_bytes: new TextEncoder().encode(stdout).length,
-                stderr_bytes: new TextEncoder().encode(stderr).length,
-                valid_json: validJson,
-              })
-          );
-          // Keep known identities for recovery, but never accept failed stdout as success.
-          if (validJson && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            resolve({ ...parsed, _cliFailure: true, _cliCode: classification });
-          } else {
-            reject(new DiscordError(classification, true));
-          }
-          return;
-        }
-        if (validJson) resolve(parsed);
-        else reject(new DiscordError('CLI_INVALID_JSON', true));
-      }
-    );
-    child.stdout?.once('data', () => {
-      firstStdoutMs = elapsed();
-    });
-    child.once?.('exit', () => {
-      exitMs = elapsed();
-    });
-    // execFile invokes its callback from close; record close before that listener.
-    child.prependOnceListener?.('close', () => {
-      closeMs = elapsed();
-    });
-    // EOF is hygiene for noninteractive commands, not a proven timeout fix.
-    // These invocations never consume prompts from stdin. Deliver EOF to CLI startup.
-    if (args[0] === 'message' || (args[0] === 'agent' && args.includes('--message-file')))
-      child.stdin?.end();
-  });
-function payload(value: any): any {
-  const result = value?.payload ?? value;
-  const failed =
-    value?._cliFailure ||
-    value?.ok === false ||
-    value?.isError === true ||
-    result?.ok === false ||
-    result?.isError === true;
-  // A known thread survives a failing exit; never hide its identity or run into it.
-  if (failed && result?.thread?.id) return { ...result, partial: true };
-  if (!result || failed) throw new DiscordError(value?._cliCode ?? 'CLI_ACTION_REJECTED', true);
-  return result;
 }
 interface Operation {
   instance?: string;
@@ -358,15 +223,14 @@ interface Operation {
   session_key?: string;
   discord_url?: string;
   run_id?: string;
-  agent_transport?: 'cli' | 'sdk';
+  agent_transport?: 'sdk';
   agent_idempotency_key?: string;
   cancellation_status?: 'requested' | 'acknowledged' | 'unknown';
   delivery_status?: string;
   delivery_verified?: boolean;
   message_id?: string;
   generation_status?: string;
-  thread_create_transport?: 'cli' | 'gateway';
-  thread_create_fallback?: string;
+  thread_create_transport?: 'gateway';
   member_status?: 'disabled' | 'pending' | 'adding' | 'verified' | 'failed' | 'unknown';
   member_verified?: boolean;
   member_error_code?: string;
@@ -404,7 +268,6 @@ export class DiscordService {
 
   constructor(
     readonly config: DiscordConfig,
-    private readonly runner: CliRunner = runCli,
     invoke?: ChannelInvoker,
     private readonly resolveRoute?: DiscordRouteResolver,
     private readonly reader?: DiscordReader,
@@ -414,10 +277,8 @@ export class DiscordService {
     private readonly agent?: DiscordAgentTransport
   ) {
     validateConfig(config);
-    if (config.agentTransport === 'sdk' && (!agent || !reader))
-      throw new DiscordError('SDK_ADAPTER_REQUIRED');
-    if (config.threadCreateMode === 'gateway' && !invokeThread)
-      throw new DiscordError('THREAD_ADAPTER_REQUIRED');
+    if (!agent || !reader) throw new DiscordError('SDK_ADAPTER_REQUIRED');
+    if (!invokeThread) throw new DiscordError('THREAD_ADAPTER_REQUIRED');
     if (config.threadMember && !addThreadMember)
       throw new DiscordError('THREAD_MEMBER_ADAPTER_REQUIRED');
     if (config.creationPolicies) {
@@ -479,7 +340,7 @@ export class DiscordService {
     return (
       (input.agent_id === undefined || input.agent_id === t.agentId) &&
       (input.instance === undefined ||
-        input.instance === (t.instance ?? this.config.cliGatewayInstance))
+        input.instance === (t.instance ?? this.config.gatewayInstance))
     );
   }
   private assertSelectors(t: { agentId: string; instance?: string }, input: DiscordSelectors) {
@@ -528,21 +389,9 @@ export class DiscordService {
     assertTargetAllowed(this.config, t);
     return this.route(t, channelId);
   }
-  private async cli(t: DiscordConfig['targets'][number], args: string[]) {
-    if (this.config.agentTransport === 'sdk') throw new DiscordError('CLI_DISABLED');
-    return payload(
-      await this.runner(
-        this.config.executable,
-        ['message', ...args, '--channel', 'discord', '--account', t.accountId, '--json'],
-        this.config.cliTimeoutMs ?? 30000
-      )
-    );
-  }
   private async readInfo(t: AdmittedTarget, id: string) {
     check(id, snowflake, 'channel ID');
-    return this.reader && this.config.gatewayReadsEnabled === true && this.config.cliGatewayInstance
-      ? this.reader(t, { action: 'channel-info', channelId: id })
-      : this.cli(t, ['channel', 'info', '--target', 'channel:' + id]);
+    return this.reader!(t, { action: 'channel-info', channelId: id });
   }
   private verifyChannel(t: AdmittedTarget, id: string, c: any, parent = false) {
     assertTargetAllowed(this.config, t, id);
@@ -579,10 +428,7 @@ export class DiscordService {
     ]) {
       const key = scopeKey(t);
       if (lists.has(key)) continue;
-      const data =
-        this.reader && this.config.gatewayReadsEnabled === true && this.config.cliGatewayInstance
-          ? await this.reader(t, { action: 'channel-list' })
-          : await this.cli(t, ['channel', 'list', '--guild-id', t.guildId]);
+      const data = await this.reader!(t, { action: 'channel-list' });
       if (
         !data ||
         data.ok === false ||
@@ -643,7 +489,7 @@ export class DiscordService {
       }
       if (!this.matches(routed, input)) continue;
       channels.push({
-        instance: this.config.cliGatewayInstance,
+        instance: this.config.gatewayInstance,
         agent_id: routed.agentId,
         account_id: routed.accountId,
         target: t.name,
@@ -699,20 +545,13 @@ export class DiscordService {
     if (!input.archived && (input.before !== undefined || input.limit !== undefined))
       throw new Error('Pagination is only supported for archived public threads');
     await this.info(t, t.channelId, true);
-    const args = ['thread', 'list', '--guild-id', t.guildId, '--channel-id', t.channelId];
-    if (input.archived) args.push('--include-archived');
-    if (input.before) args.push('--before', input.before);
-    if (input.limit) args.push('--limit', String(input.limit));
-    const data =
-      this.config.agentTransport === 'sdk'
-        ? await this.reader!(t, {
-            action: 'thread-list',
-            channelId: t.channelId,
-            includeArchived: input.archived,
-            before: input.before,
-            limit: input.limit,
-          })
-        : await this.cli(t, args);
+    const data = await this.reader!(t, {
+      action: 'thread-list',
+      channelId: t.channelId,
+      includeArchived: input.archived,
+      before: input.before,
+      limit: input.limit,
+    });
     const raw = Array.isArray(data.threads) ? data : data.threads;
     if (!raw || !Array.isArray(raw.threads)) throw new Error('Unexpected thread list');
     const threads = raw.threads
@@ -734,7 +573,7 @@ export class DiscordService {
         discord_url: 'https://discord.com/channels/' + t.guildId + '/' + c.id,
       }));
     return {
-      instance: this.config.cliGatewayInstance,
+      instance: this.config.gatewayInstance,
       agent_id: t.agentId,
       account_id: t.accountId,
       threads,
@@ -788,13 +627,13 @@ export class DiscordService {
     this.assertSelectors(
       {
         agentId: storedAgent ?? t.agentId,
-        instance: result.instance ?? this.config.cliGatewayInstance,
+        instance: result.instance ?? this.config.gatewayInstance,
       },
       input
     );
     if (
       (storedAgent && storedAgent !== t.agentId) ||
-      (result.instance && result.instance !== this.config.cliGatewayInstance)
+      (result.instance && result.instance !== this.config.gatewayInstance)
     )
       throw new DiscordError('ROUTE_MISMATCH');
     assertTargetAllowed(this.config, t, result.channel_id);
@@ -805,13 +644,7 @@ export class DiscordService {
     assertServiceProvenance();
     const current = await this.status(id, input);
     const cancel = this.cancellations.get(id);
-    if (
-      this.config.agentTransport !== 'sdk' ||
-      !cancel ||
-      !this.active.has(id) ||
-      current.status !== 'running' ||
-      !current.run_id
-    )
+    if (!cancel || !this.active.has(id) || current.status !== 'running' || !current.run_id)
       throw new DiscordError('OWNED_ACCEPTED_RUN_REQUIRED');
     const cancellation = cancel();
     this.workers.add(cancellation);
@@ -907,10 +740,7 @@ export class DiscordService {
       typeof thread.thread_metadata?.archived !== 'boolean'
     )
       throw new DiscordError('THREAD_LOCKED_OR_UNVERIFIED');
-    const permissions =
-      this.config.agentTransport === 'sdk'
-        ? await this.reader!(t, { action: 'permissions', channelId: id })
-        : await this.cli(t, ['permissions', '--target', 'channel:' + id]);
+    const permissions = await this.reader!(t, { action: 'permissions', channelId: id });
     const p = permissions.permissions;
     if (
       !p ||
@@ -970,13 +800,7 @@ export class DiscordService {
   }
   private async prepare(input: any) {
     const replying = input.mode === 'reply';
-    if (
-      replying ||
-      this.config.agentTransport === 'sdk' ||
-      this.config.threadCreateMode === 'gateway' ||
-      this.config.threadMember
-    )
-      assertServiceProvenance();
+    assertServiceProvenance();
     const t = await this.target(input.target, replying ? input.channel_id : undefined);
     this.assertSelectors(t, input);
     const path = this.path(input.operation_id);
@@ -1036,18 +860,14 @@ export class DiscordService {
     }
     const op: Operation = {
       fingerprint,
-      instance: this.config.cliGatewayInstance,
+      instance: this.config.gatewayInstance,
       agent_id: t.agentId,
-      agent_transport: this.config.agentTransport ?? 'cli',
-      ...(this.config.agentTransport === 'sdk'
-        ? {
-            agent_idempotency_key:
-              'discord-run-' +
-              createHash('sha256')
-                .update(JSON.stringify([this.config.cliGatewayInstance, input.operation_id]))
-                .digest('hex'),
-          }
-        : {}),
+      agent_transport: 'sdk',
+      agent_idempotency_key:
+        'discord-run-' +
+        createHash('sha256')
+          .update(JSON.stringify([this.config.gatewayInstance, input.operation_id]))
+          .digest('hex'),
       ...(replying ? { kind: 'thread_reply' as const } : {}),
       owner: this.owner,
       request_status: 'pending',
@@ -1085,14 +905,13 @@ export class DiscordService {
       return saved;
     };
     let releaseSession: (() => Promise<void>) | undefined;
-    let dir: string | undefined;
     let dispatched = false;
     let createDispatched = false;
     try {
       if (this.config.acknowledgeInboundRouting !== true || t.normalRouting !== true)
         throw new DiscordError('NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED');
       if (!this.publishRequest) throw new DiscordError('REQUEST_PUBLISHER_REQUIRED');
-      if (this.config.agentTransport === 'sdk') await this.agent!.ready();
+      await this.agent!.ready();
       const parent = await this.info(t, t.channelId, true);
       if ([15, 16].includes(parent.type)) throw new DiscordError('FORUM_MEDIA_WRITES_UNSUPPORTED');
       let id = input.channel_id;
@@ -1106,33 +925,9 @@ export class DiscordService {
       if (input.mode === 'new_thread') {
         await this.ordinaryRoute(t, t.channelId);
         createDispatched = true;
-        const createCli = () =>
-          this.cli(t, [
-            'thread',
-            'create',
-            '--target',
-            'channel:' + t.channelId,
-            '--thread-name',
-            input.title,
-          ]);
-        let created;
-        op.thread_create_transport = this.config.threadCreateMode === 'gateway' ? 'gateway' : 'cli';
+        op.thread_create_transport = 'gateway';
         await save();
-        if (op.thread_create_transport === 'gateway') {
-          try {
-            created = await this.invokeThread!(t, input.title, input.operation_id);
-          } catch (error) {
-            if (
-              !(error instanceof ThreadGatewayUnavailable) ||
-              this.config.agentTransport === 'sdk'
-            )
-              throw error;
-            op.thread_create_transport = 'cli';
-            op.thread_create_fallback = error.code;
-            await save();
-            created = await createCli();
-          }
-        } else created = await createCli();
+        const created = await this.invokeThread!(t, input.title, input.operation_id);
         id = created.thread?.id;
         check(id, snowflake, 'created thread ID');
         if (id === t.channelId) throw new DiscordError('CREATED_THREAD_ID_INVALID', true);
@@ -1168,12 +963,6 @@ export class DiscordService {
         }
         await save();
       }
-      let promptFile: string | undefined;
-      if (this.config.agentTransport !== 'sdk') {
-        dir = await mkdtemp(join(tmpdir(), 'openclaw-mcp-'));
-        promptFile = join(dir, 'prompt.txt');
-        await writeFile(promptFile, input.prompt, { mode: 0o600 });
-      }
       if (replying) await this.verifyReply(t, id, input.prompt);
       op.request_status = 'publishing';
       await save();
@@ -1207,7 +996,6 @@ export class DiscordService {
       await save();
       const accepted = this.publicResult(op);
       this.background.add(input.operation_id);
-      const directory = dir;
       const worker = (async () => {
         // Handoff is independent of generation and of any transport abort signal.
         await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1218,70 +1006,45 @@ export class DiscordService {
           assertTargetAllowed(this.config, t, id);
           if (replying) await this.verifyReply(t, id, input.prompt);
           dispatched = true;
-          const result: any =
-            this.config.agentTransport === 'sdk'
-              ? await this.agent!.run(
-                  {
-                    message: input.prompt,
-                    agentId: t.agentId,
-                    sessionKey: op.session_key!,
-                    threadId: id,
-                    accountId: t.accountId,
-                    idempotencyKey: op.agent_idempotency_key!,
-                  },
-                  async (receipt) => {
-                    if (
-                      receipt.sessionKey !== op.session_key ||
-                      receipt.agentId !== t.agentId ||
-                      !receipt.runId ||
-                      (op.run_id && receipt.runId !== op.run_id)
-                    )
-                      throw new DiscordError('SDK_ACCEPTANCE_IDENTITY_MISMATCH', true);
-                    op.run_id = receipt.runId;
-                    op.generation_status = 'accepted';
+          const result: any = await this.agent!.run(
+            {
+              message: input.prompt,
+              agentId: t.agentId,
+              sessionKey: op.session_key!,
+              threadId: id,
+              accountId: t.accountId,
+              idempotencyKey: op.agent_idempotency_key!,
+            },
+            async (receipt) => {
+              if (
+                receipt.sessionKey !== op.session_key ||
+                receipt.agentId !== t.agentId ||
+                !receipt.runId ||
+                (op.run_id && receipt.runId !== op.run_id)
+              )
+                throw new DiscordError('SDK_ACCEPTANCE_IDENTITY_MISMATCH', true);
+              op.run_id = receipt.runId;
+              op.generation_status = 'accepted';
+              await save();
+              let cancellation: Promise<void> | undefined;
+              this.cancellations.set(input.operation_id, () => {
+                cancellation ??= (async () => {
+                  op.cancellation_status = 'requested';
+                  await save();
+                  try {
+                    await this.agent!.cancel(receipt);
+                    op.cancellation_status = 'acknowledged';
+                  } catch (error) {
+                    op.cancellation_status = 'unknown';
                     await save();
-                    let cancellation: Promise<void> | undefined;
-                    this.cancellations.set(input.operation_id, () => {
-                      cancellation ??= (async () => {
-                        op.cancellation_status = 'requested';
-                        await save();
-                        try {
-                          await this.agent!.cancel(receipt);
-                          op.cancellation_status = 'acknowledged';
-                        } catch (error) {
-                          op.cancellation_status = 'unknown';
-                          await save();
-                          throw error;
-                        }
-                        await save();
-                      })();
-                      return cancellation;
-                    });
+                    throw error;
                   }
-                )
-              : await this.runner(
-                  this.config.executable,
-                  [
-                    'agent',
-                    '--agent',
-                    t.agentId,
-                    '--session-key',
-                    op.session_key,
-                    '--message-file',
-                    promptFile!,
-                    '--deliver',
-                    '--reply-channel',
-                    'discord',
-                    '--reply-to',
-                    'channel:' + id,
-                    '--reply-account',
-                    t.accountId,
-                    '--timeout',
-                    '600',
-                    '--json',
-                  ],
-                  630000
-                );
+                  await save();
+                })();
+                return cancellation;
+              });
+            }
+          );
           op.run_id = typeof result?.runId === 'string' ? result.runId : op.run_id;
           const delivery =
             result?.deliveryStatus ??
@@ -1304,18 +1067,12 @@ export class DiscordService {
             op.message_id = messageId;
             // One exact-ID read, never a text match or a scan of unrelated messages.
             try {
-              const readback =
-                this.config.agentTransport === 'sdk'
-                  ? await this.reader!(t, { action: 'read', channelId: id, messageId, limit: 1 })
-                  : await this.cli(t, [
-                      'read',
-                      '--target',
-                      'channel:' + id,
-                      '--message-id',
-                      messageId,
-                      '--limit',
-                      '1',
-                    ]);
+              const readback = await this.reader!(t, {
+                action: 'read',
+                channelId: id,
+                messageId,
+                limit: 1,
+              });
               op.delivery_verified =
                 readback.channelId === id &&
                 Array.isArray(readback.messages) &&
@@ -1326,16 +1083,11 @@ export class DiscordService {
               /* Delivery may have succeeded; a failed read does not authorize retry. */
             }
           }
-          op.error_code = result?._cliFailure ? result._cliCode : undefined;
-          op.status = result?._cliFailure
-            ? result._cliCode === 'CLI_TIMEOUT'
-              ? 'run_unknown'
-              : 'run_failed'
-            : ['ok', 'completed'].includes(result?.status)
-              ? 'completed'
-              : ['error', 'aborted'].includes(result?.status) || result?.ok === false
-                ? 'run_failed'
-                : 'run_unknown';
+          op.status = ['ok', 'completed'].includes(result?.status)
+            ? 'completed'
+            : ['error', 'aborted'].includes(result?.status) || result?.ok === false
+              ? 'run_failed'
+              : 'run_unknown';
           op.generation_status = op.status;
           op.handoff = 'Continue on Discord: ' + op.discord_url;
           if (
@@ -1361,12 +1113,11 @@ export class DiscordService {
           op.error_code = error instanceof DiscordError ? error.code : 'UNVERIFIED_RESULT';
           await save();
         } finally {
-          if (directory) await rm(directory, { recursive: true, force: true });
           // Ambiguous dispatch retains the durable claim for operator recovery.
           if (!dispatched || op.status === 'completed') await releaseSession?.();
         }
       })();
-      // Handle failures saving state or cleaning files as well as runner rejection.
+      // Handle failures saving state or cleaning files as well as agent rejection.
       const owned = worker
         .catch(() => {
           log('Discord worker failed; operation requires inspection');
@@ -1378,7 +1129,6 @@ export class DiscordService {
           this.workers.delete(owned);
         });
       this.workers.add(owned);
-      dir = undefined; // worker owns the prompt until generation and cleanup finish
       return accepted;
     } catch (error) {
       op.error_code = error instanceof DiscordError ? error.code : 'UNVERIFIED_RESULT';
@@ -1393,7 +1143,6 @@ export class DiscordService {
         'Inspect Discord and gateway logs. This operation is never automatically replayed; preserve its ID. An interrupted creating/running record also requires inspection.';
       await save();
     } finally {
-      if (dir) await rm(dir, { recursive: true, force: true });
       if (
         !this.background.has(input.operation_id) &&
         !['unknown', 'partial', 'publishing', 'sent'].includes(op.request_status ?? '')

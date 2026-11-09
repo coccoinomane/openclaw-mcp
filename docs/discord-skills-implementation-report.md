@@ -1,4 +1,6 @@
-# Implementation report
+# Historical implementation report
+
+This report preserves the original CLI-backed implementation and its test evidence. It is not current setup guidance: the CLI transport, CLI discovery and related configuration have since been removed. Use [Discord setup](discord-skills.md) and [SDK authentication/migration](discord-sdk.md) for the current release.
 
 Prepared on 2026-11-01 in feature/discord-skills-mcp, based on fork/main at 04bad9b. Production checkout, gateway configuration and services were not changed. No live Discord actions, credential reads, deploys or pushes were performed.
 

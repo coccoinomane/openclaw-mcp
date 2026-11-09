@@ -1,25 +1,23 @@
 # Discord without a local OpenClaw CLI
 
-The opt-in SDK path covers ordinary new-thread and existing-thread workflows. It uses @openclaw/gateway-client 2026.10.9 for agent execution, observation and explicit cancellation. Channel discovery, thread lists, permissions and exact-ID readback use the existing authenticated Gateway HTTP /tools/invoke adapter. Thread creation stays on that HTTP adapter; membership and exact request publication stay on Discord REST.
+All ordinary new-thread and existing-thread workflows use @openclaw/gateway-client 2026.10.9 for agent execution, observation and explicit cancellation. Channel discovery, thread lists, permissions and exact-ID readback use the existing authenticated Gateway HTTP /tools/invoke adapter. Thread creation stays on that HTTP adapter; membership and exact request publication stay on Discord REST.
 
-This is not a pure-SDK implementation. CLI remains the default and the explicit rollback transport. Generic chat, MCP OAuth, roster discovery and configured routing are unchanged. Automated tests use fake transports. On 9 November 2026, a live local-shared-token canary created a new thread, continued the same session and recalled a code supplied only in the first turn. Repeating the first operation reused its original run and thread. Gateway delivery reported sent for both turns; independent Discord message readback was unavailable in the test session. Channel/thread discovery and blacklist enforcement passed without CLI invocations. Production reconnect and cancellation remain untested; their protocol behavior is covered by automated tests. Revalidate these gates for each deployment.
+No OpenClaw CLI is installed or launched by the bridge, and no CLI transport or compatibility alias remains. HTTP/REST adapters are still part of the implementation. Generic chat, MCP OAuth and configured routing are unchanged; roster discovery is either Gateway SDK discovery or a static catalog. Automated tests use fake transports. On 9 November 2026, a live local-shared-token canary created a new thread, continued the same session and recalled a code supplied only in the first turn. Repeating the first operation reused its original run and thread. Gateway delivery reported sent for both turns; independent Discord message readback was unavailable in the test session. Channel/thread discovery and blacklist enforcement passed without CLI invocations. Production reconnect and cancellation remain untested; their protocol behavior is covered by automated tests. Revalidate these gates for each deployment.
 
-## Opt in
+## Configure Discord
 
 Keep the existing Discord account, allowed scopes, channel policy, request-publisher credential, membership settings and verified ordinary inbound routing. Add these settings to the trusted service environment (also pass them through any launcher allowlist):
 
 ~~~dotenv
-MCP_DISCORD_AGENT_TRANSPORT=sdk
-MCP_DISCORD_THREAD_CREATE_MODE=gateway
-MCP_DISCORD_GATEWAY_READS_ENABLED=true
-MCP_DISCORD_CLI_GATEWAY_INSTANCE=default
+MCP_DISCORD_ENABLED=true
+MCP_DISCORD_GATEWAY_INSTANCE=default
 MCP_DISCORD_SDK_STATE_DIR=/absolute/private/approved-discord-device
 MCP_DISCORD_SDK_AUTH=device
 ~~~
 
-The instance name must match an existing OPENCLAW_INSTANCES entry (or default for a single instance). The historical CLI_GATEWAY_INSTANCE name still selects that one Gateway; it does not cause a CLI launch in SDK mode. HTTPS or loopback HTTP is required. A local CLI executable need not exist in this mode. Do not enable CLI roster discovery if the entire service must be CLI-free; use the separately configured Gateway roster or explicit catalog.
+MCP_DISCORD_GATEWAY_INSTANCE is required when Discord is enabled and must match an existing OPENCLAW_INSTANCES entry (or default for a single instance). HTTPS or loopback HTTP is required. The bridge needs no local OpenClaw executable. Configure MCP_AGENT_DISCOVERY=gateway for a live startup roster, or leave it unset for static catalogs and locally known configured agents.
 
-SDK mode requires both Gateway creation and Gateway reads. Missing adapters or inconsistent settings fail closed. It disables **all** Discord CLI fallback, including the legacy connection-refused thread-creation fallback. HTTP read denials never trigger another transport. No client-selected transport, endpoint, account, scope or session key is accepted.
+The SDK agent transport and Gateway HTTP read/create adapters are always used together. Missing adapters or inconsistent settings fail closed. There is no CLI fallback, including after a refused connection. HTTP read denials never trigger another transport. No client-selected endpoint, account, scope or session key is accepted.
 
 ## Service authentication
 
@@ -64,12 +62,35 @@ Generation completion does not prove a Discord reply. delivery_verified remains 
 
 ## Live release gates and existing limits
 
-Before production opt-in, use the authorized service harness to check readiness and bounded HTTP reads, including one denied target. Then test an approved text-parent new thread, an active MCP-origin thread and an active human-origin thread with existing OpenClaw history. Verify agent/account/session equality, topic context, one prompt, one answer, membership and delivery receipts. Test accepted-run disconnect/observation, duplicate operation IDs and explicit cancellation. Do not use agent-origin tooling to bypass provenance checks for these tests.
+Before production use, use the authorized service harness to check readiness and bounded HTTP reads, including one denied target. Then test an approved text-parent new thread, an active MCP-origin thread and an active human-origin thread with existing OpenClaw history. Verify agent/account/session equality, topic context, one prompt, one answer, membership and delivery receipts. Test accepted-run disconnect/observation, duplicate operation IDs and explicit cancellation. Do not use agent-origin tooling to bypass provenance checks for these tests.
 
 Announcement parents still lack the required starter-message design; this migration does not fix them. Archiving on Discord 2026.10.9 can delete the OpenClaw session entry, so reopening can lose prior context. Human discussion never processed by OpenClaw is not imported automatically. Bound, subagent, private, locked or incompatible groupScope routes remain outside the supported ordinary workflow. See the [independent audit](gateway-sdk-feasibility.md).
 
-## Roll back
+## Upgrade from CLI-based releases
 
-Set MCP_DISCORD_AGENT_TRANSPORT=cli and reload only the MCP service through its normal operator procedure. Keep Gateway reads/creation flags at their previous values; the legacy mode retains its existing metadata-HTTP/remaining-CLI behavior and the narrowly permitted ECONNREFUSED creation fallback. For an entirely CLI legacy configuration, also restore the prior MCP_DISCORD_THREAD_CREATE_MODE and MCP_DISCORD_GATEWAY_READS_ENABLED values.
+This release has no CLI compatibility mode or aliases. Update the trusted service environment and any launcher allowlist before restarting the MCP service:
 
-Drain active work before swapping releases. Preserve the same operation state directory and all session locks. A rollback does not make an uncertain SDK operation safe to replay: repeated IDs still return the original journal entry. Inspect the existing thread/run before separately authorizing a new operation. No Gateway configuration edit, pairing change or Gateway restart is part of rollback.
+- Rename `MCP_DISCORD_CLI_GATEWAY_INSTANCE` to the required `MCP_DISCORD_GATEWAY_INSTANCE`.
+- Remove `MCP_DISCORD_AGENT_TRANSPORT`, `MCP_DISCORD_EXECUTABLE`, `MCP_DISCORD_CLI_TIMEOUT_MS`, `MCP_DISCORD_GATEWAY_READS_ENABLED` and `MCP_DISCORD_THREAD_CREATE_MODE`.
+- Replace `MCP_AGENT_DISCOVERY=cli` with `MCP_AGENT_DISCOVERY=gateway`, or unset discovery and configure a static roster. Remove `MCP_AGENT_DISCOVERY_INSTANCE` and `MCP_AGENT_DISCOVERY_EXECUTABLE`. Gateway discovery does not import bindings; keep them explicit.
+- Retain `MCP_DISCORD_SDK_AUTH`, `MCP_DISCORD_SDK_STATE_DIR`, existing private operation state, Gateway credentials, bot credentials and Discord permissions. Provision the SDK identity before enabling writes.
+
+Drain active work before swapping releases. Preserve operation records and session locks. An uncertain operation is never safe to replay merely because the service version changed. Inspect its existing thread/run before separately authorizing another operation. A version rollback, if needed, is an operator deployment decision, not an environment switch in this release; review state compatibility first. No Gateway configuration edit, pairing change or Gateway restart is part of the transport migration.
+
+## Remaining HTTP/REST calls and SDK feasibility
+
+This inventory covers outbound calls made by the bridge itself. The MCP HTTP/SSE listener, OAuth routes and local `/health` endpoint are incoming server APIs; removing them would break client transport rather than replace an OpenClaw CLI dependency. The Node launcher and `openclaw-mcp` command start this bridge, not the OpenClaw CLI.
+
+| Purpose | Current request and code | SDK migration advice |
+| --- | --- | --- |
+| Direct sync/async chat | `POST /v1/chat/completions` in [OpenClawClient.chat](../src/openclaw/client.ts), with the selected instance, model, agent header and session header/body | Keep HTTP for this change. A future `agent` or chat RPC adapter must preserve response/usage fields, session-key reuse, agent routing, task ownership and timeout behavior; it is not a drop-in fetch replacement. |
+| Gateway reachability | `OpenClawClient.health` posts to the same endpoint with `model: health-check`, empty messages and `max_tokens: 1`; any 2xx–4xx response reports reachability | An SDK readiness/health probe is feasible as a separate change, but would measure a different authentication/protocol path. Preserve the distinction between reachability and agent authorization. |
+| Discord metadata, threads, permissions and answer readback | [channelReader](../src/openclaw/discord-read.ts) posts `message` to `/tools/invoke`; allowed actions are `channel-list`, `channel-info`, `thread-list`, `permissions` and `read`. The last requires the exact message ID and `limit: 1`. | A closed SDK `tools.invoke`/`message.action` adapter is plausible. Verify deployed method/schema support, write-scope requirements for tool RPCs, conversation-read authority and response shape. Do not retry denied SDK reads over HTTP or broaden scopes for parity. |
+| New thread | [threadInvoker](../src/openclaw/discord-thread.ts) posts `message/thread-create` to `/tools/invoke` with configured account, parent, title and operation idempotency key | Feasible through a constrained SDK tool/action call after equivalent policy, ancestry and partial-result tests. Preserve unknown outcomes and no-replay behavior. SDK transport does not fix announcement starter-message requirements. |
+| Optional normal text channel | [channelInvoker](../src/openclaw/discord-channels.ts) posts `message/channel-create` to `/tools/invoke` with policy guild/category/account, `channelType: 0` and idempotency key | Feasible with the same authorization, readback and durable admission checks. Keep separate user authorization for creation and admission; do not expose arbitrary SDK methods. |
+| New-thread membership | [threadMemberAdder](../src/openclaw/discord-thread.ts) sends one `PUT`, then one `GET`, to `https://discord.com/api/v10/channels/{thread}/thread-members/{configuredUser}` | Retain REST. The inspected Gateway message surface has no thread-member-add action. An SDK client cannot add a missing server capability; a Gateway feature would be needed first. |
+| Exact prompt publication and verification | [requestPublisher](../src/openclaw/discord-request.ts) sends one `POST` to `https://discord.com/api/v10/channels/{thread}/messages`, then `GET .../messages/{returnedId}`. Long prompts use multipart `richiesta.txt`. Both new-thread and existing-thread requests use it. | Retain REST until a Gateway method preserves exact bytes/whitespace, disables all mentions and reply mentions, suppresses embeds, supports attachments and returns IDs for readback. The inspected message/send path lacks the required public allowed-mentions control and trims trailing whitespace. |
+
+Gateway HTTP adapters use the selected instance's bearer token; Discord REST uses the configured bot token. Discord calls reject redirects and use 30-second request deadlines. SDK device authentication does not replace either HTTP credential. None of these writes retries through a different transport.
+
+Roster discovery already uses SDK `agents.list` in [gateway-discovery.ts](../src/openclaw/gateway-discovery.ts). Discord generation, reconnect observation and explicit cancellation already use `agent`, `agent.wait` and `chat.abort` in [discord-agent.ts](../src/openclaw/discord-agent.ts). Move remaining Gateway reads first only if there is a concrete need to consolidate transports; test denied targets and actual device authority before migrating writes. Keep membership and exact publication on REST until equivalent server capabilities exist. This section is feasibility advice, not an implementation or live-equivalence claim.

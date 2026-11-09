@@ -85,6 +85,8 @@ In the Inspector web UI:
 
 ## CLI Options
 
+These options belong to the `openclaw-mcp` bridge launcher, not the OpenClaw CLI. The bridge does not install or invoke the OpenClaw CLI.
+
 ```bash
 openclaw-mcp --help
 

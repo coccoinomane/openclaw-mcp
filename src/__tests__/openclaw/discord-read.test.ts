@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { channelReader } from '../../openclaw/discord-read.js';
+import { channelReader, type DiscordReader } from '../../openclaw/discord-read.js';
+import type { DiscordAgentTransport } from '../../openclaw/discord-agent.js';
+import type { ThreadInvoker } from '../../openclaw/discord-thread.js';
 import { DiscordService, loadDiscordConfig, type DiscordConfig } from '../../openclaw/discord.js';
 import { handleDiscord } from '../../mcp/tools/discord.js';
 const guild = '300000000000000001',
@@ -18,11 +20,9 @@ const target = {
   normalRouting: true,
 };
 const config: DiscordConfig = {
-  executable: 'never-executed',
   stateDir: '/unused-test-state',
   targets: [target],
-  cliGatewayInstance: 'home',
-  gatewayReadsEnabled: true,
+  gatewayInstance: 'home',
   acknowledgeInboundRouting: true,
 };
 const instances = [{ name: 'home', url: 'http://127.0.0.1:18789', token: 'mock-credential' }];
@@ -36,6 +36,24 @@ const parent = {
 };
 const categoryData = { id: category, guild_id: guild, type: 4, name: 'Projects' };
 const envelope = (result: any) => ({ ok: true, result: { details: result } });
+function adapters() {
+  return {
+    invokeThread: vi.fn<ThreadInvoker>(async () => ({ thread: { id: other } })),
+    agent: {
+      ready: vi.fn<DiscordAgentTransport['ready']>(async () => {}),
+      run: vi.fn<DiscordAgentTransport['run']>(async (request, accepted) => {
+        const receipt = {
+          runId: 'mock-run',
+          sessionKey: request.sessionKey,
+          agentId: request.agentId,
+        };
+        await accepted(receipt);
+        return { ...receipt, status: 'ok' };
+      }),
+      cancel: vi.fn<DiscordAgentTransport['cancel']>(async () => {}),
+    },
+  };
+}
 function fixture(
   c = config,
   channels: any[] = [
@@ -45,19 +63,27 @@ function fixture(
   ]
 ) {
   const fetcher = vi.fn(async () => new Response(JSON.stringify(envelope({ ok: true, channels }))));
-  const runner = vi.fn(async () => {
-    throw new Error('CLI must not run');
-  });
-  const reader = channelReader(instances, c, fetcher)!;
+  const { invokeThread, agent } = adapters();
+  const reader = channelReader(instances, c, fetcher);
   return {
     fetcher,
-    runner,
+    invokeThread,
+    agent,
     reader,
-    service: new DiscordService(c, runner, undefined, undefined, reader),
+    service: new DiscordService(
+      c,
+      undefined,
+      undefined,
+      reader,
+      invokeThread,
+      undefined,
+      undefined,
+      agent
+    ),
   };
 }
 beforeEach(() => {
-  // Mock HTTP and CLI only; production provenance is never changed.
+  // Clear inherited agent provenance; keep the production guard enabled.
   for (const key of Object.keys(process.env))
     if (/^OPENCLAW_(SHELL|.*AGENT.*|.*SESSION.*|.*CALLER.*)$/.test(key)) vi.stubEnv(key, undefined);
 });
@@ -65,18 +91,26 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 describe('closed metadata reader', () => {
-  it.each([undefined, 'false', '1', 'true'])('requires explicit environment opt-in %j', (flag) => {
+  it('enables HTTP reads with the required gateway instance and no opt-in', () => {
     const loaded = loadDiscordConfig({
       MCP_DISCORD_ENABLED: 'true',
       MCP_DISCORD_STATE_DIR: '/unused-test-state',
       MCP_DISCORD_TARGETS: JSON.stringify([target]),
-      MCP_DISCORD_CLI_GATEWAY_INSTANCE: 'home',
-      MCP_DISCORD_GATEWAY_READS_ENABLED: flag,
+      MCP_DISCORD_GATEWAY_INSTANCE: 'home',
     });
-    expect(loaded?.gatewayReadsEnabled).toBe(flag === 'true');
-    expect(typeof channelReader(instances, loaded!)).toBe(
-      flag === 'true' ? 'function' : 'undefined'
-    );
+    expect(loaded?.gatewayInstance).toBe('home');
+    expect(typeof channelReader(instances, loaded!)).toBe('function');
+  });
+
+  it.each([undefined, ''])('requires the gateway instance when enabled: %j', (instance) => {
+    expect(() =>
+      loadDiscordConfig({
+        MCP_DISCORD_ENABLED: 'true',
+        MCP_DISCORD_STATE_DIR: '/unused-test-state',
+        MCP_DISCORD_TARGETS: JSON.stringify([target]),
+        MCP_DISCORD_GATEWAY_INSTANCE: instance,
+      })
+    ).toThrow('DISCORD_GATEWAY_INSTANCE_REQUIRED');
   });
 
   it('uses fixed server instance, account and agent with no redirects', async () => {
@@ -107,7 +141,9 @@ describe('closed metadata reader', () => {
       sessionKey: 'agent:main:main',
       args: { action: 'channel-list', channel: 'discord', accountId: 'bot', guildId: guild },
     });
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.invokeThread).not.toHaveBeenCalled();
+    expect(f.agent.ready).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
   it.each(['OPENCLAW_SHELL', 'OPENCLAW_AGENT_ID', 'OPENCLAW_SESSION_KEY', 'OPENCLAW_CALLER_ID'])(
     'denies %s provenance without fallback',
@@ -117,7 +153,9 @@ describe('closed metadata reader', () => {
       await expect(f.service.channels()).rejects.toThrow('AGENT_PROVENANCE_DENIED');
       expect(process.env[key]).toBe('agent-origin');
       expect(f.fetcher).not.toHaveBeenCalled();
-      expect(f.runner).not.toHaveBeenCalled();
+      expect(f.invokeThread).not.toHaveBeenCalled();
+      expect(f.agent.ready).not.toHaveBeenCalled();
+      expect(f.agent.run).not.toHaveBeenCalled();
     }
   );
   it.each([
@@ -151,36 +189,39 @@ describe('closed metadata reader', () => {
     expect((await handleDiscord(f.service, 'openclaw_discord_channels', input)).isError).toBe(true);
     expect(f.fetcher).not.toHaveBeenCalled();
   });
-  it('uses CLI compatibility only when adapter or instance assertion is absent', async () => {
-    expect(channelReader(instances, { ...config, cliGatewayInstance: undefined })).toBeUndefined();
-    const reader = vi.fn();
-    const runner = vi.fn(async () => ({ payload: { ok: true, channels: [parent, categoryData] } }));
-    for (const [c, r] of [
-      [config, undefined],
-      [{ ...config, cliGatewayInstance: undefined }, reader],
-      [{ ...config, gatewayReadsEnabled: undefined }, reader],
-      [{ ...config, gatewayReadsEnabled: false }, reader],
-    ] as const) {
-      await new DiscordService(c, runner, undefined, undefined, r).channels();
+  it.each(['reader', 'invokeThread', 'agent'] as const)(
+    'rejects startup when the %s adapter is missing',
+    (missing) => {
+      const { invokeThread, agent } = adapters();
+      const reader = vi.fn<DiscordReader>();
+      expect(
+        () =>
+          new DiscordService(
+            config,
+            undefined,
+            undefined,
+            missing === 'reader' ? undefined : reader,
+            missing === 'invokeThread' ? undefined : invokeThread,
+            undefined,
+            undefined,
+            missing === 'agent' ? undefined : agent
+          )
+      ).toThrow(missing === 'invokeThread' ? 'THREAD_ADAPTER_REQUIRED' : 'SDK_ADAPTER_REQUIRED');
+      expect(reader).not.toHaveBeenCalled();
+      expect(invokeThread).not.toHaveBeenCalled();
+      expect(agent.ready).not.toHaveBeenCalled();
+      expect(agent.run).not.toHaveBeenCalled();
+      expect(agent.cancel).not.toHaveBeenCalled();
     }
-    expect(runner).toHaveBeenCalledTimes(4);
-    expect(reader).not.toHaveBeenCalled();
-    expect(runner.mock.calls[0]).toEqual([
-      'never-executed',
-      [
-        'message',
-        'channel',
-        'list',
-        '--guild-id',
-        guild,
-        '--channel',
-        'discord',
-        '--account',
-        'bot',
-        '--json',
-      ],
-      30000,
-    ]);
+  );
+
+  it('rejects an absent gateway mapping instead of disabling HTTP reads', () => {
+    expect(() =>
+      channelReader(instances, {
+        ...config,
+        gatewayInstance: undefined,
+      } as unknown as DiscordConfig)
+    ).toThrow('READ_GATEWAY_CONFIGURATION_INVALID');
   });
   it('fails startup for configured but missing, duplicate, insecure or uncredentialed instances', () => {
     for (const list of [
@@ -219,7 +260,9 @@ describe('closed metadata reader', () => {
     const f = fixture();
     f.fetcher.mockResolvedValue(new Response(JSON.stringify(body)));
     await expect(f.service.channels()).rejects.toThrow('GATEWAY_READ_UNVERIFIED');
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.invokeThread).not.toHaveBeenCalled();
+    expect(f.agent.ready).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
   it('accepts text-only native results and rejects malformed info', async () => {
     const f = fixture();
@@ -263,18 +306,22 @@ describe('closed metadata reader', () => {
     f.fetcher.mockResolvedValue(new Response('secret', { status }));
     await expect(f.service.channels()).rejects.toThrow('GATEWAY_HTTP_' + status);
     expect(f.fetcher).toHaveBeenCalledTimes(1);
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.invokeThread).not.toHaveBeenCalled();
+    expect(f.agent.ready).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
   it('sanitizes transport failure without fallback', async () => {
     const f = fixture();
     f.fetcher.mockRejectedValue(new Error('secret'));
     await expect(f.service.channels()).rejects.toThrow('GATEWAY_READ_FAILED');
     expect(f.fetcher).toHaveBeenCalledTimes(1);
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.invokeThread).not.toHaveBeenCalled();
+    expect(f.agent.ready).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
 });
 describe('batched allowlist discovery', () => {
-  it('uses metadata reads for preflight but retains CLI thread creation and agent run', async () => {
+  it('uses HTTP metadata reads for preflight with direct thread creation and SDK dispatch', async () => {
     const stateDir = await mkdtemp(join(tmpdir(), 'discord-ask-read-test-'));
     try {
       const c = { ...config, stateDir };
@@ -292,22 +339,18 @@ describe('batched allowlist discovery', () => {
           )
         );
       });
-      const runner = vi.fn(async (_exe: string, args: string[]) =>
-        args[0] === 'agent'
-          ? { status: 'ok', runId: 'mock-run' }
-          : { payload: { ok: true, thread: { id: other } } }
-      );
+      const { invokeThread, agent } = adapters();
       const service = new DiscordService(
         c,
-        runner,
         undefined,
         undefined,
         channelReader(instances, c, fetcher),
-        undefined,
+        invokeThread,
         undefined,
         async (_t, _id, _p, _op, sent) => {
           await sent('300000000000000005');
-        }
+        },
+        agent
       );
       expect(
         await service.ask({
@@ -319,11 +362,34 @@ describe('batched allowlist discovery', () => {
         })
       ).toMatchObject({ status: 'queued', channel_id: other });
       await service.drain();
-      expect(runner.mock.calls.map((call) => call[1].slice(0, 3))).toEqual([
-        ['message', 'thread', 'create'],
-        ['agent', '--agent', 'main'],
-      ]);
-      expect(runner.mock.calls[1][1]).toContain('--message-file');
+      expect(invokeThread).toHaveBeenCalledTimes(1);
+      expect(invokeThread).toHaveBeenCalledWith(target, 'Task', 'reader-ask-test-001');
+      expect(agent.ready).toHaveBeenCalledTimes(1);
+      expect(agent.ready.mock.invocationCallOrder[0]).toBeLessThan(
+        invokeThread.mock.invocationCallOrder[0]
+      );
+      expect(invokeThread.mock.invocationCallOrder[0]).toBeLessThan(
+        agent.run.mock.invocationCallOrder[0]
+      );
+      expect(agent.run).toHaveBeenCalledTimes(1);
+      expect(agent.run).toHaveBeenCalledWith(
+        {
+          message: 'mock prompt',
+          agentId: 'main',
+          sessionKey: 'agent:main:discord:channel:' + other,
+          threadId: other,
+          accountId: 'bot',
+          idempotencyKey: expect.any(String),
+        },
+        expect.any(Function)
+      );
+      expect(agent.cancel).not.toHaveBeenCalled();
+      expect(await service.status('reader-ask-test-001')).toMatchObject({
+        status: 'completed',
+        run_id: 'mock-run',
+        agent_transport: 'sdk',
+        thread_create_transport: 'gateway',
+      });
       expect(fetcher.mock.calls.map((call) => JSON.parse(call[1].body).args)).toEqual([
         { action: 'channel-info', channel: 'discord', accountId: 'bot', channelId: channel },
         { action: 'channel-info', channel: 'discord', accountId: 'bot', channelId: other },
@@ -333,41 +399,53 @@ describe('batched allowlist discovery', () => {
     }
   });
 
-  it.each([true, false])(
-    'groups all mapping dimensions, gateway=%s, and refreshes every request',
-    async (gateway) => {
-      const targets = Array.from({ length: 35 }, (_, i) => ({ ...target, name: 'work-' + i }));
-      targets.push(
-        { ...target, name: 'agent', agentId: 'second' },
-        { ...target, name: 'account', accountId: 'second' },
-        { ...target, name: 'guild', guildId: other }
-      );
-      const c = { ...config, targets };
-      const reader = vi.fn(async (t: any) => ({
-        ok: true,
-        channels: [
-          { ...parent, guild_id: t.guildId },
-          { ...categoryData, guild_id: t.guildId },
-        ],
-      }));
-      const runner = vi.fn(async (_exe: string, args: string[]) => ({
-        payload: await reader({ guildId: args[args.indexOf('--guild-id') + 1] }),
-      }));
-      const service = new DiscordService(
-        c,
-        runner,
-        undefined,
-        undefined,
-        gateway ? reader : undefined
-      );
-      expect((await service.channels()).channels).toHaveLength(38);
-      expect(reader).toHaveBeenCalledTimes(4);
-      await service.channels();
-      expect(reader).toHaveBeenCalledTimes(8);
-      if (gateway) expect(runner).not.toHaveBeenCalled();
-      else expect(runner).toHaveBeenCalledTimes(8);
-    }
-  );
+  it('groups all mapping dimensions and refreshes every request', async () => {
+    const targets = Array.from({ length: 35 }, (_, i) => ({ ...target, name: 'work-' + i }));
+    targets.push(
+      { ...target, name: 'agent', agentId: 'second' },
+      { ...target, name: 'account', accountId: 'second' },
+      { ...target, name: 'guild', guildId: other }
+    );
+    const c = { ...config, targets };
+    const reader = vi.fn<DiscordReader>(async (t) => ({
+      ok: true,
+      channels: [
+        { ...parent, guild_id: t.guildId },
+        { ...categoryData, guild_id: t.guildId },
+      ],
+    }));
+    const { invokeThread, agent } = adapters();
+    const service = new DiscordService(
+      c,
+      undefined,
+      undefined,
+      reader,
+      invokeThread,
+      undefined,
+      undefined,
+      agent
+    );
+    expect((await service.channels()).channels).toHaveLength(38);
+    expect(reader).toHaveBeenCalledTimes(4);
+    expect(
+      reader.mock.calls.map(([scope, request]) => [
+        scope.guildId,
+        scope.accountId,
+        scope.agentId,
+        request,
+      ])
+    ).toEqual([
+      [guild, 'bot', 'main', { action: 'channel-list' }],
+      [guild, 'bot', 'second', { action: 'channel-list' }],
+      [guild, 'second', 'main', { action: 'channel-list' }],
+      [other, 'bot', 'main', { action: 'channel-list' }],
+    ]);
+    await service.channels();
+    expect(reader).toHaveBeenCalledTimes(8);
+    expect(invokeThread).not.toHaveBeenCalled();
+    expect(agent.ready).not.toHaveBeenCalled();
+    expect(agent.run).not.toHaveBeenCalled();
+  });
   it.each(
     [
       [parent],
@@ -382,7 +460,9 @@ describe('batched allowlist discovery', () => {
   )('fails closed for missing, duplicate or invalid metadata %j', async ({ channels }) => {
     const f = fixture(config, channels);
     await expect(f.service.channels()).rejects.toThrow();
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.invokeThread).not.toHaveBeenCalled();
+    expect(f.agent.ready).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
   it('reads category and created channel via Gateway, then rejects moved admission', async () => {
     const stateDir = await mkdtemp(join(tmpdir(), 'discord-read-test-'));
@@ -396,7 +476,7 @@ describe('batched allowlist discovery', () => {
         instance: 'home',
       };
       const c = { ...config, stateDir, targets: [], creationPolicies: [policy] };
-      const runner = vi.fn();
+      const { invokeThread, agent } = adapters();
       const invoke = vi.fn(async () => ({ ok: true, channel: { id: channel } }));
       const fetcher = vi.fn(async (_url: any, options: any) => {
         const args = JSON.parse(options.body).args;
@@ -412,10 +492,13 @@ describe('batched allowlist discovery', () => {
       });
       const service = new DiscordService(
         c,
-        runner,
         invoke,
         undefined,
-        channelReader(instances, c, fetcher)
+        channelReader(instances, c, fetcher),
+        invokeThread,
+        undefined,
+        undefined,
+        agent
       );
       expect(
         await service.createChannel({
@@ -431,7 +514,9 @@ describe('batched allowlist discovery', () => {
         channel,
       ]);
       await expect(service.channels()).rejects.toThrow('ADMITTED_CHANNEL_MOVED');
-      expect(runner).not.toHaveBeenCalled();
+      expect(invokeThread).not.toHaveBeenCalled();
+      expect(agent.ready).not.toHaveBeenCalled();
+      expect(agent.run).not.toHaveBeenCalled();
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

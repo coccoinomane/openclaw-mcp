@@ -35,7 +35,7 @@ The service reads only the agent roster, once at startup. It does not read OpenC
 
 ## 2. Pair the MCP service when requested
 
-Start the MCP service. On its first connection, the Gateway may require approval of the service’s device identity. The startup error identifies the device. On that Gateway’s host, review the pending requests:
+Start the MCP service. On its first connection, the Gateway may require approval of the service’s device identity. The startup error identifies the device. An operator can review pending requests in that Gateway’s device-management interface. If the operator uses the OpenClaw CLI on the **Gateway host**, the equivalent commands are below; these are manual administration, not commands executed or required on the MCP bridge host:
 
 ```sh
 openclaw devices list
@@ -86,18 +86,18 @@ If you do not use Discord, setup is complete.
 
 Suppose Alice’s agent works in one Discord server and Marco’s works in another. OpenClaw stores those assignments as **bindings**: rules that say which agent receives messages from a server or channel.
 
-Gateway roster discovery does not import those rules. Keep your existing manual Discord routes, or supply explicit `bindings` alongside the discovered roster as shown in the [configuration reference](multiagent-reference.md#gateway-sdk-roster). An agent can have no Discord assignment, one server, several servers, or specific channels. The older `cli` discovery mode still imports its local binding snapshot; choose one discovery mode, not both.
+Gateway roster discovery does not import those rules. Keep your existing manual Discord routes, or supply explicit `bindings` alongside the discovered roster as shown in the [configuration reference](multiagent-reference.md#gateway-sdk-roster). An agent can have no Discord assignment, one server, several servers, or specific channels. CLI discovery is no longer supported.
 
 You still need to configure **where the MCP server is allowed to act**. Reading a binding does not grant permission to post in that Discord server.
 
 1. Set up the Discord bot credentials and allowed servers/channels using the [Discord setup guide](discord-skills.md). Discord tools remain disabled until you enable them.
-2. Set `MCP_DISCORD_CLI_GATEWAY_INSTANCE=default` for this one-installation example. This tells the Discord integration which OpenClaw connection its local CLI uses.
+2. Set the required `MCP_DISCORD_GATEWAY_INSTANCE=default` for this one-installation example. This selects the connection used by the Discord SDK and HTTP adapters. Configure its [SDK service identity](discord-sdk.md#service-authentication) as well.
 3. Keep the existing discovery scopes (the allowed server/account combinations) and channel restrictions. Scopes still require their `agentId` field; imported bindings determine the effective agent within those permitted destinations. They do not add other servers to the allowlist.
 4. Ask your client to list the allowed Discord channels for each agent. Check that Alice and Marco see the destinations you intended before submitting work.
 
 The client then chooses a returned destination when opening or continuing a thread. It cannot send a request to Alice’s destination while specifying Marco as the agent: conflicting selections return an error. A more specific channel assignment takes priority over its server-wide assignment.
 
-For writes, the existing Discord setup also requires confirmation that ordinary replies in those channels reach the expected agent. Creating new channels is a separate opt-in feature. This version uses one configured Discord bot account and one Gateway/CLI setup for the complete Discord workflow. Chat supports multiple OpenClaw connections, but Discord cannot yet switch between them per request. See [the Discord connection limit](discord-skills.md#one-discord-gateway-connection-per-mcp-service).
+For writes, the existing Discord setup also requires confirmation that ordinary replies in those channels reach the expected agent. Creating new channels is a separate opt-in feature. This version uses one configured Discord bot account and one Gateway connection for the complete Discord workflow. Chat supports multiple OpenClaw connections, but Discord cannot yet switch between them per request. See [the Discord connection limit](discord-skills.md#one-discord-gateway-connection-per-mcp-service).
 
 ## If the MCP server cannot read your OpenClaw installation
 
@@ -121,7 +121,7 @@ If you use multiple OpenClaw installations, replace `default` with the appropria
 ## If something does not work
 
 - **Only the old tools appear:** confirm you are running a build with `openclaw_agents`, then reconnect or refresh the client’s MCP tool list.
-- **The MCP service fails to start:** check the named instance’s URL, token and pairing approval, and the private state directory. A working HTTP connection does not prove WebSocket access. Do not combine a static roster with Gateway discovery. Legacy CLI setup is documented in the reference.
+- **The MCP service fails to start:** check the named instance’s URL, token and pairing approval, and the private state directory. A working HTTP connection does not prove WebSocket access. Do not combine a static roster with Gateway discovery. Only `gateway` or an unset discovery setting is supported; remove CLI-only settings as described in the [upgrade guide](discord-sdk.md#upgrade-from-cli-based-releases).
 - **An agent is missing:** check the Gateway roster or your manual list, then restart the MCP service. Agent IDs are case-insensitive; instance names are case-sensitive.
 - **An agent is listed but has no Discord channels:** it may have no Discord assignment, or its destinations may be excluded by MCP permissions. This does not prevent direct chat.
 - **A follow-up reports a conflict:** use the instance, agent and session returned by the original request, rather than switching agents midway through that conversation.

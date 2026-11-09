@@ -1,6 +1,8 @@
-# Can we replace the OpenClaw CLI with the Gateway SDK?
+# Historical assessment: replacing the OpenClaw CLI with the Gateway SDK
 
-Assessment: 9 November 2026. Gateway roster discovery is implemented behind `MCP_AGENT_DISCOVERY=gateway`; see the [setup guide](multiagent.md). It uses the pinned 2026.10.9 SDK and requires Node >=22.19.0. The ordinary Discord migration is now implemented behind a separate [SDK opt-in](discord-sdk.md), retaining HTTP/REST reads and writes. The historical assessment below is not a live equivalence claim. Tests use fake transports; no production authenticated connection or end-to-end Discord migration test is claimed.
+Historical assessment: 9 November 2026, before removal of the CLI transport. The assessment and test evidence below are preserved as written, not current setup instructions or a live-equivalence claim.
+
+**Current implementation:** Discord agent execution always uses the pinned 2026.10.9 SDK; Gateway HTTP and Discord REST adapters remain. Agent discovery supports `gateway` or an unset/static roster only. There is no CLI mode or fallback. Use the [current SDK setup and migration guide](discord-sdk.md), [remaining HTTP/REST inventory and feasibility advice](discord-sdk.md#remaining-httprest-calls-and-sdk-feasibility), and [multi-agent setup](multiagent.md). Current live evidence and remaining deployment gates are recorded in the SDK guide.
 
 ## Independent review: limits found on 9 November 2026
 
@@ -22,7 +24,7 @@ Yes. The official `@openclaw/gateway-client` can retrieve the agent list and sta
 
 It would add a WebSocket connection and its authentication lifecycle. It is not a direct replacement for an HTTP fetch call, and it would not automatically make every Discord adapter support multiple Gateways.
 
-Thread creation itself already has an HTTP implementation. Keep it initially; see [the current Discord workflow and limits](discord-skills.md#which-parts-still-need-the-cli).
+Thread creation itself already has an HTTP implementation. Keep it initially; see [the current Discord workflow and limits](discord-skills.md#how-discord-requests-reach-openclaw).
 
 ## Start with agent discovery
 

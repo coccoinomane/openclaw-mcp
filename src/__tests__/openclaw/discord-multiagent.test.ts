@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { discordBindingResolver } from '../../openclaw/discord-bindings.js';
 import { DiscordService, type DiscordConfig } from '../../openclaw/discord.js';
+import type { DiscordAgentTransport } from '../../openclaw/discord-agent.js';
 import { channelReader } from '../../openclaw/discord-read.js';
 import { assertTargetAllowed } from '../../openclaw/discord-policy.js';
 import { handleDiscord, discordTools } from '../../mcp/tools/discord.js';
@@ -38,11 +39,9 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
   const stateDir = await mkdtemp(join(tmpdir(), 'discord-agents-'));
   dirs.push(stateDir);
   const config: DiscordConfig = {
-    executable: 'never-executed',
     stateDir,
     targets: [target],
-    cliGatewayInstance: 'local',
-    gatewayReadsEnabled: true,
+    gatewayInstance: 'local',
     ...overrides,
   };
   const reader = vi.fn(async () => ({
@@ -53,9 +52,26 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
     ],
   }));
   const invoke = vi.fn();
+  const createThread = vi.fn(async () => ({ thread: { id: thread } }));
+  const agent = {
+    ready: vi.fn(async () => {}),
+    run: vi.fn(async () => ({ status: 'ok' })),
+    cancel: vi.fn(async () => {}),
+  } satisfies DiscordAgentTransport;
   return {
-    service: new DiscordService(config, vi.fn(), invoke, undefined, reader),
+    service: new DiscordService(
+      config,
+      invoke,
+      undefined,
+      reader,
+      createThread,
+      undefined,
+      undefined,
+      agent
+    ),
     reader,
+    createThread,
+    agent,
     invoke,
     config,
   };
@@ -264,7 +280,7 @@ describe('Discord imported static agent routes', () => {
     await expect(service.status('legacy-operation-001')).rejects.toThrow('ROUTE_MISMATCH');
   });
   it('uses the admitted permission scope with the actual Gateway reader after agent reassignment', async () => {
-    const { config } = await fixture({
+    const { config, createThread, agent } = await fixture({
       importedRouteAgent: discordBindingResolver([binding('writer')]),
     });
     const fetcher = vi.fn(async (_url: any, options: any) => {
@@ -274,7 +290,10 @@ describe('Discord imported static agent routes', () => {
         JSON.stringify({
           ok: true,
           result: {
-            details: { ok: true, channel: { id: body.args.channelId, guild_id: guild, type: 0 } },
+            details:
+              body.args.action === 'thread-list'
+                ? { ok: true, threads: [] }
+                : { ok: true, channel: { id: body.args.channelId, guild_id: guild, type: 0 } },
           },
         })
       );
@@ -284,13 +303,21 @@ describe('Discord imported static agent routes', () => {
       config,
       fetcher
     )!;
-    const runner = vi.fn(async () => ({ ok: true, threads: [] }));
-    const service = new DiscordService(config, runner, undefined, undefined, reader);
+    const service = new DiscordService(
+      config,
+      undefined,
+      undefined,
+      reader,
+      createThread,
+      undefined,
+      undefined,
+      agent
+    );
     expect(await service.threads({ target: 'work', agent_id: 'writer' })).toMatchObject({
       agent_id: 'writer',
       threads: [],
     });
-    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledTimes(2);
     await expect(
       reader(
         { ...target, guildId: '700000000000000099', agentId: 'writer', permissionAgentId: 'main' },
@@ -303,7 +330,7 @@ describe('Discord imported static agent routes', () => {
         { action: 'channel-info', channelId: channel }
       )
     ).rejects.toThrow('READ_SCOPE_DENIED');
-    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
   it('adds selectors to every strict schema and rejects malformed selectors before service calls', async () => {
     expect(

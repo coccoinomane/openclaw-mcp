@@ -45,17 +45,8 @@ async function main() {
   };
   deps.skills = await loadPackagedSkills();
   if (discordConfig) {
-    if (
-      !discordConfig.cliGatewayInstance &&
-      args.instances.some((instance) => instance.bindings !== undefined)
-    ) {
-      throw new Error('Imported Discord routing requires MCP_DISCORD_CLI_GATEWAY_INSTANCE');
-    }
-    if (discordConfig.cliGatewayInstance) {
-      const bindings = registry.getBindings(discordConfig.cliGatewayInstance);
-      if (bindings !== undefined)
-        discordConfig.importedRouteAgent = discordBindingResolver(bindings);
-    }
+    const bindings = registry.getBindings(discordConfig.gatewayInstance);
+    if (bindings !== undefined) discordConfig.importedRouteAgent = discordBindingResolver(bindings);
     if (
       discordConfig.creationPolicies?.some(
         (p) => !args.instances.some((i) => i.name === p.instance && i.token)
@@ -64,7 +55,6 @@ async function main() {
       throw new Error('Channel creation requires a configured gateway instance with credentials');
     deps.discord = new DiscordService(
       discordConfig,
-      undefined,
       channelInvoker(args.instances),
       undefined,
       channelReader(args.instances, discordConfig),

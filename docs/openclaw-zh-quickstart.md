@@ -4,6 +4,8 @@
 
 作者：[Aris Li](https://github.com/ArisLiWind)（深圳 / APAC）
 
+> 本文介绍 OpenClaw Gateway 主机的安装与管理，不是 MCP bridge 的运行依赖清单。MCP bridge 不安装或调用 OpenClaw CLI；它通过 Gateway SDK、HTTP 和 Discord REST 连接服务。当前 bridge 配置请参阅 [Discord 设置](discord-skills.md)与 [SDK 迁移指南](discord-sdk.md)。
+
 ## 先理解一件事：OpenClaw 在哪里运行？
 
 OpenClaw 是运行在你自己设备上的个人 AI 助手。核心进程是 **Gateway**：它连接模型、工具、会话和聊天渠道；Control UI、CLI、TUI 以及 WhatsApp、Telegram、Slack、Discord 等渠道都通过 Gateway 工作。

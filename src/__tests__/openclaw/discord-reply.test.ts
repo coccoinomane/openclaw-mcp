@@ -10,6 +10,7 @@ import {
   type DiscordConfig,
   type DiscordRouteResolver,
 } from '../../openclaw/discord.js';
+import type { DiscordAgentRequest, DiscordAgentTransport } from '../../openclaw/discord-agent.js';
 import { DiscordError } from '../../openclaw/discord-channels.js';
 import { discordTools, handleDiscord } from '../../mcp/tools/discord.js';
 
@@ -34,7 +35,6 @@ afterEach(async () => {
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'discord-reply-'));
   const config: DiscordConfig = {
-    executable: 'never-run',
     stateDir: dir,
     targets: [
       {
@@ -47,8 +47,7 @@ async function fixture() {
       },
     ],
     acknowledgeInboundRouting: true,
-    gatewayReadsEnabled: true,
-    cliGatewayInstance: 'home',
+    gatewayInstance: 'home',
   };
   const metadata: any = {
     id: thread,
@@ -81,16 +80,21 @@ async function fixture() {
     started = resolve;
   });
   let prompt = '';
-  const runner = vi.fn(async (_e: string, args: string[]) => {
-    if (args[0] === 'message' && args[1] === 'permissions') return { permissions };
-    if (args[0] !== 'agent') throw new Error('Unexpected CLI mutation');
-    prompt = await readFile(args[args.indexOf('--message-file') + 1], 'utf8');
-    started();
-    return generation;
-  });
-  const reader = vi.fn(async (_t: any, req: any) => ({
-    channel: req.channelId === parent ? { id: parent, guild_id: guild, type: 0 } : metadata,
-  }));
+  const agent = {
+    ready: vi.fn(async () => {}),
+    run: vi.fn(async (request: DiscordAgentRequest) => {
+      prompt = request.message;
+      started();
+      return generation;
+    }),
+    cancel: vi.fn(async () => {}),
+  } satisfies DiscordAgentTransport;
+  const createThread = vi.fn(async () => ({ thread: { id: thread } }));
+  const reader = vi.fn(async (_t: any, req: any) =>
+    req.action === 'permissions'
+      ? { permissions }
+      : { channel: req.channelId === parent ? { id: parent, guild_id: guild, type: 0 } : metadata }
+  );
   const resolver = vi.fn<DiscordRouteResolver>(async () => route);
   const publish = vi.fn(
     async (
@@ -104,7 +108,7 @@ async function fixture() {
     }
   );
   const make = (resolve: DiscordRouteResolver | undefined = resolver) =>
-    new DiscordService(config, runner, undefined, resolve, reader, undefined, undefined, publish);
+    new DiscordService(config, undefined, resolve, reader, createThread, undefined, publish, agent);
   const service = make();
   const others: DiscordService[] = [];
   cleanups.push(async () => {
@@ -118,7 +122,8 @@ async function fixture() {
     metadata,
     route,
     permissions,
-    runner,
+    agent,
+    createThread,
     reader,
     resolver,
     publish,
@@ -134,13 +139,13 @@ async function fixture() {
     withoutResolver: () =>
       new DiscordService(
         config,
-        runner,
         undefined,
         undefined,
         reader,
+        createThread,
         undefined,
-        undefined,
-        publish
+        publish,
+        agent
       ),
   };
 }
@@ -167,11 +172,15 @@ describe('existing public thread replies', () => {
       ]);
       await f.running;
       expect(f.prompt()).toBe(input.prompt);
-      const args = f.runner.mock.calls.find((c) => c[1][0] === 'agent')![1];
-      expect(args).toContain('--session-key');
-      expect(args[args.indexOf('--session-key') + 1]).toBe(f.route.sessionKey);
-      expect(args).toContain('channel:' + thread);
-      expect(args).not.toContain('--local');
+      expect(f.agent.run.mock.calls[0][0]).toEqual({
+        message: input.prompt,
+        agentId: 'main',
+        sessionKey: f.route.sessionKey,
+        threadId: thread,
+        accountId: 'bot',
+        idempotencyKey: expect.any(String),
+      });
+      expect(f.createThread).not.toHaveBeenCalled();
       f.finish({ status: 'ok', runId: 'one' });
       await f.service.drain();
       expect(await f.service.reply(input)).toMatchObject({ status: 'completed', run_id: 'one' });
@@ -284,7 +293,8 @@ describe('existing public thread replies', () => {
       request_verified: false,
     });
     expect(f.publish).not.toHaveBeenCalled();
-    expect(f.runner.mock.calls.some((c) => c[1][0] === 'agent')).toBe(false);
+    expect(f.agent.run).not.toHaveBeenCalled();
+    expect(f.createThread).not.toHaveBeenCalled();
   });
   it.each(['parent blacklist', 'thread blacklist', 'whitelist', 'guild scope'])(
     'rejects forbidden %s',
@@ -309,8 +319,7 @@ describe('existing public thread replies', () => {
       session_key: f.route.sessionKey,
     });
     await f.running;
-    const args = f.runner.mock.calls.find((c) => c[1][0] === 'agent')![1];
-    expect(args[args.indexOf('--session-key') + 1]).toBe('agent:main:discord:channel:' + thread);
+    expect(f.agent.run.mock.calls[0][0].sessionKey).toBe('agent:main:discord:channel:' + thread);
     expect(f.publish).toHaveBeenCalledTimes(1);
     f.finish({ status: 'ok' });
     await service.drain();
@@ -350,7 +359,7 @@ describe('existing public thread replies', () => {
     ]);
     await f.running;
     expect(f.publish).toHaveBeenCalledTimes(1);
-    expect(f.runner.mock.calls.filter((c) => c[1][0] === 'agent')).toHaveLength(1);
+    expect(f.agent.run).toHaveBeenCalledTimes(1);
     await expect(f.service.reply({ ...input, prompt: 'changed' })).rejects.toThrow(
       'different arguments'
     );
@@ -389,7 +398,7 @@ describe('existing public thread replies', () => {
       status: 'run_unknown',
       error_code: 'OPERATION_INTERRUPTED',
     });
-    f.finish({ _cliFailure: true, _cliCode: 'CLI_TIMEOUT' });
+    f.finish({ status: 'unknown' });
     await f.service.drain();
     expect(await f.service.status(input.operation_id)).toMatchObject({ status: 'run_unknown' });
     expect(await f.make().reply({ ...input, operation_id: 'reply-operation-0002' })).toMatchObject({
@@ -416,7 +425,8 @@ describe('existing public thread replies', () => {
       error_code: 'NONORDINARY_ROUTE_DENIED',
       request_verified: true,
     });
-    expect(f.runner.mock.calls.some((c) => c[1][0] === 'agent')).toBe(false);
+    expect(f.agent.run).not.toHaveBeenCalled();
+    expect(f.createThread).not.toHaveBeenCalled();
   });
   it.each(['locked', 'permissions', 'policy'])(
     'rechecks %s after publication before dispatch',
@@ -432,7 +442,8 @@ describe('existing public thread replies', () => {
       await f.service.drain();
       const record = JSON.parse(await readFile(join(f.dir, input.operation_id + '.json'), 'utf8'));
       expect(record).toMatchObject({ status: 'run_failed', request_verified: true });
-      expect(f.runner.mock.calls.some((c) => c[1][0] === 'agent')).toBe(false);
+      expect(f.agent.run).not.toHaveBeenCalled();
+      expect(f.createThread).not.toHaveBeenCalled();
     }
   );
   it('requires AttachFiles for long exact requests', async () => {
@@ -447,18 +458,23 @@ describe('existing public thread replies', () => {
     const f = await fixture();
     f.metadata.type = 10;
     f.permissions.channelType = 10;
-    f.reader.mockImplementation(async (_t, req) => ({
-      channel: req.channelId === parent ? { id: parent, guild_id: guild, type: 5 } : f.metadata,
-    }));
+    f.reader.mockImplementation(async (_t, req) =>
+      req.action === 'permissions'
+        ? { permissions: f.permissions }
+        : {
+            channel:
+              req.channelId === parent ? { id: parent, guild_id: guild, type: 5 } : f.metadata,
+          }
+    );
     expect(await f.service.reply(input)).toMatchObject({ status: 'queued' });
     await f.running;
     expect(f.publish).toHaveBeenCalledTimes(1);
   });
-  it('retains the claim when a dispatched CLI fails without proving the run ended', async () => {
+  it('retains the claim when a dispatched SDK run fails without proving the run ended', async () => {
     const f = await fixture();
     await f.service.reply(input);
     await f.running;
-    f.finish({ _cliFailure: true, _cliCode: 'CLI_EXIT_NONZERO' });
+    f.finish({ status: 'error' });
     await f.service.drain();
     expect(await f.service.status(input.operation_id)).toMatchObject({ status: 'run_failed' });
     expect(await f.make().reply({ ...input, operation_id: 'reply-operation-0002' })).toMatchObject({
@@ -478,17 +494,20 @@ describe('existing public thread replies', () => {
         const address = String(url);
         if (address === 'http://127.0.0.1:18789/tools/invoke') {
           const body = JSON.parse(String(init?.body));
-          expect(body.args.action).toBe('channel-info');
+          expect(['channel-info', 'permissions']).toContain(body.args.action);
           return Response.json({
             ok: true,
             result: {
-              details: {
-                ok: true,
-                channel:
-                  body.args.channelId === parent
-                    ? { id: parent, guild_id: guild, type: 0 }
-                    : f.metadata,
-              },
+              details:
+                body.args.action === 'permissions'
+                  ? { ok: true, permissions: f.permissions }
+                  : {
+                      ok: true,
+                      channel:
+                        body.args.channelId === parent
+                          ? { id: parent, guild_id: guild, type: 0 }
+                          : f.metadata,
+                    },
             },
           });
         }
@@ -518,7 +537,6 @@ describe('existing public thread replies', () => {
       });
       const service = new DiscordService(
         f.config,
-        f.runner,
         undefined,
         undefined,
         channelReader(
@@ -526,9 +544,10 @@ describe('existing public thread replies', () => {
           f.config,
           network
         ),
-        undefined,
+        f.createThread,
         threadMemberAdder(f.config, { DISCORD_BOT_TOKEN: 'test-only' }, network),
-        requestPublisher(f.config, { DISCORD_BOT_TOKEN: 'test-only' }, network)
+        requestPublisher(f.config, { DISCORD_BOT_TOKEN: 'test-only' }, network),
+        f.agent
       );
       try {
         const result = await handleDiscord(service, 'openclaw_discord_reply', input);
@@ -548,7 +567,7 @@ describe('existing public thread replies', () => {
             ([, init]) => init?.method === 'POST' && String(init.body).includes('allowed_mentions')
           )
         ).toHaveLength(1);
-        expect(f.runner.mock.calls.filter(([, args]) => args[0] === 'agent')).toHaveLength(1);
+        expect(f.agent.run).toHaveBeenCalledTimes(1);
       } finally {
         f.finish({ status: 'ok' });
         await service.drain();

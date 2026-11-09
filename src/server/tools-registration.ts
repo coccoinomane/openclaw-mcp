@@ -137,7 +137,7 @@ function toolSet(
           }
           try {
             registry.resolve(
-              (input.instance as string | undefined) ?? deps.discord!.config.cliGatewayInstance,
+              (input.instance as string | undefined) ?? deps.discord!.config.gatewayInstance,
               input.agent_id as string | undefined
             );
           } catch (error) {

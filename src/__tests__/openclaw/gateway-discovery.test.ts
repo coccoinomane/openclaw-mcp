@@ -72,15 +72,10 @@ function fake(onStart?: (options: GatewayClientOptions) => void, response: unkno
 describe('Gateway roster discovery', () => {
   it('uses a signed backend identity and only agents.list/operator.read, preserving defaults and manual routes', async () => {
     const transport = fake();
-    const cli = vi.fn();
     const bindings = [{ agentId: 'writer', match: { channel: 'discord', guildId: '123' } }];
-    const configs = await loadAgentCatalog(
-      [{ ...local, bindings }],
-      env,
-      cli,
-      (config, environment) => discoverGatewayAgents(config, environment, transport.create)
+    const configs = await loadAgentCatalog([{ ...local, bindings }], env, (config, environment) =>
+      discoverGatewayAgents(config, environment, transport.create)
     );
-    expect(cli).not.toHaveBeenCalled();
     expect(transport.options[0]).toMatchObject({
       url: 'ws://127.0.0.1:18789/',
       clientName: 'gateway-client',
@@ -117,14 +112,14 @@ describe('Gateway roster discovery', () => {
     expect(transport.clients[0].request).not.toHaveBeenCalled();
     transport.options[0].onHelloOk!({} as never);
     await task;
-    const configs = await loadAgentCatalog([local], env, vi.fn(), async () => roster);
+    const configs = await loadAgentCatalog([local], env, async () => roster);
     expect(configs[0]).not.toHaveProperty('bindings');
   });
 
   it('isolates connections, device identities and credentials for two Gateways', async () => {
     const transport = fake();
     const remote = { name: 'remote', url: 'https://gateway.example', token: 'remote-secret' };
-    const configs = await loadAgentCatalog([local, remote], env, vi.fn(), (config, environment) =>
+    const configs = await loadAgentCatalog([local, remote], env, (config, environment) =>
       discoverGatewayAgents(config, environment, transport.create)
     );
     expect(configs).toHaveLength(2);
@@ -151,7 +146,6 @@ describe('Gateway roster discovery', () => {
     const task = loadAgentCatalog(
       [local, { name: 'remote', url: 'https://gateway.example', token: 'other' }],
       env,
-      vi.fn(),
       (config, environment) => discoverGatewayAgents(config, environment, transport.create)
     );
     await expect(task).rejects.toThrow(

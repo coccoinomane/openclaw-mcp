@@ -9,8 +9,7 @@ describe('agent catalog', () => {
   it('accepts operator catalog configuration without weakening agent provenance denial', () => {
     const env = {
       MCP_AGENT_CATALOG: JSON.stringify([{ instance: 'local', agents: [{ id: 'main' }] }]),
-      MCP_AGENT_DISCOVERY: 'cli',
-      MCP_AGENT_DISCOVERY_INSTANCE: 'local',
+      MCP_AGENT_DISCOVERY: 'gateway',
     };
     expect(() => assertServiceProvenance(env)).not.toThrow();
     expect(() => assertServiceProvenance({ ...env, OPENCLAW_AGENT_ID: 'caller' })).toThrow(
@@ -37,29 +36,30 @@ describe('agent catalog', () => {
     expect(() => registry.resolve('local', 'missing')).toThrow('Unknown agent');
     expect(() => registry.resolve('missing', 'writer')).toThrow('Unknown instance');
   });
-  it('scopes opt-in CLI discovery and strips private roster fields', async () => {
-    const runner = vi
-      .fn()
-      .mockResolvedValueOnce([
-        { id: 'main', workspace: '/private/path', token: 'secret' },
-        { id: 'writer' },
-      ])
-      .mockResolvedValueOnce([
-        { agentId: 'writer', match: { channel: 'discord', guildId: '123' }, description: 'route' },
-      ]);
+  it('strips private roster fields and preserves operator bindings', async () => {
+    const loader = vi.fn().mockResolvedValue({
+      agents: [{ id: 'main', workspace: '/private/path', token: 'secret' }, { id: 'writer' }],
+    });
     const configs = await loadAgentCatalog(
       instances,
       {
-        MCP_AGENT_DISCOVERY: 'cli',
-        MCP_AGENT_DISCOVERY_INSTANCE: 'local',
-        MCP_AGENT_DISCOVERY_EXECUTABLE: '/operator/bin/openclaw',
+        MCP_AGENT_DISCOVERY: 'gateway',
+        MCP_AGENT_CATALOG: JSON.stringify([
+          {
+            instance: 'local',
+            bindings: [
+              {
+                agentId: 'writer',
+                match: { channel: 'discord', guildId: '123' },
+                description: 'route',
+              },
+            ],
+          },
+        ]),
       },
-      runner
+      loader
     );
-    expect(runner.mock.calls).toEqual([
-      ['/operator/bin/openclaw', ['agents', 'list', '--json']],
-      ['/operator/bin/openclaw', ['agents', 'bindings', '--json']],
-    ]);
+    expect(loader).toHaveBeenCalledOnce();
     expect(JSON.stringify(configs)).not.toContain('private');
     expect(JSON.stringify(configs)).not.toContain('secret');
     expect(configs[0].bindings).toEqual([
@@ -67,16 +67,16 @@ describe('agent catalog', () => {
     ]);
   });
   it('does not execute discovery by default', async () => {
-    const runner = vi.fn();
-    expect(await loadAgentCatalog(instances, {}, runner)).toEqual(instances);
-    expect(runner).not.toHaveBeenCalled();
+    const loader = vi.fn();
+    expect(await loadAgentCatalog(instances, {}, loader)).toEqual(instances);
+    expect(loader).not.toHaveBeenCalled();
   });
   it('rejects unknown scopes, duplicate catalogs, unknown binding agents and unsupported overrides', async () => {
-    const runner = vi.fn();
+    const loader = vi.fn();
     await expect(
-      loadAgentCatalog(instances, { MCP_AGENT_DISCOVERY: 'cli' }, runner)
-    ).rejects.toThrow('configured instance');
-    expect(runner).not.toHaveBeenCalled();
+      loadAgentCatalog(instances, { MCP_AGENT_DISCOVERY: 'cli' }, loader)
+    ).rejects.toThrow('must be gateway');
+    expect(loader).not.toHaveBeenCalled();
     for (const entry of [
       { instance: 'missing', agents: [] },
       { instance: 'local', agents: [{ id: 'main' }, { id: 'MAIN' }] },
@@ -109,7 +109,6 @@ describe('agent catalog', () => {
 
 describe('configured Discord agents in generic catalog', () => {
   const discord: DiscordConfig = {
-    executable: 'openclaw',
     stateDir: '/tmp/test-only',
     targets: [
       {
@@ -137,12 +136,12 @@ describe('configured Discord agents in generic catalog', () => {
     ).toBe(true);
     const result = includeConfiguredDiscordAgents(configs, {
       ...discord,
-      cliGatewayInstance: 'remote',
+      gatewayInstance: 'remote',
     });
     expect(result[0].agents).toEqual([]);
     expect(result[1].agents).toEqual([{ id: 'writer' }, { id: 'reviewer' }]);
     expect(() =>
-      includeConfiguredDiscordAgents(configs, { ...discord, cliGatewayInstance: 'unknown' })
+      includeConfiguredDiscordAgents(configs, { ...discord, gatewayInstance: 'unknown' })
     ).toThrow('unknown instance');
   });
 });
@@ -155,7 +154,6 @@ describe('Gateway catalog configuration', () => {
     selectionRequired: true,
   };
   it('combines a Gateway roster with bindings-only catalog without importing configuration', async () => {
-    const runner = vi.fn();
     const loader = vi.fn().mockResolvedValue(roster);
     const routes = [{ agentId: 'writer', match: { channel: 'discord', guildId: '123' } }];
     const result = await loadAgentCatalog(
@@ -164,20 +162,17 @@ describe('Gateway catalog configuration', () => {
         ...env,
         MCP_AGENT_CATALOG: JSON.stringify([{ instance: 'local', bindings: routes }]),
       },
-      runner,
       loader
     );
     expect(result[0].agents).toEqual(roster.agents);
     expect(result[0].bindings).toEqual(routes);
     expect(new InstanceRegistry(result).resolve().agentId).toBe('main');
-    expect(runner).not.toHaveBeenCalled();
     expect(loader).toHaveBeenCalledTimes(1);
   });
   it('retains unknown-default behavior and does not enforce selectionRequired', async () => {
     const result = await loadAgentCatalog(
       [{ name: 'local', url: 'https://gateway.example' }],
       env,
-      vi.fn(),
       async () => roster
     );
     const registry = new InstanceRegistry(result);
@@ -185,19 +180,15 @@ describe('Gateway catalog configuration', () => {
     expect(registry.listAgents().every((agent) => !agent.isDefault)).toBe(true);
     expect(registry.resolve('local', 'writer').agentId).toBe('writer');
   });
-  it('rejects conflicting roster sources and obsolete CLI-only knobs before connecting', async () => {
+  it('rejects conflicting roster sources before connecting', async () => {
     const loader = vi.fn();
     for (const extra of [
-      { MCP_AGENT_DISCOVERY_INSTANCE: 'local' },
-      { MCP_AGENT_DISCOVERY_EXECUTABLE: 'openclaw' },
       { MCP_AGENT_CATALOG: JSON.stringify([{ instance: 'local', agents: [{ id: 'main' }] }]) },
     ])
-      await expect(
-        loadAgentCatalog(instances, { ...env, ...extra }, vi.fn(), loader)
-      ).rejects.toThrow();
-    await expect(
-      loadAgentCatalog([{ ...instances[0], agents: [] }], env, vi.fn(), loader)
-    ).rejects.toThrow('static agent roster');
+      await expect(loadAgentCatalog(instances, { ...env, ...extra }, loader)).rejects.toThrow();
+    await expect(loadAgentCatalog([{ ...instances[0], agents: [] }], env, loader)).rejects.toThrow(
+      'static agent roster'
+    );
     expect(loader).not.toHaveBeenCalled();
   });
   it.each([
@@ -210,7 +201,7 @@ describe('Gateway catalog configuration', () => {
     { agents: [{ id: 'MAIN' }, { id: 'main' }] },
     { agents: [{ id: 'main', kind: 'unknown' }] },
   ])('rejects malformed Gateway response %j without default fallback', async (value) => {
-    await expect(loadAgentCatalog(instances, env, vi.fn(), async () => value)).rejects.toThrow();
+    await expect(loadAgentCatalog(instances, env, async () => value)).rejects.toThrow();
     expect(instances[0]).not.toHaveProperty('agents');
   });
   it('validates manual bindings against the returned roster and preserves explicit empty routes', async () => {
@@ -218,14 +209,12 @@ describe('Gateway catalog configuration', () => {
       loadAgentCatalog(
         [{ ...instances[0], bindings: [{ agentId: 'missing', match: {} }] }],
         env,
-        vi.fn(),
         async () => roster
       )
     ).rejects.toThrow('unknown agent');
     const result = await loadAgentCatalog(
       [{ ...instances[0], bindings: [] }],
       env,
-      vi.fn(),
       async () => roster
     );
     expect(result[0].bindings).toEqual([]);

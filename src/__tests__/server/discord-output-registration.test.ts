@@ -62,7 +62,7 @@ describe.each([false, true])('Discord output validation (modern=%s)', (modern) =
   it('rejects unknown selector agents before dispatch on every transport', async () => {
     const channels = vi.fn(async () => ({ channels: [], creation_policies: [] }));
     const client = await connect(modern, {
-      config: { cliGatewayInstance: 'default' },
+      config: { gatewayInstance: 'default' },
       channels,
     } as unknown as DiscordService);
     const result = await client.callTool({

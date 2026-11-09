@@ -8,6 +8,8 @@ import {
   channelInvoker,
   type CreationPolicy,
 } from '../../openclaw/discord-channels.js';
+import type { DiscordReader } from '../../openclaw/discord-read.js';
+import type { DiscordAgentTransport } from '../../openclaw/discord-agent.js';
 import { DiscordService, type DiscordConfig } from '../../openclaw/discord.js';
 const guild = '200000000000000001',
   category = '200000000000000002',
@@ -30,7 +32,7 @@ const input = {
 };
 const dirs: string[] = [];
 beforeEach(() => {
-  // Mock-only tests; no real CLI or HTTP action is executed.
+  // Mock-only tests; no real SDK or HTTP action is executed.
   for (const key of Object.keys(process.env))
     if (/^OPENCLAW_(SHELL|.*AGENT.*|.*SESSION.*|.*CALLER.*)$/.test(key)) vi.stubEnv(key, undefined);
 });
@@ -153,7 +155,7 @@ describe('explicit channel creation', () => {
     expect(f.invoke).not.toHaveBeenCalled();
     expect(await f.creation.admitted()).toEqual([]);
   });
-  it('rejects agent provenance before HTTP or CLI reads', async () => {
+  it('rejects agent provenance before HTTP or Gateway reads', async () => {
     const f = await fixture();
     vi.stubEnv('OPENCLAW_SHELL', 'exec');
     await expect(f.creation.create(input)).rejects.toThrow('AGENT_PROVENANCE_DENIED');
@@ -163,36 +165,52 @@ describe('explicit channel creation', () => {
   it('uses admitted channels for discovery after restart and denies remote continuation', async () => {
     const f = await fixture();
     const config: DiscordConfig = {
-      executable: 'openclaw',
       stateDir: f.dir,
       targets: [],
       creationPolicies: [policy],
-      cliGatewayInstance: 'home',
+      gatewayInstance: 'home',
       acknowledgeInboundRouting: true,
     };
-    const runner = vi.fn(async (_exe: string, args: string[]) =>
-      args[0] === 'agent'
-        ? { status: 'ok' }
-        : {
-            payload:
-              args[2] === 'list'
-                ? {
-                    ok: true,
-                    channels: await Promise.all(
-                      [channel, category].map((id) => f.inspect(policy, id))
-                    ),
-                  }
-                : { channel: await f.inspect(policy, args[args.indexOf('--target') + 1].slice(8)) },
+    const reader = vi.fn<DiscordReader>(async (_scope, request) =>
+      request.action === 'channel-list'
+        ? {
+            ok: true,
+            channels: await Promise.all([channel, category].map((id) => f.inspect(policy, id))),
           }
+        : { channel: await f.inspect(policy, request.channelId) }
     );
-    const service = new DiscordService(config, runner, f.invoke);
+    const createThread = vi.fn(async () => ({ thread: { id: channel } }));
+    const agent = {
+      ready: vi.fn(async () => {}),
+      run: vi.fn(async () => ({ status: 'ok' })),
+      cancel: vi.fn(async () => {}),
+    } satisfies DiscordAgentTransport;
+    const service = new DiscordService(
+      config,
+      f.invoke,
+      undefined,
+      reader,
+      createThread,
+      undefined,
+      undefined,
+      agent
+    );
     await service.createChannel(input);
-    const restarted = new DiscordService(config, runner, f.invoke, async (t, id) => ({
-      ...t,
-      channelId: id,
-      sessionKey: 'agent:' + t.agentId + ':discord:channel:' + id,
-      kind: 'ordinary',
-    }));
+    const restarted = new DiscordService(
+      config,
+      f.invoke,
+      async (t, id) => ({
+        ...t,
+        channelId: id,
+        sessionKey: 'agent:' + t.agentId + ':discord:channel:' + id,
+        kind: 'ordinary',
+      }),
+      reader,
+      createThread,
+      undefined,
+      undefined,
+      agent
+    );
     const list = await restarted.channels();
     expect(list.channels[0]).toMatchObject({
       target: 'created-' + channel,
@@ -208,13 +226,12 @@ describe('explicit channel creation', () => {
     );
     await expect(restarted.channels()).rejects.toThrow('ADMITTED_CHANNEL_MOVED');
   });
-  it('requires explicit CLI gateway and inbound routing acknowledgement', async () => {
+  it('requires explicit Gateway and inbound routing acknowledgement', async () => {
     const f = await fixture();
     expect(
       () =>
         new DiscordService(
-          { executable: 'openclaw', stateDir: f.dir, targets: [], creationPolicies: [policy] },
-          undefined,
+          { gatewayInstance: 'home', stateDir: f.dir, targets: [], creationPolicies: [policy] },
           f.invoke
         )
     ).toThrow('CREATION_ROUTING_ACKNOWLEDGEMENT_REQUIRED');

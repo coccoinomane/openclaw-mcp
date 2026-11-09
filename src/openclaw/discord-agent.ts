@@ -63,13 +63,12 @@ export function discordAgentTransport(
   config: DiscordConfig,
   env: NodeJS.ProcessEnv = process.env,
   createClient: AgentClientFactory = (options) => new GatewayClient(options)
-): DiscordAgentTransport | undefined {
-  if (config.agentTransport !== 'sdk') return undefined;
+): DiscordAgentTransport {
   const authMode = env.MCP_DISCORD_SDK_AUTH ?? 'device';
   if (!['device', 'local-shared-token'].includes(authMode))
     throw new DiscordError('SDK_AUTH_MODE_INVALID');
   const localSharedToken = authMode === 'local-shared-token';
-  const matches = instances.filter((i) => i.name === config.cliGatewayInstance);
+  const matches = instances.filter((i) => i.name === config.gatewayInstance);
   if (matches.length !== 1) throw new DiscordError('SDK_GATEWAY_CONFIGURATION_INVALID');
   const instance = { ...matches[0] };
   let url: URL;

@@ -28,9 +28,8 @@ export function channelReader(
   instances: InstanceConfig[],
   config: DiscordConfig,
   fetcher = fetch
-): DiscordReader | undefined {
-  if (config.gatewayReadsEnabled !== true || !config.cliGatewayInstance) return undefined;
-  const matches = instances.filter((i) => i.name === config.cliGatewayInstance);
+): DiscordReader {
+  const matches = instances.filter((i) => i.name === config.gatewayInstance);
   if (matches.length !== 1 || !matches[0].token)
     throw new DiscordError('READ_GATEWAY_CONFIGURATION_INVALID');
   const instance = { ...matches[0] };

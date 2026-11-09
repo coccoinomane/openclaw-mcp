@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DiscordService, loadDiscordConfig, type DiscordConfig } from '../../openclaw/discord.js';
+import type { DiscordAgentRequest, DiscordAgentTransport } from '../../openclaw/discord-agent.js';
 import { DiscordError } from '../../openclaw/discord-channels.js';
 import { requestPublisher } from '../../openclaw/discord-request.js';
 
@@ -54,26 +55,25 @@ afterEach(async () => {
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'discord-async-'));
   const config: DiscordConfig = {
-    executable: 'never-run',
     stateDir: dir,
     targets: [target],
     acknowledgeInboundRouting: true,
-    gatewayReadsEnabled: true,
-    cliGatewayInstance: 'home',
-    threadCreateMode: 'gateway',
+    gatewayInstance: 'home',
     threadMember: { userId: '400000000000000006', accountId: 'bot' },
     maxOperations: 1,
   };
   const events: string[] = [];
   const generation = deferred<any>();
   const started = deferred<void>();
-  let promptFile = '';
-  const runner = vi.fn(async (_e: string, args: string[]) => {
-    events.push('agent');
-    promptFile = args[args.indexOf('--message-file') + 1];
-    started.resolve();
-    return generation.promise;
-  });
+  const agent = {
+    ready: vi.fn(async () => {}),
+    run: vi.fn(async (_request: DiscordAgentRequest) => {
+      events.push('agent');
+      started.resolve();
+      return generation.promise;
+    }),
+    cancel: vi.fn(async () => {}),
+  } satisfies DiscordAgentTransport;
   const reader = vi.fn(async (_t: any, req: any) => ({
     channel: {
       id: req.channelId,
@@ -96,7 +96,7 @@ async function fixture() {
     }
   );
   const make = () =>
-    new DiscordService(config, runner, undefined, undefined, reader, create, member, publish);
+    new DiscordService(config, undefined, undefined, reader, create, member, publish, agent);
   const service = make();
   const result = {
     dir,
@@ -104,14 +104,13 @@ async function fixture() {
     events,
     generation,
     started,
-    runner,
+    agent,
     reader,
     create,
     member,
     publish,
     service,
     make,
-    promptFile: () => promptFile,
   };
   fixtures.push(result);
   return result;
@@ -129,13 +128,13 @@ describe('service-owned asynchronous handoff', () => {
       member_verified: true,
       discord_url: expect.stringContaining(thread),
     });
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
     expect(f.events).toEqual(['create', 'member', 'publish']);
     expect(f.publish.mock.calls[0][2]).toBe(input.prompt);
     expect(accepted.handoff).toContain('first response not confirmed');
     await f.started.promise;
-    expect(await readFile(f.promptFile(), 'utf8')).toBe(input.prompt);
-    expect((await stat(f.promptFile())).mode & 0o777).toBe(0o600);
+    expect(f.agent.run.mock.calls[0][0].message).toBe(input.prompt);
+    expect(await readdir(f.dir)).toEqual([input.operation_id + '.json']);
     expect(await f.service.status(input.operation_id)).toMatchObject({
       status: 'running',
       generation_status: 'running',
@@ -147,8 +146,8 @@ describe('service-owned asynchronous handoff', () => {
       status: 'completed',
       run_id: 'one-run',
     });
-    await expect(stat(f.promptFile())).rejects.toThrow();
-    expect(f.runner).toHaveBeenCalledTimes(1);
+    expect(await readdir(f.dir)).toEqual([input.operation_id + '.json']);
+    expect(f.agent.run).toHaveBeenCalledTimes(1);
     expect(f.create).toHaveBeenCalledTimes(1);
     expect(f.publish).toHaveBeenCalledTimes(1);
     const record = await readFile(join(f.dir, input.operation_id + '.json'), 'utf8');
@@ -193,7 +192,7 @@ describe('service-owned asynchronous handoff', () => {
         request_verified: false,
       });
       expect(await f.make().ask(input)).toEqual(result);
-      expect(f.runner).not.toHaveBeenCalled();
+      expect(f.agent.run).not.toHaveBeenCalled();
       expect(f.create).toHaveBeenCalledTimes(1);
       expect(f.publish).toHaveBeenCalledTimes(1);
     }
@@ -211,7 +210,7 @@ describe('service-owned asynchronous handoff', () => {
     });
     expect(await restarted.ask(input)).toMatchObject({ status: 'run_unknown' });
     expect(await readFile(path, 'utf8')).toBe(before);
-    expect(f.runner).toHaveBeenCalledTimes(1);
+    expect(f.agent.run).toHaveBeenCalledTimes(1);
     f.generation.resolve({ status: 'ok' });
     await f.service.drain();
     const record = JSON.parse(await readFile(path, 'utf8'));
@@ -223,7 +222,7 @@ describe('service-owned asynchronous handoff', () => {
       request_status: 'unknown',
     });
   });
-  it('owns and records deferred runner rejection without an unhandled promise', async () => {
+  it('owns and records deferred SDK rejection without an unhandled promise', async () => {
     const f = await fixture();
     await f.service.ask(input);
     await f.started.promise;
@@ -240,18 +239,19 @@ describe('service-owned asynchronous handoff', () => {
     expect(await f.service.status(input.operation_id)).toMatchObject({ status: 'running' });
     expect(f.create).toHaveBeenCalledTimes(1);
     expect(f.publish).toHaveBeenCalledTimes(1);
-    expect(f.runner).toHaveBeenCalledTimes(1);
+    expect(f.agent.run).toHaveBeenCalledTimes(1);
   });
   it('fails closed without a publisher before creating a thread', async () => {
     const f = await fixture();
     const service = new DiscordService(
       f.config,
-      f.runner,
       undefined,
       undefined,
       f.reader,
       f.create,
-      f.member
+      f.member,
+      undefined,
+      f.agent
     );
     expect(await service.ask(input)).toMatchObject({
       status: 'run_failed',
@@ -390,18 +390,18 @@ describe('closed request publication', () => {
     f.config.forwardingRequesterName = 'owner';
     const service = new DiscordService(
       f.config,
-      f.runner,
       undefined,
       undefined,
       f.reader,
       f.create,
       f.member,
-      requestPublisher(f.config, { DISCORD_BOT_TOKEN: 'mock-token' }, f.http)
+      requestPublisher(f.config, { DISCORD_BOT_TOKEN: 'mock-token' }, f.http),
+      f.agent
     );
     expect(await service.ask(input)).toMatchObject({ status: 'completed', request_verified: true });
     expect(f.http).not.toHaveBeenCalled();
     expect(f.create).toHaveBeenCalledTimes(1);
-    expect(f.runner).toHaveBeenCalledTimes(1);
+    expect(f.agent.run).toHaveBeenCalledTimes(1);
   });
   it.each(['content', 'filename', 'size'])(
     'rejects a mismatching long-request readback %s and retains the sent ID',
@@ -430,13 +430,13 @@ describe('closed request publication', () => {
     const make = () =>
       new DiscordService(
         f.config,
-        f.runner,
         undefined,
         undefined,
         f.reader,
         f.create,
         f.member,
-        f.send
+        f.send,
+        f.agent
       );
     const service = make();
     try {
@@ -444,7 +444,7 @@ describe('closed request publication', () => {
         request_verified: true,
       });
       await f.started.promise;
-      expect(await readFile(f.promptFile(), 'utf8')).toBe(input.prompt);
+      expect(f.agent.run.mock.calls[0][0].message).toBe(input.prompt);
       expect(JSON.parse(f.http.mock.calls[0][1].body).content).toBe(
         '**Forwarding owner’s request**\n\n' + input.prompt
       );
@@ -459,7 +459,7 @@ describe('closed request publication', () => {
       });
       expect(f.http).toHaveBeenCalledTimes(2);
       expect(f.create).toHaveBeenCalledTimes(1);
-      expect(f.runner).toHaveBeenCalledTimes(1);
+      expect(f.agent.run).toHaveBeenCalledTimes(1);
     } finally {
       f.generation.resolve({ status: 'ok' });
       await service.drain();
@@ -468,6 +468,7 @@ describe('closed request publication', () => {
   it('loads only the operator name and accepts missing or empty configuration', () => {
     const env = {
       MCP_DISCORD_ENABLED: 'true',
+      MCP_DISCORD_GATEWAY_INSTANCE: 'home',
       MCP_DISCORD_STATE_DIR: '/tmp/private-test-state',
       MCP_DISCORD_TARGETS: JSON.stringify([target]),
     };

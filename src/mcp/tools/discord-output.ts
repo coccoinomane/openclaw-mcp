@@ -118,7 +118,7 @@ const turn: OutputSchema = {
     session_key: string,
     discord_url: string,
     run_id: string,
-    agent_transport: { type: 'string', enum: ['cli', 'sdk'] },
+    agent_transport: { type: 'string', enum: ['sdk'] },
     agent_idempotency_key: string,
     cancellation_status: { type: 'string', enum: ['requested', 'acknowledged', 'unknown'] },
     request_status: {
@@ -131,8 +131,7 @@ const turn: OutputSchema = {
     delivery_verified: boolean,
     message_id: string,
     generation_status: string,
-    thread_create_transport: { type: 'string', enum: ['cli', 'gateway'] },
-    thread_create_fallback: string,
+    thread_create_transport: { type: 'string', enum: ['gateway'] },
     member_status: {
       type: 'string',
       enum: ['disabled', 'pending', 'adding', 'verified', 'failed', 'unknown'],

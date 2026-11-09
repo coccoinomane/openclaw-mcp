@@ -136,7 +136,7 @@ export const discordTools: Tool[] = [
     name: 'openclaw_discord_create_channel',
     outputSchema: discordCreationOutput,
     description:
-      'Create a normal text channel under an operator-approved guild/category using the configured Gateway API, then persistently admit it for CLI coordination. Requires explicit user authorization for creation AND admission. No arbitrary tool proxy. Keep operation ID on uncertainty.',
+      'Create a normal text channel under an operator-approved guild/category using the configured Gateway API, then persistently admit it for Discord coordination. Requires explicit user authorization for creation AND admission. No arbitrary tool proxy. Keep operation ID on uncertainty.',
     inputSchema: {
       type: 'object',
       properties: {

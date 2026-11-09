@@ -50,7 +50,7 @@ export interface OpenClawHealthResponse {
   message?: string;
 }
 
-/** Static routing fields from the sanitized CLI bindings export. */
+/** Static routing fields from the operator-supplied bindings catalog. */
 export interface AgentBinding {
   agentId: string;
   match: Record<string, unknown>;

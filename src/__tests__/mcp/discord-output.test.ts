@@ -6,6 +6,9 @@ import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv
 import { discordTools, handleDiscord } from '../../mcp/tools/discord.js';
 import { DiscordService } from '../../openclaw/discord.js';
 import { DiscordError } from '../../openclaw/discord-channels.js';
+import type { DiscordAgentTransport } from '../../openclaw/discord-agent.js';
+import type { DiscordReader } from '../../openclaw/discord-read.js';
+import type { ThreadInvoker } from '../../openclaw/discord-thread.js';
 
 const guild = '500000000000000001',
   parent = '500000000000000002',
@@ -64,10 +67,10 @@ async function fixture() {
   let hasMore = false;
   let partial = false;
   let failCreate = false;
-  const runner = vi.fn(async (_e: string, args: string[]) => {
-    if (args[0] === 'agent') return { status: 'ok', runId: 'run-1' };
-    if (args[1] === 'permissions')
+  const reader = vi.fn<DiscordReader>(async (_scope, request) => {
+    if (request.action === 'permissions')
       return {
+        ok: true,
         permissions: {
           channelId: thread,
           guildId: guild,
@@ -81,26 +84,39 @@ async function fixture() {
           ],
         },
       };
-    if (args[1] === 'channel' && args[2] === 'list') return { payload: { ok: true, channels } };
-    if (args[2] === 'info') {
-      const id = args[args.indexOf('--target') + 1].slice(8);
-      return { payload: { ok: true, channel: [...channels, ...threads].find((c) => c.id === id) } };
-    }
-    if (args[1] === 'thread' && args[2] === 'list')
-      return { payload: { ok: true, threads: { threads, has_more: hasMore } } };
-    if (args[2] === 'create') {
-      if (failCreate) throw new Error('timeout');
-      return { payload: { ok: true, thread: { id: thread }, partial } };
-    }
-    throw new Error('Unexpected mock CLI');
+    if (request.action === 'channel-list') return { ok: true, channels };
+    if (request.action === 'channel-info')
+      return {
+        ok: true,
+        channel: [...channels, ...threads].find((c) => c.id === request.channelId),
+      };
+    if (request.action === 'thread-list')
+      return { ok: true, threads: { threads, has_more: hasMore } };
+    throw new Error('Unexpected metadata read');
   });
+  const invokeThread = vi.fn<ThreadInvoker>(async () => {
+    if (failCreate) throw new DiscordError('GATEWAY_OUTCOME_UNKNOWN', true);
+    return { thread: { id: thread }, partial };
+  });
+  const agent = {
+    ready: vi.fn<DiscordAgentTransport['ready']>(async () => {}),
+    run: vi.fn<DiscordAgentTransport['run']>(async (request, accepted) => {
+      const receipt = {
+        runId: 'run-1',
+        sessionKey: request.sessionKey,
+        agentId: request.agentId,
+      };
+      await accepted(receipt);
+      return { ...receipt, status: 'ok' };
+    }),
+    cancel: vi.fn<DiscordAgentTransport['cancel']>(async () => {}),
+  };
   const invoke = vi.fn(async () => ({ ok: true, channel: { id: created } }));
   const service = new DiscordService(
     {
-      executable: 'never-run',
       stateDir,
       acknowledgeInboundRouting: true,
-      cliGatewayInstance: 'home',
+      gatewayInstance: 'home',
       targets: [
         {
           name: 'work',
@@ -122,15 +138,15 @@ async function fixture() {
         },
       ],
     },
-    runner,
     invoke,
     undefined,
-    undefined,
-    undefined,
+    reader,
+    invokeThread,
     undefined,
     async (_t, _id, _prompt, _op, sent) => {
       await sent('500000000000000006');
-    }
+    },
+    agent
   );
   cleanups.push(async () => {
     await service.drain();

@@ -4,8 +4,9 @@ import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DiscordService, loadDiscordConfig, type DiscordConfig } from '../../openclaw/discord.js';
+import type { DiscordAgentRequest, DiscordAgentTransport } from '../../openclaw/discord-agent.js';
 import { dynamicTarget } from '../../openclaw/discord-policy.js';
-import { channelReader } from '../../openclaw/discord-read.js';
+import { channelReader, type DiscordReader } from '../../openclaw/discord-read.js';
 import { threadInvoker, threadMemberAdder } from '../../openclaw/discord-thread.js';
 import { requestPublisher } from '../../openclaw/discord-request.js';
 
@@ -32,19 +33,17 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
   const stateDir = await mkdtemp(join(tmpdir(), 'discord-policy-'));
   dirs.push(stateDir);
   const config: DiscordConfig = {
-    executable: 'never-executed',
     stateDir,
     targets: [],
     discoveryScopes: [scope],
     channelWhitelist: [],
     channelBlacklist: [],
-    gatewayReadsEnabled: true,
-    cliGatewayInstance: 'home',
+    gatewayInstance: 'home',
     acknowledgeInboundRouting: true,
     ...overrides,
   };
   const data: any[] = [parent, cat, { ...parent, id: inbox, name: 'Inbox' }];
-  const reader = vi.fn(async (s: any, request: any) =>
+  const reader = vi.fn<DiscordReader>(async (s, request) =>
     request.action === 'channel-list'
       ? { ok: true, channels: data }
       : {
@@ -55,9 +54,12 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
               : data.find((c) => c.id === request.channelId),
         }
   );
-  const runner = vi.fn(async (_exe: string, args: string[]) =>
-    args[0] === 'agent' ? { status: 'ok' } : { payload: { ok: true, thread: { id: thread } } }
-  );
+  const createThread = vi.fn(async () => ({ ok: true, thread: { id: thread } }));
+  const agent = {
+    ready: vi.fn(async () => {}),
+    run: vi.fn(async (_request: DiscordAgentRequest) => ({ status: 'ok' })),
+    cancel: vi.fn(async () => {}),
+  } satisfies DiscordAgentTransport;
   const publish = vi.fn(
     async (_t: any, _id: string, _p: string, _op: string, sent: (id: string) => Promise<void>) => {
       await sent(future);
@@ -66,16 +68,16 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
   const invoke = vi.fn(async () => ({ ok: true, channel: { id: future } }));
   const service = new DiscordService(
     config,
-    runner,
     invoke,
     undefined,
     reader,
+    createThread,
     undefined,
-    undefined,
-    publish
+    publish,
+    agent
   );
   services.push(service);
-  return { config, data, reader, runner, publish, invoke, service };
+  return { config, data, reader, createThread, agent, publish, invoke, service };
 }
 beforeEach(() => {
   // Test doubles only; do not alter production provenance.
@@ -125,7 +127,8 @@ describe('scoped channel discovery', () => {
     expect((await f.service.channels()).channels.map((c) => c.channel_id)).not.toContain(channel);
     const denied = await f.service.ask(input(first.target));
     expect(denied.status).toBe('run_failed');
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.createThread).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
   it('keeps legacy aliases and skips deleted legacy entries without enabling guild discovery', async () => {
     const f = await fixture({
@@ -155,7 +158,8 @@ describe('scoped channel discovery', () => {
     await expect(
       f.service.ask(input(dynamicTarget({ ...scope, guildId: inbox }, channel).name))
     ).rejects.toThrow();
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.createThread).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
   it.each([
     null,
@@ -198,7 +202,8 @@ describe('operation policy enforcement', () => {
       await expect(f.service.threads({ target: name })).rejects.toThrow('CHANNEL_POLICY_DENIED');
     }
     expect(f.reader).not.toHaveBeenCalled();
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.createThread).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
     expect(f.publish).not.toHaveBeenCalled();
     expect(await readdir(f.config.stateDir)).toEqual([]);
   });
@@ -225,7 +230,8 @@ describe('operation policy enforcement', () => {
     expect((await f.service.channels()).channels.map((c) => c.channel_id)).toEqual([channel]);
     for (const target of ['created-' + inbox, dynamicTarget(scope, inbox).name])
       await expect(f.service.ask(input(target))).rejects.toThrow('CHANNEL_POLICY_DENIED');
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.createThread).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
   it('rejects a thread posing as a parent, including one under Inbox', async () => {
     const f = await fixture({ channelBlacklist: [inbox] });
@@ -233,7 +239,8 @@ describe('operation policy enforcement', () => {
     expect((await f.service.ask(input(dynamicTarget(scope, future).name))).status).toBe(
       'run_failed'
     );
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.createThread).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
   it('denies excluded returned thread IDs before membership, publishing or generation', async () => {
     const f = await fixture({ channelBlacklist: [thread] });
@@ -241,7 +248,8 @@ describe('operation policy enforcement', () => {
       status: 'run_failed',
       error_code: 'CHANNEL_POLICY_DENIED',
     });
-    expect(f.runner).toHaveBeenCalledTimes(1);
+    expect(f.createThread).toHaveBeenCalledTimes(1);
+    expect(f.agent.run).not.toHaveBeenCalled();
     expect(f.publish).not.toHaveBeenCalled();
   });
   it.each([15, 16])('preserves forum/media rejection %s', async (type) => {
@@ -250,7 +258,8 @@ describe('operation policy enforcement', () => {
     expect(await f.service.ask(input(dynamicTarget(scope, channel).name))).toMatchObject({
       error_code: 'FORUM_MEDIA_WRITES_UNSUPPORTED',
     });
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.createThread).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
   it('runs allowed dynamic targets without altering prompt or background handoff', async () => {
     const f = await fixture();
@@ -260,13 +269,13 @@ describe('operation policy enforcement', () => {
     });
     await f.service.drain();
     expect(f.publish.mock.calls[0][2]).toBe('Exact request');
-    expect(f.runner.mock.calls[1][1][0]).toBe('agent');
+    expect(f.agent.run).toHaveBeenCalledOnce();
+    expect(f.agent.run.mock.calls[0][0].message).toBe('Exact request');
   });
   it('enforces policy in every closed write adapter before HTTP', async () => {
     const f = await fixture({ channelBlacklist: [inbox], threadMember: undefined });
     const config = {
       ...f.config,
-      threadCreateMode: 'gateway' as const,
       threadMember: { userId: future, accountId: 'bot' },
     };
     const fetcher = vi.fn();
@@ -295,7 +304,7 @@ describe('policy interactions', () => {
     f.reader.mockImplementation(async (_s, req) => ({
       ok: true,
       channel:
-        req.channelId === channel
+        req.action === 'channel-info' && req.channelId === channel
           ? parent
           : { id: thread, guild_id: guild, type: 11, parent_id: inbox },
     }));
@@ -303,13 +312,19 @@ describe('policy interactions', () => {
       error_code: 'CHANNEL_POLICY_DENIED',
     });
     expect(f.publish).not.toHaveBeenCalled();
-    expect(f.runner).toHaveBeenCalledTimes(1);
+    expect(f.createThread).toHaveBeenCalledTimes(1);
+    expect(f.agent.run).not.toHaveBeenCalled();
     const g = await fixture({ channelBlacklist: [thread] });
-    g.runner.mockResolvedValue({
-      payload: {
-        threads: [{ id: thread, guild_id: guild, type: 11, parent_id: channel, name: 'Excluded' }],
-      },
-    } as any);
+    const readMetadata = g.reader.getMockImplementation()!;
+    g.reader.mockImplementation(async (scope, request) =>
+      request.action === 'thread-list'
+        ? {
+            threads: [
+              { id: thread, guild_id: guild, type: 11, parent_id: channel, name: 'Excluded' },
+            ],
+          }
+        : readMetadata(scope, request)
+    );
     expect(
       (await g.service.threads({ target: dynamicTarget(scope, channel).name })).threads
     ).toEqual([]);
@@ -320,7 +335,8 @@ describe('policy interactions', () => {
     expect(await f.service.ask(input(dynamicTarget(scope, channel).name))).toMatchObject({
       error_code: 'NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED',
     });
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.createThread).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
 
   it('retains a legacy routing restriction for a crafted dynamic alias', async () => {
@@ -330,7 +346,8 @@ describe('policy interactions', () => {
     expect(await f.service.ask(input(dynamicTarget(scope, channel).name))).toMatchObject({
       error_code: 'NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED',
     });
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.createThread).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
   it('retains admitted category checks for a crafted dynamic alias', async () => {
     const policy = { ...scope, name: 'projects', categoryId: category, instance: 'home' };
@@ -349,7 +366,8 @@ describe('policy interactions', () => {
     expect(await f.service.ask(input(dynamicTarget(scope, channel).name))).toMatchObject({
       error_code: 'ADMITTED_CHANNEL_MOVED',
     });
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.createThread).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
   it('denies blacklisted categories before channel creation effects', async () => {
     const policy = { ...scope, name: 'projects', categoryId: category, instance: 'home' };
@@ -394,25 +412,25 @@ describe('policy interactions', () => {
     }));
     const service = new DiscordService(
       f.config,
-      f.runner,
       undefined,
       route,
       f.reader,
+      f.createThread,
       undefined,
-      undefined,
-      f.publish
+      f.publish,
+      f.agent
     );
     services.push(service);
     expect(await service.ask(input(dynamicTarget(scope, channel).name))).toMatchObject({
       error_code: 'ROUTE_MISMATCH',
     });
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.createThread).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
   it('admits dynamic scopes in the Gateway thread, membership and publisher adapters', async () => {
     const f = await fixture();
     const config = {
       ...f.config,
-      threadCreateMode: 'gateway' as const,
       threadMember: { userId: future, accountId: 'bot' },
     };
     const fetcher = vi.fn(async () => new Response('', { status: 403 }));
@@ -440,15 +458,18 @@ describe('policy interactions', () => {
     await f.service.ask(request);
     await f.service.drain();
     f.config.channelBlacklist = [channel];
-    f.runner.mockClear();
+    f.createThread.mockClear();
+    f.agent.run.mockClear();
     await expect(f.service.ask(request)).rejects.toThrow('CHANNEL_POLICY_DENIED');
     await expect(f.service.status(request.operation_id)).rejects.toThrow('CHANNEL_POLICY_DENIED');
-    expect(f.runner).not.toHaveBeenCalled();
+    expect(f.createThread).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
   });
 });
 describe('configuration validation', () => {
   const env = {
     MCP_DISCORD_ENABLED: 'true',
+    MCP_DISCORD_GATEWAY_INSTANCE: 'home',
     MCP_DISCORD_STATE_DIR: '/unused-test-state',
     MCP_DISCORD_DISCOVERY_SCOPES: JSON.stringify([scope]),
   };
