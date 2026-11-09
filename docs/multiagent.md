@@ -98,7 +98,7 @@ You still need to configure **where the MCP server is allowed to act**. Reading 
 
 The client then chooses a returned destination when opening or continuing a thread. It cannot send a request to Alice’s destination while specifying Marco as the agent: conflicting selections return an error. A more specific channel assignment takes priority over its server-wide assignment.
 
-For writes, the existing Discord setup also requires confirmation that ordinary replies in those channels reach the expected agent. Creating new channels is a separate opt-in feature. This version uses one configured Discord bot account; it does not import additional bot credentials.
+For writes, the existing Discord setup also requires confirmation that ordinary replies in those channels reach the expected agent. Creating new channels is a separate opt-in feature. This version uses one configured Discord bot account and one Gateway/CLI setup for the complete Discord workflow. Chat supports multiple OpenClaw connections, but Discord cannot yet switch between them per request. See [the Discord connection limit](discord-skills.md#one-discord-gateway-connection-per-mcp-service).
 
 ## If the MCP server cannot read your OpenClaw installation
 

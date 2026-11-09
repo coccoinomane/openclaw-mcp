@@ -1,8 +1,26 @@
-# Discord CLI tools and MCP Skills
+# Discord setup and MCP Skills
+
+## Which parts still need the CLI?
+
+As of 9 November 2026, this MCP server still needs a local OpenClaw CLI for the complete Discord workflow. That does **not** mean the CLI is the only way to create a thread in a chosen channel.
+
+Creating the thread and asking an agent to work in it are separate steps:
+
+- **Create the thread:** with `MCP_DISCORD_THREAD_CREATE_MODE=gateway`, the MCP server calls the Gateway HTTP endpoint `/tools/invoke`, using `message` with the `thread-create` action and an explicit parent `channelId`. This path is already implemented. The alternative `cli` mode remains available.
+- **Publish the original request and add the configured member:** the server uses Discord REST APIs with the bot credential.
+- **Run the agent and deliver its answer:** the current worker invokes `openclaw agent` with the agent ID, thread session key and Discord reply destination. Some thread/permission reads also use CLI commands.
+
+The CLI dependency belongs to this implementation, not to a Discord restriction. Switching thread creation to HTTP does not remove the CLI needed by those other steps. Replacing them requires preserving session continuity, queued execution, delivery reporting and recovery after uncertain results.
+
+## One Discord Gateway connection per MCP service
+
+The current Discord integration uses one configured CLI executable, one Gateway association (`MCP_DISCORD_CLI_GATEWAY_INSTANCE`) and one bot account. It can serve several agents and permitted Discord servers through that setup.
+
+Generic chat can connect to multiple OpenClaw installations, but the complete Discord workflow cannot yet choose a different Gateway/CLI setup for each request. Discovering agents or bindings from another installation does not change that limit. Until the adapters support per-instance dispatch, use a separately configured MCP service for another Discord Gateway/bot setup.
 
 ## Scope
 
-Direct Ask OpenClaw continues to use the HTTP chat-completions endpoint. Its tools, session_id/instance response contract, and multi-instance routing are unchanged. Discord tools are a separate, opt-in service capability using a locally installed OpenClaw CLI. They do not use a Gateway SDK or create subagents.
+Direct Ask OpenClaw continues to use the HTTP chat-completions endpoint. Its tools, session_id/instance response contract, and multi-instance routing are unchanged. Discord tools are an optional service capability combining Gateway HTTP calls, Discord REST calls and a locally installed OpenClaw CLI, as described above. They do not currently use a Gateway SDK or create subagents.
 
 The /mcp endpoint routes 2026-07-28 requests through the official createMcpHandler factory and Node adapter. The SDK's isLegacyRequest classifier sends existing stateful 2025 clients to the unchanged legacy transport. Legacy SSE and stdio remain supported. The official Skills extension is available on modern HTTP; stdio, SSE and legacy HTTP expose the same packaged files through resources/list and resources/read. This is a staged migration: stdio and SSE do not advertise the new protocol or extension methods.
 
