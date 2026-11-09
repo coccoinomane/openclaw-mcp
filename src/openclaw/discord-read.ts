@@ -78,7 +78,9 @@ export function channelReader(
           (!Number.isInteger(request.limit) || request.limit < 1 || request.limit > 100)) ||
         (request.before !== undefined &&
           (typeof request.before !== 'string' ||
-            !/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$/.test(request.before) ||
+            !/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(?:Z|[+-][0-9]{2}:[0-9]{2})$/.test(
+              request.before
+            ) ||
             !Number.isFinite(Date.parse(request.before)))) ||
         (!request.includeArchived && (request.before !== undefined || request.limit !== undefined)))
     )

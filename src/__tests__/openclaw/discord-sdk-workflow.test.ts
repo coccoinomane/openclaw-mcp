@@ -282,9 +282,13 @@ describe('ordinary Discord workflows without subprocesses', () => {
       );
     }
   );
-  it('preserves archived thread timestamp pagination and bounded read request', async () => {
+  it.each([
+    '2026-11-01T12:30:00.000Z',
+    '2026-11-02T18:34:47.544000+00:00',
+    '2026-11-01T13:30:00.000+01:00',
+    '2026-11-01T07:30:00.000-05:00',
+  ])('preserves archived thread timestamp cursor %s', async (before) => {
     const f = await fixture();
-    const before = '2026-11-01T12:30:00.000Z';
     await f.service.threads({ target: 'work', archived: true, before, limit: 10 });
     const args = JSON.parse(f.fetcher.mock.calls.at(-1)![1].body).args;
     expect(args).toEqual({

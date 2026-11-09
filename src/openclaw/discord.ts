@@ -692,7 +692,7 @@ export class DiscordService {
     if (
       input.before !== undefined &&
       (typeof input.before !== 'string' ||
-        !/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$/.test(input.before) ||
+        !/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(?:Z|[+-][0-9]{2}:[0-9]{2})$/.test(input.before) ||
         !Number.isFinite(Date.parse(input.before)))
     )
       throw new Error('Invalid archive timestamp');
