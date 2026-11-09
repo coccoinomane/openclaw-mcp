@@ -8,6 +8,12 @@ Existing-thread replies share the [single-Gateway Discord setup and CLI dependen
 
 Like new-thread handoffs, replies use operator-configured normalRouting and acknowledgeInboundRouting, with the canonical session agent:<configuredAgent>:discord:channel:<threadId>. Supported Gateway-backed agent --session-key dispatch owns admission and queueing. Runtime thread rebindings are unsupported.
 
+## Context is not guaranteed by the thread ID
+
+On the inspected Discord plugin 2026.10.9, processing a thread-archive event deletes matching OpenClaw session entries and archives the transcripts. Reopening the Discord thread can start a fresh OpenClaw session. Acceptance of an archived unlocked thread below means the service can attempt another turn; it does not guarantee retention of pre-archive context. This limitation affects the current CLI path too. Human discussion that never reached OpenClaw is not automatically loaded by an explicit agent call.
+
+See the [independent SDK/CLI review](gateway-sdk-feasibility.md#independent-review-limits-found-on-9-november-2026) before assuming transport replacement preserves every conversation.
+
 ## Validation and recovery
 
 - The actual parent and thread must match the configured guild and ancestry. Parent whitelist, parent/thread blacklist, admitted category constraints and normal-routing acknowledgement still apply.

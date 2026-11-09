@@ -2,7 +2,21 @@
 
 Assessment: 9 November 2026. Gateway **roster discovery only** is now implemented behind `MCP_AGENT_DISCOVERY=gateway`; see the [setup guide](multiagent.md). It uses the pinned 2026.10.9 SDK and requires Node >=22.19.0. The remaining migrations below are proposals. Tests use fake transports; no production authenticated connection or end-to-end Discord migration test is claimed.
 
-## Conclusion
+## Independent review: limits found on 9 November 2026
+
+A second review with xhigh reasoning found that matching RPC arguments do not establish equivalent behavior. It ran 23 non-network tests against installed Gateway/Discord/SDK 2026.10.9 code and protocol handling, plus 130 existing mocked MCP tests. No production model turns, Discord actions or permission changes were made.
+
+- **New ordinary text-channel threads:** removing the CLI is plausible, retaining the existing HTTP/REST adapters, but needs a live authorization and delivery test.
+- **Announcement-channel parents:** the current no-starter creation path requests a type-11 public thread. Discord announcement threads are type 10 and use a starter message. The current implementation does not establish support for this case.
+- **Active existing threads:** continuation is plausible only when the intended OpenClaw session and usable transcript already exist and the caller may access them. A human Discord discussion never processed by OpenClaw is not automatically imported.
+- **Archived threads:** sending another message and preserving old context are different requirements. The installed Discord archive handler deletes matching session entries and archives their transcripts. Reopening can therefore create a fresh OpenClaw session under the same thread key. This also affects the current CLI.
+- **Authority:** the local CLI uses an admin-capable operator connection; the new discovery client requests read-only access. A future write grant permits ordinary agent calls but does not automatically reproduce every CLI tool capability or conversation-read policy. One fixture demonstrates different cron authority. Do not impersonate the CLI or bypass denied reads to obtain parity.
+
+The conclusion is conditional feasibility for ordinary supported threads, not universal equivalence. Before migrating Discord execution, test a disposable text thread, active human/MCP-origin session continuation, archive behavior, delegated reads, delivery, disconnect recovery and explicit cancellation using an approved service identity. Removing CLI subprocesses does not require removing the HTTP/Discord REST adapters that preserve membership and exact prompt-publication behavior.
+
+Evidence functions include installed `closeDiscordThreadSessions`, `createThreadDiscord`, the Gateway method-scope and session-sharing checks, and the SDK protocol request state machine. See [Discord’s thread API](https://docs.discord.com/developers/resources/channel).
+
+## Initial feasibility assessment
 
 Yes. The official `@openclaw/gateway-client` can retrieve the agent list and start the same Discord agent turns that we currently launch through the CLI. It can also request channel information, thread lists and permissions. Removing those subprocesses would allow the MCP service to work without a local OpenClaw CLI, including when a Gateway is remote.
 

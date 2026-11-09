@@ -6,7 +6,7 @@ As of 9 November 2026, this MCP server still needs a local OpenClaw CLI for the 
 
 Creating the thread and asking an agent to work in it are separate steps:
 
-- **Create the thread:** with `MCP_DISCORD_THREAD_CREATE_MODE=gateway`, the MCP server calls the Gateway HTTP endpoint `/tools/invoke`, using `message` with the `thread-create` action and an explicit parent `channelId`. This path is already implemented. The alternative `cli` mode remains available.
+- **Create the thread:** with `MCP_DISCORD_THREAD_CREATE_MODE=gateway`, the MCP server calls the Gateway HTTP endpoint `/tools/invoke`, using `message` with the `thread-create` action and an explicit parent `channelId`. This path is already implemented for the ordinary workflow. The alternative `cli` mode remains available. Announcement parents need separate treatment: the current call omits a starter message and does not establish correct type-10 announcement-thread creation.
 - **Publish the original request and add the configured member:** the server uses Discord REST APIs with the bot credential.
 - **Run the agent and deliver its answer:** the current worker invokes `openclaw agent` with the agent ID, thread session key and Discord reply destination. Some thread/permission reads also use CLI commands.
 
