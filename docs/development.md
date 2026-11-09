@@ -4,7 +4,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/freema/openclaw-mcp
+git clone https://github.com/coccoinomane/openclaw-mcp
 cd openclaw-mcp
 
 # Install dependencies

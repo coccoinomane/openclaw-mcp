@@ -15,7 +15,7 @@ The first bot message contains your unchanged request. Operators can set `MCP_DI
 
 Discord is **off by default**, so its tools are hidden unless `MCP_DISCORD_ENABLED=true`. Configure explicit guild/account/agent discovery scopes: an empty channel whitelist includes all supported channels in those scopes, while the blacklist always wins. Legacy target allowlists still work. Credentials and verified normal channel routing are required. See the [Discord setup guide](docs/discord-skills.md). The packaged coordinator skill is available through the modern MCP Skills extension or legacy resources.
 
-`openclaw_discord_reply` adds existing-public-thread handoff to the shared tool set (13 tools with Discord enabled, 7 without). It reuses configured normal routing and Gateway-backed dispatch for active or archived unlocked public threads. See [existing-thread requirements](docs/discord-reply.md).
+`openclaw_discord_reply` adds existing-public-thread handoff to the shared tool set (14 tools with Discord enabled, 8 without). It reuses configured normal routing and Gateway-backed dispatch for active or archived unlocked public threads. See [existing-thread requirements](docs/discord-reply.md).
 
 All six Discord tools advertise MCP `outputSchema` and validate `structuredContent`, while retaining JSON text responses. Thread names and archive timestamps/cursors are optional strings; `archived` is an optional boolean. Malformed values return a tool error rather than a success payload. These schemas do not change OpenClaw CodeMode type generation; clients decide how to consume them.
 
@@ -35,7 +35,7 @@ Point your MCP client at `https://your-host/mcp`. For local stdio, use `node dis
 
 ## Operation and limits
 
-Direct chat returns a conversation ID; reuse it with the same instance for follow-ups. Discord asks return a queued link after the request is published, without waiting for the answer. Keep the operation ID to inspect status after a disconnect; never blindly retry an uncertain write. The MCP creates new threads only; continue existing threads on Discord.
+Direct chat returns a conversation ID; reuse it with the same instance for follow-ups. Discord asks return a queued link after the request is published, without waiting for the answer. Keep the operation ID to inspect status after a disconnect; never blindly retry an uncertain write. The MCP can create new threads or continue existing public threads.
 
 Use this bridge with trusted clients. Its shared operator credentials and allowlist are not a multi-tenant isolation system. Keep HTTP authentication enabled. OAuth state is in memory; restarts can require client reconnection. Accepted Discord work survives client disconnects, but interrupted work after a service restart is not automatically replayed.
 
@@ -47,4 +47,4 @@ Fork of [freema/openclaw-mcp](https://github.com/freema/openclaw-mcp), created b
 
 ## Agent selection
 
-See [multiagent configuration](docs/multiagent.md) for explicit catalogs, opt-in local CLI discovery, `agent_id` selectors, Discord mapping precedence and the shared trust model. Every authenticated client can select every configured agent; generic chat requires no Discord mapping.
+Have more than one OpenClaw agent? Follow [Use more than one OpenClaw agent](docs/multiagent.md) to list them in your MCP client and choose who handles a request. Start with one OpenClaw installation; add Discord assignments only if you need them. Every authenticated client can select every configured agent.

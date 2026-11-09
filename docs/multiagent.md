@@ -1,101 +1,128 @@
-# Multiagent configuration
+# Use more than one OpenClaw agent
 
-## Choose a catalog source
+Suppose your team has two OpenClaw agents: `alice` helps Alice, and `marco` helps Marco. You want people using an MCP client, such as Claude, to choose which agent handles a request. They might ask Alice’s agent to review a document, then ask Marco’s agent to plan a project.
 
-Each named instance is one configured Gateway. An agent belongs to that instance and can have zero or more Discord routes. All authenticated clients can select every configured agent. Use separate deployments when callers need different permissions.
+This guide shows how to make those existing agents available through the MCP server. Discord is optional: both agents can answer in the MCP client, whether or not they have a Discord server.
 
-Existing `OPENCLAW_INSTANCES`, `OPENCLAW_AGENT_ID` and model defaults remain valid. Agents named by existing Discord targets/scopes also enter the generic catalog when `MCP_DISCORD_CLI_GATEWAY_INSTANCE` identifies their instance, or when there is only one instance. Creation-policy agents enter their policy's named instance. With multiple instances and no CLI association, target/scope agent association is not guessed; configure it or list those agents explicitly. With no catalog, discovery includes locally known configured/model agent IDs; an unknown Gateway default is not guessed. Explicit agent selection must name a catalog or locally known default agent. Omitting `agent_id` retains existing routing.
+**Everyone who can authenticate to this MCP server can select any agent it exposes.** Choosing an agent is not a user login or an access restriction. This version is intended for people who share access; it does not isolate employees from one another.
 
-### Explicit catalog, including remote instances
+## Before you start
 
-Set `MCP_AGENT_CATALOG` to a JSON array. Each entry names an existing instance and has an `agents` array. Optional `bindings` use OpenClaw route match objects. This example has one agent with Discord routing and another with none:
+You need a working connection between the MCP server and OpenClaw, and at least two agents already created in OpenClaw. If the connection is not set up yet, follow [basic configuration](configuration.md) first.
 
-```json
-[
-  {
-    "instance": "local",
-    "agents": [{"id": "assistant"}, {"id": "writer"}],
-    "bindings": [
-      {
-        "agentId": "assistant",
-        "match": {
-          "channel": "discord",
-          "accountId": "default",
-          "guildId": "111111111111111111"
-        }
-      }
-    ]
-  }
-]
+You also need a build that includes the multi-agent feature. It is on this repository’s `main` branch; the earlier v1.10.0 release archive does not include it. To build from source, follow [development](development.md).
+
+Two names appear in the settings below:
+
+- **Agent ID** identifies an assistant inside OpenClaw, for example `alice`.
+- **Instance** is this MCP server’s label for an OpenClaw connection. If you connect to one OpenClaw installation using `OPENCLAW_URL`, that label is `default`. You do not need one instance per agent.
+
+The instructions below use one installation, with the MCP server running on the same machine as OpenClaw. If they run on different machines, use [the manual option](#if-the-mcp-server-cannot-read-your-openclaw-installation).
+
+## 1. Check that OpenClaw can list the agents
+
+On the machine running the MCP server, run:
+
+```sh
+openclaw agents list --json
+openclaw agents bindings --json
 ```
 
-The instance must already exist in `OPENCLAW_INSTANCES`. With the legacy single-Gateway environment variables its name is `default`, so use `"instance":"default"` instead. Credentials remain in the existing instance configuration; catalogs contain no tokens. Agent IDs are 1–64 ASCII alphanumeric, dash or underscore characters, starting with an alphanumeric character, and are normalized to lowercase.
+The first command should include the agent IDs you want to use. The second lists rules that connect channels, such as Discord servers, to agents. An empty list of those rules is fine if you do not use Discord.
 
-Alternatively add the same `agents` and optional `bindings` properties directly to an `OPENCLAW_INSTANCES` item. Do not combine inline, explicit catalog and CLI sources for the same instance. Duplicate agents, unknown instances and bindings to absent roster agents fail startup. Catalog order and roster `isDefault` do not replace the instance's existing default/model selection.
+Run these checks as the same operating-system user that runs the MCP service. A successful command in your personal shell does not prove that the service can find the same OpenClaw installation.
 
-### Local CLI snapshot
+## 2. Let the MCP server read that list
 
-Set these operator-side environment variables:
+Add these environment variables to the configuration that starts your **MCP service**, alongside its existing Gateway credentials:
 
-| Variable | Value |
-| --- | --- |
-| `MCP_AGENT_DISCOVERY` | `cli` to opt in; omit to disable |
-| `MCP_AGENT_DISCOVERY_INSTANCE` | Required configured instance name corresponding to this local CLI's Gateway |
-| `MCP_AGENT_DISCOVERY_EXECUTABLE` | Optional executable path; defaults to `openclaw` on the service PATH |
+```sh
+MCP_AGENT_DISCOVERY=cli
+MCP_AGENT_DISCOVERY_INSTANCE=default
+```
 
-The loader runs exactly `agents list --json` followed by `agents bindings --json`, once at startup. It uses argument arrays with no shell, a 30-second timeout per command and a 4 MiB output limit. Nonzero exit, invalid JSON and invalid catalog data fail startup. Diagnostic stderr is not returned to clients. Do not point local discovery at an unrelated remote instance: instance association is an operator assertion, not remotely verified identity.
+These are MCP server settings, not entries to paste into OpenClaw’s agent configuration. If you start the MCP server from a shell, export them there; if you use a service manager or container, add them to its environment. Leave your existing credentials and default agent unchanged.
 
-The inspected CLI emits roster rows as an array with `id` and additional metadata, and binding rows as an array of `{agentId,match,description}`. The loader keeps IDs and binding matches only. `agents list --bindings --json` adds formatted binding descriptions in the inspected implementation; those are not parsed as routing matches. No full configuration export is used. Paths, provider details, credentials and CLI descriptions are absent from `openclaw_agents` output.
+If the service cannot find the `openclaw` command, also set `MCP_AGENT_DISCOVERY_EXECUTABLE` to its absolute path.
 
-The separate exports are not an atomic snapshot. Keep routing configuration stable while starting the service. Restart through the normal deployment process after changing agents or bindings; this version has no runtime refresh. An explicit empty `bindings` array is an authoritative empty routing snapshot: Discord destinations without a matching imported route are hidden/rejected. Omit `bindings` to retain manually configured Discord routing.
+Restart **the MCP service** after saving the settings. You do not need to restart the OpenClaw Gateway. The MCP service reads agents and channel assignments at startup; restart it again when those assignments change. Clients may need to reconnect and refresh their tool list after an update.
 
-## Tool contract
+## 3. Check the agents from your MCP client
 
-`openclaw_agents` accepts optional `instance` and returns:
+Ask your client:
+
+> List the OpenClaw agents I can use.
+
+It should call `openclaw_agents`. If Alice is your configured default, the two-agent result would look like this:
 
 ```json
 {
   "agents": [
-    {"instance": "local", "agent_id": "assistant", "is_default": true},
-    {"instance": "local", "agent_id": "writer", "is_default": false}
+    {"instance": "default", "agent_id": "alice", "is_default": true},
+    {"instance": "default", "agent_id": "marco", "is_default": false}
   ],
   "total": 2
 }
 ```
 
-`is_default` identifies the locally known configured/model default, not a live availability probe. The discovery tool declares and validates an object output schema on every transport.
+Then try:
 
-Pass optional `agent_id` with `instance` to `openclaw_chat` or `openclaw_chat_async`. Save the returned instance, agent ID and session key. An explicit agent that conflicts with a supplied `agent:<id>:` session fails before submission. Without an explicit selector, existing supplied-session behavior is preserved. If a legacy session names an agent absent from the catalog, continuation metadata omits `agent_id`; reuse its unchanged `session_id` and `instance`. Explicit selection of that unknown agent remains rejected. Worker execution retains the queued explicit agent without mutating a shared client.
+> Ask Marco’s agent to reply with a short greeting.
 
-`openclaw_status` accepts the same selection but still measures Gateway reachability. Task status/cancel infer the stored route; optional `instance` and `agent_id` assert it and reject conflicts. Task list can filter by agent. Agent selectors normalize to lowercase across enqueue, status, cancel and list; instance names remain case-sensitive. Ownership checks are unchanged.
+The client selects Marco by passing `agent_id` to the chat tool. If you are writing an integration, the equivalent arguments to `openclaw_chat` are:
 
-Discord channels accepts optional `instance` and `agent_id` filters. Ask, reply, thread reads and channel creation select their route from the existing target or policy; optional selectors must agree. Operation status infers its stored route and rejects conflicting selectors. Reuse the exact original operation ID and arguments for recovery.
+```json
+{
+  "instance": "default",
+  "agent_id": "marco",
+  "message": "Reply with a short greeting."
+}
+```
 
-## Discord mapping and permission boundaries
+Follow-up requests should reuse the conversation details returned by the tool. Async tasks also keep the agent selected when they were submitted. Omitting `agent_id` keeps the installation’s existing default behavior.
 
-Discord remains opt-in. Bindings alone do not enable it. For imported bindings, configure `MCP_DISCORD_CLI_GATEWAY_INSTANCE` to the same configured instance as the local Discord CLI adapters. Existing targets, discovery scopes, channel whitelist/blacklist and creation policies continue to define allowed destinations. Imported routes can reassign agents only within those scopes; they never admit another guild/account or enable creation.
+If you do not use Discord, setup is complete.
 
-A guild route and a channel override can coexist:
+## Optional: send each agent’s work to Discord
+
+Suppose Alice’s agent works in one Discord server and Marco’s works in another. OpenClaw stores those assignments as **bindings**: rules that say which agent receives messages from a server or channel.
+
+With local discovery enabled, the MCP server reads those existing rules. You do not need a second independent set of routing rules. An agent can have no Discord assignment, one server, several servers, or specific channels.
+
+You still need to configure **where the MCP server is allowed to act**. Reading a binding does not grant permission to post in that Discord server.
+
+1. Set up the Discord bot credentials and allowed servers/channels using the [Discord setup guide](discord-skills.md). Discord tools remain disabled until you enable them.
+2. Set `MCP_DISCORD_CLI_GATEWAY_INSTANCE=default` for this one-installation example. This tells the Discord integration which OpenClaw connection its local CLI uses.
+3. Keep the existing discovery scopes (the allowed server/account combinations) and channel restrictions. Scopes still require their `agentId` field; imported bindings determine the effective agent within those permitted destinations. They do not add other servers to the allowlist.
+4. Ask your client to list the allowed Discord channels for each agent. Check that Alice and Marco see the destinations you intended before submitting work.
+
+The client then chooses a returned destination when opening or continuing a thread. It cannot send a request to Alice’s destination while specifying Marco as the agent: conflicting selections return an error. A more specific channel assignment takes priority over its server-wide assignment.
+
+For writes, the existing Discord setup also requires confirmation that ordinary replies in those channels reach the expected agent. Creating new channels is a separate opt-in feature. This version uses one configured Discord bot account; it does not import additional bot credentials.
+
+## If the MCP server cannot read your OpenClaw installation
+
+For example, the MCP server may run in a container without the OpenClaw CLI, or connect to a remote Gateway. In that case, provide the agent list yourself instead of enabling CLI discovery.
+
+Set `MCP_AGENT_CATALOG` to this JSON string in the MCP service’s environment:
 
 ```json
 [
-  {"agentId":"assistant","match":{"channel":"discord","accountId":"default","guildId":"111111111111111111"}},
-  {"agentId":"writer","match":{"channel":"discord","accountId":"default","guildId":"111111111111111111","peer":{"kind":"channel","id":"222222222222222222"}}}
+  {
+    "instance": "default",
+    "agents": [{"id": "alice"}, {"id": "marco"}]
+  }
 ]
 ```
 
-Supported ordinary routing uses exact peer, verified parent peer, wildcard peer, guild, account and channel-wide bindings in precedence order. `group` and `channel` peer kinds are equivalent. Omitted `accountId` means `default`; `*` matches any account already admitted by MCP. Within a tier, the first matching binding wins. A route may cover several guilds by adding bindings. Existing target IDs remain usable after routing is resolved; selector conflicts fail rather than overriding the target.
+Replace the IDs with agents that already exist in OpenClaw. This setting lists agents; it does not create them. Omit the CLI discovery variables when using this option for the same instance. Keep credentials in the existing connection settings, not in this list.
 
-Unsupported match dimensions fail clearly. Role-dependent/team routing, runtime thread rebindings and custom session overrides are outside this implementation. The sanitized CLI export omits session overrides, so the operator must verify ordinary canonical Discord sessions before setting existing normal-routing acknowledgements. `normalRouting` and the global inbound-routing acknowledgement remain required for writes. There is no assumed exact-route API.
+If you use multiple OpenClaw installations, replace `default` with the appropriate connection name from `OPENCLAW_INSTANCES`. The [configuration reference](multiagent-reference.md) explains manual Discord bindings, multiple connections and routing details.
 
-Creation still needs an explicit creation policy and both `authorize_create` and `authorize_admission`. Imported routing must agree with that policy; adding an agent does not authorize creating channels. A new channel's routing is checked before admission. The adapters retain the existing single configured bot account; multi-account credentials are not imported.
+## If something does not work
 
-The global forwarding requester name remains the operator's single-owner attribution for new-thread requests, regardless of selected agent. See [the threat model](threat-model.md) for shared access and existing operation/session ownership limits.
-
-## Verify a deployment
-
-Why: an agent catalog describes available routing, while Discord policy controls where the service may act.
-
-Do: review the catalog source and instance association; check discovery with `openclaw_agents`; compare filtered `openclaw_discord_channels` results against explicit allowed scopes and creation policies. Review the Gateway's ordinary inbound routing before enabling writes. Do not use a write as a discovery probe.
-
-Pass when: all intended generic agents appear, agents without Discord mappings can be selected for chat, denied guilds/channels remain absent, channel overrides show the intended agent, and selector conflicts fail. Automated tests cover these contracts with synthetic local fixtures; deployment-specific Gateway identity and permissions require operator verification.
+- **Only the old tools appear:** confirm you are running a build with `openclaw_agents`, then reconnect or refresh the client’s MCP tool list.
+- **The MCP service fails to start:** run both CLI commands from step 1 as the service user. Check the executable path and instance name. Do not configure two agent-list sources for the same connection.
+- **An agent is missing:** check the CLI output or your manual list, then restart the MCP service. Agent IDs are case-insensitive; instance names are case-sensitive.
+- **An agent is listed but has no Discord channels:** it may have no Discord assignment, or its destinations may be excluded by MCP permissions. This does not prevent direct chat.
+- **A follow-up reports a conflict:** use the instance, agent and session returned by the original request, rather than switching agents midway through that conversation.
