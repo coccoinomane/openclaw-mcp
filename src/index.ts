@@ -1,3 +1,4 @@
+import { discordAgentTransport } from './openclaw/discord-agent.js';
 import { requestPublisher } from './openclaw/discord-request.js';
 import { channelInvoker } from './openclaw/discord-channels.js';
 import { channelReader } from './openclaw/discord-read.js';
@@ -69,7 +70,8 @@ async function main() {
       channelReader(args.instances, discordConfig),
       threadInvoker(args.instances, discordConfig),
       threadMemberAdder(discordConfig),
-      requestPublisher(discordConfig)
+      requestPublisher(discordConfig),
+      discordAgentTransport(args.instances, discordConfig)
     );
   }
   log(`Starting ${SERVER_NAME} v${SERVER_VERSION}`);

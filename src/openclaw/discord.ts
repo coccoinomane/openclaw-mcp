@@ -15,6 +15,7 @@ import {
   type ChannelInvoker,
   type AdmittedTarget,
 } from './discord-channels.js';
+import type { DiscordAgentTransport } from './discord-agent.js';
 import type { DiscordReader } from './discord-read.js';
 import {
   ThreadGatewayUnavailable,
@@ -35,6 +36,7 @@ export interface DiscordSelectors {
 export interface DiscordConfig {
   /** Imported static bindings only restrict/reassign already admitted routes. */
   importedRouteAgent?: (target: AdmittedTarget, channelId: string) => string | undefined;
+  agentTransport?: 'cli' | 'sdk';
   executable: string;
   stateDir: string;
   discoveryScopes?: DiscoveryScope[];
@@ -67,6 +69,7 @@ function check(value: unknown, pattern: RegExp, label: string): asserts value is
 export function loadDiscordConfig(env = process.env): DiscordConfig | undefined {
   if (env.MCP_DISCORD_ENABLED !== 'true') return undefined;
   const config: DiscordConfig = {
+    agentTransport: (env.MCP_DISCORD_AGENT_TRANSPORT || 'cli') as 'cli' | 'sdk',
     executable: env.MCP_DISCORD_EXECUTABLE || 'openclaw',
     stateDir: env.MCP_DISCORD_STATE_DIR || '',
     targets: JSON.parse(env.MCP_DISCORD_TARGETS || '[]'),
@@ -98,6 +101,15 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
   return config;
 }
 function validateConfig(config: DiscordConfig) {
+  if (config.agentTransport !== undefined && !['cli', 'sdk'].includes(config.agentTransport))
+    throw new DiscordError('AGENT_TRANSPORT_INVALID');
+  if (
+    config.agentTransport === 'sdk' &&
+    (!config.cliGatewayInstance ||
+      !config.gatewayReadsEnabled ||
+      config.threadCreateMode !== 'gateway')
+  )
+    throw new DiscordError('SDK_REQUIRES_GATEWAY_READS_AND_CREATE');
   for (const [label, values] of Object.entries({
     targets: config.targets,
     discoveryScopes: config.discoveryScopes === undefined ? [] : config.discoveryScopes,
@@ -346,6 +358,9 @@ interface Operation {
   session_key?: string;
   discord_url?: string;
   run_id?: string;
+  agent_transport?: 'cli' | 'sdk';
+  agent_idempotency_key?: string;
+  cancellation_status?: 'requested' | 'acknowledged' | 'unknown';
   delivery_status?: string;
   delivery_verified?: boolean;
   message_id?: string;
@@ -377,6 +392,7 @@ export class DiscordService {
   private readonly workers = new Set<Promise<unknown>>();
   private readonly active = new Set<string>();
   private readonly preparations = new Map<string, number>();
+  private readonly cancellations = new Map<string, () => Promise<void>>();
   private closing = false;
   async shutdown() {
     this.closing = true;
@@ -394,9 +410,12 @@ export class DiscordService {
     private readonly reader?: DiscordReader,
     private readonly invokeThread?: ThreadInvoker,
     private readonly addThreadMember?: ThreadMemberAdder,
-    private readonly publishRequest?: RequestPublisher
+    private readonly publishRequest?: RequestPublisher,
+    private readonly agent?: DiscordAgentTransport
   ) {
     validateConfig(config);
+    if (config.agentTransport === 'sdk' && (!agent || !reader))
+      throw new DiscordError('SDK_ADAPTER_REQUIRED');
     if (config.threadCreateMode === 'gateway' && !invokeThread)
       throw new DiscordError('THREAD_ADAPTER_REQUIRED');
     if (config.threadMember && !addThreadMember)
@@ -510,6 +529,7 @@ export class DiscordService {
     return this.route(t, channelId);
   }
   private async cli(t: DiscordConfig['targets'][number], args: string[]) {
+    if (this.config.agentTransport === 'sdk') throw new DiscordError('CLI_DISABLED');
     return payload(
       await this.runner(
         this.config.executable,
@@ -683,7 +703,16 @@ export class DiscordService {
     if (input.archived) args.push('--include-archived');
     if (input.before) args.push('--before', input.before);
     if (input.limit) args.push('--limit', String(input.limit));
-    const data = await this.cli(t, args);
+    const data =
+      this.config.agentTransport === 'sdk'
+        ? await this.reader!(t, {
+            action: 'thread-list',
+            channelId: t.channelId,
+            includeArchived: input.archived,
+            before: input.before,
+            limit: input.limit,
+          })
+        : await this.cli(t, args);
     const raw = Array.isArray(data.threads) ? data : data.threads;
     if (!raw || !Array.isArray(raw.threads)) throw new Error('Unexpected thread list');
     const threads = raw.threads
@@ -771,6 +800,28 @@ export class DiscordService {
     assertTargetAllowed(this.config, t, result.channel_id);
     return this.publicResult({ ...result, ...(storedAgent ? { agent_id: storedAgent } : {}) });
   }
+  /** Host-only explicit cancellation; MCP request disconnects never call this. */
+  async cancel(id: string, input: DiscordSelectors = {}) {
+    assertServiceProvenance();
+    const current = await this.status(id, input);
+    const cancel = this.cancellations.get(id);
+    if (
+      this.config.agentTransport !== 'sdk' ||
+      !cancel ||
+      !this.active.has(id) ||
+      current.status !== 'running' ||
+      !current.run_id
+    )
+      throw new DiscordError('OWNED_ACCEPTED_RUN_REQUIRED');
+    const cancellation = cancel();
+    this.workers.add(cancellation);
+    try {
+      await cancellation;
+      return await this.status(id, input);
+    } finally {
+      this.workers.delete(cancellation);
+    }
+  }
   private publicResult(op: Operation) {
     const result: Partial<Operation> = { ...op };
     delete result.fingerprint;
@@ -856,7 +907,10 @@ export class DiscordService {
       typeof thread.thread_metadata?.archived !== 'boolean'
     )
       throw new DiscordError('THREAD_LOCKED_OR_UNVERIFIED');
-    const permissions = await this.cli(t, ['permissions', '--target', 'channel:' + id]);
+    const permissions =
+      this.config.agentTransport === 'sdk'
+        ? await this.reader!(t, { action: 'permissions', channelId: id })
+        : await this.cli(t, ['permissions', '--target', 'channel:' + id]);
     const p = permissions.permissions;
     if (
       !p ||
@@ -916,7 +970,12 @@ export class DiscordService {
   }
   private async prepare(input: any) {
     const replying = input.mode === 'reply';
-    if (replying || this.config.threadCreateMode === 'gateway' || this.config.threadMember)
+    if (
+      replying ||
+      this.config.agentTransport === 'sdk' ||
+      this.config.threadCreateMode === 'gateway' ||
+      this.config.threadMember
+    )
       assertServiceProvenance();
     const t = await this.target(input.target, replying ? input.channel_id : undefined);
     this.assertSelectors(t, input);
@@ -979,6 +1038,16 @@ export class DiscordService {
       fingerprint,
       instance: this.config.cliGatewayInstance,
       agent_id: t.agentId,
+      agent_transport: this.config.agentTransport ?? 'cli',
+      ...(this.config.agentTransport === 'sdk'
+        ? {
+            agent_idempotency_key:
+              'discord-run-' +
+              createHash('sha256')
+                .update(JSON.stringify([this.config.cliGatewayInstance, input.operation_id]))
+                .digest('hex'),
+          }
+        : {}),
       ...(replying ? { kind: 'thread_reply' as const } : {}),
       owner: this.owner,
       request_status: 'pending',
@@ -997,17 +1066,23 @@ export class DiscordService {
       await file.close();
     }
     await syncDirectory();
-    const save = async () => {
-      const temporary = path + '.tmp';
-      const handle = await open(temporary, 'w', 0o600);
-      try {
-        await handle.writeFile(JSON.stringify(op));
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      await rename(temporary, path);
-      await syncDirectory();
+    let saves = Promise.resolve();
+    const save = () => {
+      const snapshot = JSON.stringify(op);
+      const saved = saves.then(async () => {
+        const temporary = path + '.tmp';
+        const handle = await open(temporary, 'w', 0o600);
+        try {
+          await handle.writeFile(snapshot);
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        await rename(temporary, path);
+        await syncDirectory();
+      });
+      saves = saved.catch(() => undefined);
+      return saved;
     };
     let releaseSession: (() => Promise<void>) | undefined;
     let dir: string | undefined;
@@ -1017,6 +1092,7 @@ export class DiscordService {
       if (this.config.acknowledgeInboundRouting !== true || t.normalRouting !== true)
         throw new DiscordError('NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED');
       if (!this.publishRequest) throw new DiscordError('REQUEST_PUBLISHER_REQUIRED');
+      if (this.config.agentTransport === 'sdk') await this.agent!.ready();
       const parent = await this.info(t, t.channelId, true);
       if ([15, 16].includes(parent.type)) throw new DiscordError('FORUM_MEDIA_WRITES_UNSUPPORTED');
       let id = input.channel_id;
@@ -1046,7 +1122,11 @@ export class DiscordService {
           try {
             created = await this.invokeThread!(t, input.title, input.operation_id);
           } catch (error) {
-            if (!(error instanceof ThreadGatewayUnavailable)) throw error;
+            if (
+              !(error instanceof ThreadGatewayUnavailable) ||
+              this.config.agentTransport === 'sdk'
+            )
+              throw error;
             op.thread_create_transport = 'cli';
             op.thread_create_fallback = error.code;
             await save();
@@ -1088,9 +1168,12 @@ export class DiscordService {
         }
         await save();
       }
-      dir = await mkdtemp(join(tmpdir(), 'openclaw-mcp-'));
-      const promptFile = join(dir, 'prompt.txt');
-      await writeFile(promptFile, input.prompt, { mode: 0o600 });
+      let promptFile: string | undefined;
+      if (this.config.agentTransport !== 'sdk') {
+        dir = await mkdtemp(join(tmpdir(), 'openclaw-mcp-'));
+        promptFile = join(dir, 'prompt.txt');
+        await writeFile(promptFile, input.prompt, { mode: 0o600 });
+      }
       if (replying) await this.verifyReply(t, id, input.prompt);
       op.request_status = 'publishing';
       await save();
@@ -1135,30 +1218,71 @@ export class DiscordService {
           assertTargetAllowed(this.config, t, id);
           if (replying) await this.verifyReply(t, id, input.prompt);
           dispatched = true;
-          const result: any = await this.runner(
-            this.config.executable,
-            [
-              'agent',
-              '--agent',
-              t.agentId,
-              '--session-key',
-              op.session_key,
-              '--message-file',
-              promptFile,
-              '--deliver',
-              '--reply-channel',
-              'discord',
-              '--reply-to',
-              'channel:' + id,
-              '--reply-account',
-              t.accountId,
-              '--timeout',
-              '600',
-              '--json',
-            ],
-            630000
-          );
-          op.run_id = typeof result?.runId === 'string' ? result.runId : undefined;
+          const result: any =
+            this.config.agentTransport === 'sdk'
+              ? await this.agent!.run(
+                  {
+                    message: input.prompt,
+                    agentId: t.agentId,
+                    sessionKey: op.session_key!,
+                    threadId: id,
+                    accountId: t.accountId,
+                    idempotencyKey: op.agent_idempotency_key!,
+                  },
+                  async (receipt) => {
+                    if (
+                      receipt.sessionKey !== op.session_key ||
+                      receipt.agentId !== t.agentId ||
+                      !receipt.runId ||
+                      (op.run_id && receipt.runId !== op.run_id)
+                    )
+                      throw new DiscordError('SDK_ACCEPTANCE_IDENTITY_MISMATCH', true);
+                    op.run_id = receipt.runId;
+                    op.generation_status = 'accepted';
+                    await save();
+                    let cancellation: Promise<void> | undefined;
+                    this.cancellations.set(input.operation_id, () => {
+                      cancellation ??= (async () => {
+                        op.cancellation_status = 'requested';
+                        await save();
+                        try {
+                          await this.agent!.cancel(receipt);
+                          op.cancellation_status = 'acknowledged';
+                        } catch (error) {
+                          op.cancellation_status = 'unknown';
+                          await save();
+                          throw error;
+                        }
+                        await save();
+                      })();
+                      return cancellation;
+                    });
+                  }
+                )
+              : await this.runner(
+                  this.config.executable,
+                  [
+                    'agent',
+                    '--agent',
+                    t.agentId,
+                    '--session-key',
+                    op.session_key,
+                    '--message-file',
+                    promptFile!,
+                    '--deliver',
+                    '--reply-channel',
+                    'discord',
+                    '--reply-to',
+                    'channel:' + id,
+                    '--reply-account',
+                    t.accountId,
+                    '--timeout',
+                    '600',
+                    '--json',
+                  ],
+                  630000
+                );
+          op.run_id = typeof result?.runId === 'string' ? result.runId : op.run_id;
           const delivery =
             result?.deliveryStatus ??
             result?.result?.deliveryStatus ??
@@ -1180,15 +1304,18 @@ export class DiscordService {
             op.message_id = messageId;
             // One exact-ID read, never a text match or a scan of unrelated messages.
             try {
-              const readback = await this.cli(t, [
-                'read',
-                '--target',
-                'channel:' + id,
-                '--message-id',
-                messageId,
-                '--limit',
-                '1',
-              ]);
+              const readback =
+                this.config.agentTransport === 'sdk'
+                  ? await this.reader!(t, { action: 'read', channelId: id, messageId, limit: 1 })
+                  : await this.cli(t, [
+                      'read',
+                      '--target',
+                      'channel:' + id,
+                      '--message-id',
+                      messageId,
+                      '--limit',
+                      '1',
+                    ]);
               op.delivery_verified =
                 readback.channelId === id &&
                 Array.isArray(readback.messages) &&
@@ -1206,7 +1333,7 @@ export class DiscordService {
               : 'run_failed'
             : ['ok', 'completed'].includes(result?.status)
               ? 'completed'
-              : result?.status === 'error' || result?.ok === false
+              : ['error', 'aborted'].includes(result?.status) || result?.ok === false
                 ? 'run_failed'
                 : 'run_unknown';
           op.generation_status = op.status;
@@ -1226,7 +1353,10 @@ export class DiscordService {
               'Inspect the existing conversation before authorizing a new turn. Never repeat this operation with a new ID blindly.';
           await save();
         } catch (error) {
-          op.status = dispatched ? 'run_unknown' : 'run_failed';
+          op.status =
+            dispatched && !(error instanceof DiscordError && !error.uncertain)
+              ? 'run_unknown'
+              : 'run_failed';
           op.generation_status = op.status;
           op.error_code = error instanceof DiscordError ? error.code : 'UNVERIFIED_RESULT';
           await save();
@@ -1242,6 +1372,7 @@ export class DiscordService {
           log('Discord worker failed; operation requires inspection');
         })
         .finally(() => {
+          this.cancellations.delete(input.operation_id);
           this.background.delete(input.operation_id);
           this.active.delete(input.operation_id);
           this.workers.delete(owned);

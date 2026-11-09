@@ -2,7 +2,7 @@
 
 The shared MCP tool openclaw_discord_reply accepts target, channel_id, prompt and operation_id. It reuses the coordinator, request publisher, background worker and durable operation journal. It does not create a thread or change membership. The user request remains verbatim, posted by the bot with mentions disabled, then passed once to the ordinary agent in agent:<agent>:discord:channel:<thread>.
 
-Existing-thread replies share the [single-Gateway Discord setup and CLI dependency](discord-skills.md#one-discord-gateway-connection-per-mcp-service). They do not create a thread; their agent turn still runs through the CLI.
+Existing-thread replies share the [single-Gateway Discord setup](discord-skills.md#one-discord-gateway-connection-per-mcp-service). They do not create a thread. Agent execution defaults to CLI; the [SDK opt-in](discord-sdk.md) replaces execution and all remaining CLI reads without changing the MCP tool contract.
 
 ## Routing
 

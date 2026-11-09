@@ -118,6 +118,9 @@ const turn: OutputSchema = {
     session_key: string,
     discord_url: string,
     run_id: string,
+    agent_transport: { type: 'string', enum: ['cli', 'sdk'] },
+    agent_idempotency_key: string,
+    cancellation_status: { type: 'string', enum: ['requested', 'acknowledged', 'unknown'] },
     request_status: {
       type: 'string',
       enum: ['pending', 'publishing', 'sent', 'verified', 'failed', 'partial', 'unknown'],

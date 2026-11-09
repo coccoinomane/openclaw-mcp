@@ -87,7 +87,8 @@ function validateIdentity(value: unknown): DeviceIdentity {
 export function gatewayDiscoveryAuth(
   instance: string,
   url: string,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  options: { existingOnly?: boolean } = {}
 ): {
   identity: DeviceIdentity;
   hasToken: boolean;
@@ -96,7 +97,7 @@ export function gatewayDiscoveryAuth(
   const directory =
     env.MCP_AGENT_DISCOVERY_STATE_DIR || join(homedir(), '.openclaw-mcp', 'gateway-discovery');
   if (!isAbsolute(directory)) throw new Error('Discovery state directory must be absolute');
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (!options.existingOnly) mkdirSync(directory, { recursive: true, mode: 0o700 });
   privateEntry(lstatSync(directory), true);
   // Bind storage to the configured instance AND full endpoint, never just device/role.
   const key = createHash('sha256')
@@ -105,6 +106,7 @@ export function gatewayDiscoveryAuth(
   const identityPath = join(directory, key + '.identity.json');
   const tokenPath = join(directory, key + '.operator.json');
   let value = readState(identityPath);
+  if (value === undefined && options.existingOnly) throw new Error('Approved device required');
   if (value === undefined) {
     const pair = generateKeyPairSync('ed25519');
     const publicKeyPem = pair.publicKey.export({ type: 'spki', format: 'pem' }).toString();

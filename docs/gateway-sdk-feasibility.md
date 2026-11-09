@@ -1,6 +1,6 @@
 # Can we replace the OpenClaw CLI with the Gateway SDK?
 
-Assessment: 9 November 2026. Gateway **roster discovery only** is now implemented behind `MCP_AGENT_DISCOVERY=gateway`; see the [setup guide](multiagent.md). It uses the pinned 2026.10.9 SDK and requires Node >=22.19.0. The remaining migrations below are proposals. Tests use fake transports; no production authenticated connection or end-to-end Discord migration test is claimed.
+Assessment: 9 November 2026. Gateway roster discovery is implemented behind `MCP_AGENT_DISCOVERY=gateway`; see the [setup guide](multiagent.md). It uses the pinned 2026.10.9 SDK and requires Node >=22.19.0. The ordinary Discord migration is now implemented behind a separate [SDK opt-in](discord-sdk.md), retaining HTTP/REST reads and writes. The historical assessment below is not a live equivalence claim. Tests use fake transports; no production authenticated connection or end-to-end Discord migration test is claimed.
 
 ## Independent review: limits found on 9 November 2026
 

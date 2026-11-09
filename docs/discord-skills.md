@@ -2,33 +2,33 @@
 
 ## Which parts still need the CLI?
 
-As of 9 November 2026, this MCP server still needs a local OpenClaw CLI for the complete Discord workflow. That does **not** mean the CLI is the only way to create a thread in a chosen channel.
+The default transport uses a local OpenClaw CLI. An explicit [SDK opt-in](discord-sdk.md) removes CLI subprocesses from ordinary new-thread and existing-thread workflows while retaining the HTTP/REST adapters. Live authorization, history and delivery canaries remain required.
 
 Creating the thread and asking an agent to work in it are separate steps:
 
 - **Create the thread:** with `MCP_DISCORD_THREAD_CREATE_MODE=gateway`, the MCP server calls the Gateway HTTP endpoint `/tools/invoke`, using `message` with the `thread-create` action and an explicit parent `channelId`. This path is already implemented for the ordinary workflow. The alternative `cli` mode remains available. Announcement parents need separate treatment: the current call omits a starter message and does not establish correct type-10 announcement-thread creation.
 - **Publish the original request and add the configured member:** the server uses Discord REST APIs with the bot credential.
-- **Run the agent and deliver its answer:** the current worker invokes `openclaw agent` with the agent ID, thread session key and Discord reply destination. Some thread/permission reads also use CLI commands.
+- **Run the agent and deliver its answer:** the default worker invokes `openclaw agent` with the agent ID, thread session key and Discord reply destination. Some thread/permission reads also use CLI commands.
 
-The CLI dependency belongs to this implementation, not to a Discord restriction. Switching thread creation to HTTP does not remove the CLI needed by those other steps. Replacing them requires preserving session continuity, queued execution, delivery reporting and recovery after uncertain results.
-
-A [Gateway SDK migration assessment](gateway-sdk-feasibility.md) describes how these remaining CLI calls could be replaced. That migration has not been implemented.
+With MCP_DISCORD_AGENT_TRANSPORT=sdk, agent execution uses the official Gateway SDK and the remaining reads use authenticated HTTP. The setting requires Gateway reads and creation, and disables all CLI fallback. See [authentication, deployment and rollback](discord-sdk.md); the [independent audit](gateway-sdk-feasibility.md) records limits that a transport change does not solve.
 
 ## One Discord Gateway connection per MCP service
 
-The current Discord integration uses one configured CLI executable, one Gateway association (`MCP_DISCORD_CLI_GATEWAY_INSTANCE`) and one bot account. It can serve several agents and permitted Discord servers through that setup.
+The Discord integration uses one Gateway association (`MCP_DISCORD_CLI_GATEWAY_INSTANCE`) and one bot account. It can serve several agents and permitted Discord servers through that setup.
 
 Generic chat can connect to multiple OpenClaw installations, but the complete Discord workflow cannot yet choose a different Gateway/CLI setup for each request. Discovering agents or bindings from another installation does not change that limit. Until the adapters support per-instance dispatch, use a separately configured MCP service for another Discord Gateway/bot setup.
 
 ## Scope
 
-Direct Ask OpenClaw continues to use the HTTP chat-completions endpoint. Its tools, session_id/instance response contract, and multi-instance routing are unchanged. Discord tools are an optional service capability combining Gateway HTTP calls, Discord REST calls and a locally installed OpenClaw CLI, as described above. They do not currently use a Gateway SDK or create subagents.
+Direct Ask OpenClaw continues to use the HTTP chat-completions endpoint. Its tools, session_id/instance response contract, and multi-instance routing are unchanged. Discord tools are an optional service capability combining Gateway HTTP calls, Discord REST calls and a locally installed OpenClaw CLI, as described above. The opt-in SDK path replaces the CLI parts; neither path creates subagents.
 
 The /mcp endpoint routes 2026-07-28 requests through the official createMcpHandler factory and Node adapter. The SDK's isLegacyRequest classifier sends existing stateful 2025 clients to the unchanged legacy transport. Legacy SSE and stdio remain supported. The official Skills extension is available on modern HTTP; stdio, SSE and legacy HTTP expose the same packaged files through resources/list and resources/read. This is a staged migration: stdio and SSE do not advertise the new protocol or extension methods.
 
 Pinned packages: @modelcontextprotocol/server, core and client 2.4.0; @modelcontextprotocol/node 2.1.2; legacy @modelcontextprotocol/sdk 1.32.1. The client package is test-only.
 
 ## Operator configuration
+
+The configuration below describes the default CLI-compatible mode. [SDK mode](discord-sdk.md) adds its own authentication gate and replaces thread-list, permissions and exact-ID reads with the same HTTP read adapter.
 
 Discord tools are absent unless MCP_DISCORD_ENABLED=true. Set these in the service's trusted environment, not tool input:
 
@@ -69,7 +69,7 @@ Invocation environment is inherited unchanged, including OPENCLAW_SHELL and call
 
 Set MCP_DISCORD_THREAD_CREATE_MODE=gateway to create new threads through the authenticated, closed message/thread-create adapter. The default cli mode retains the existing CLI creation path. Gateway mode requires MCP_DISCORD_CLI_GATEWAY_INSTANCE and that instance's server-side credential. Enable Gateway metadata reads as above to avoid CLI startup for parent/thread checks. The ordinary agent CLI invocation and delivery arguments are unchanged.
 
-Gateway creation falls back to CLI only on ECONNREFUSED: the connection could not dispatch a mutation. No HTTP response authorizes fallback, including 404 (which may hide a policy denial). There is no fallback on 401/403/429, timeout, connection reset, malformed results, partial creation, or any known thread ID. Parent metadata read failures stop before creation. CLI fallback can itself require the Gateway; it is not an offline path and never starts or restarts the Gateway.
+In default CLI execution mode, Gateway creation falls back to CLI only on ECONNREFUSED (SDK mode never falls back): the connection could not dispatch a mutation. No HTTP response authorizes fallback, including 404 (which may hide a policy denial). There is no fallback on 401/403/429, timeout, connection reset, malformed results, partial creation, or any known thread ID. Parent metadata read failures stop before creation. CLI fallback can itself require the Gateway; it is not an offline path and never starts or restarts the Gateway.
 
 To add the owner to every newly created thread, configure the service environment:
 
@@ -115,13 +115,13 @@ On HTTP/SSE shutdown the service stops admitting new asks and drains accepted wo
 - openclaw_discord_threads lists active threads or archived public threads. Active listing has no pagination. Archived listing uses before as an ISO archive timestamp and limit up to 100. Private archive enumeration is not supported.
 - openclaw_discord_ask accepts only new_thread, with target, title, prompt and an unpredictable operation_id of 16–100 URL-safe characters. It returns link/status rather than answer content; absence of answer text is expected. The tool description and coordinator skill instruct callers to pass the original user request unchanged, letting the server add any configured forwarding header, without added requirements or unrequested optimization, and respond with only the Discord link on successful handoff. Errors and partial/unknown outcomes must still be reported. These are caller guidance, not a technical guarantee of another model’s response style. Continue on Discord to read and reply. Existing-thread replies use the separate openclaw_discord_reply tool; see [its deployment requirements](discord-reply.md). Bare-channel continuation remains unsupported.
 - openclaw_discord_operation reads a durable record without writes or CLI calls.
-- openclaw_discord_create_channel creates only normal text channels through the documented Gateway message/channel-create action. It requires a separately enabled creation policy and explicit authorization for both creation and persistent admission. The agent turn stays on CLI; optional Gateway thread creation uses the separate message/thread-create action. Forum/media parent writes are rejected before effects rather than inventing starter-message behavior.
+- openclaw_discord_create_channel creates only normal text channels through the documented Gateway message/channel-create action. It requires a separately enabled creation policy and explicit authorization for both creation and persistent admission. The agent turn uses the configured CLI/SDK transport; optional Gateway thread creation uses the separate message/thread-create action. Forum/media parent writes are rejected before effects rather than inventing starter-message behavior.
 
 The supported workflow creates a new thread, verifies membership, publishes the request, and returns a queued “Continue on Discord” link without waiting for the first OpenClaw response. The fresh thread ID is associated durably with agent:<agentId>:discord:channel:<threadId> using the operator-verified normal parent routing. Existing-thread replies use the configured ordinary routing described in [discord-reply.md](discord-reply.md). There is no client-selected session or runtime rebinding support. Special bound parents must not be marked normalRouting:true. An optional route inspector can reject mismatches, but the shipped new-thread path does not require an unavailable exact-route API. Parent guild/type and thread ancestry are still read back. No Gateway bindings are changed.
 
 Normal human replies must route to the same ordinary session. Before enabling a target, the operator verifies account/agent routing, bot permissions, channel access and mention requirements. A separately authorized external-client canary must create a new thread, receive the first reply, then confirm that a human Discord reply retains context. This integration test has not been run here. Later binding/configuration changes are outside the guarantee. The agent CLI uses --session-key, --message-file, --deliver, --reply-channel discord, --reply-to channel:<id>, --reply-account, --agent and --json. The original prompt is published before this invocation and is passed unchanged once via --message-file, so the normal agent turn records it in the session.
 
-Prompt files live in private temporary directories with mode 0600 and are removed after success or failure. The prompt does not appear in process arguments or operation records. A hard process kill can leave a temporary directory; operators may clean stale openclaw-mcp-* directories only after confirming no CLI reads them.
+In CLI mode, prompt files live in private temporary directories with mode 0600 and are removed after success or failure. The prompt does not appear in process arguments or operation records. A hard process kill can leave a temporary directory; operators may clean stale openclaw-mcp-* directories only after confirming no CLI reads them.
 
 ## Idempotency and outcomes
 
