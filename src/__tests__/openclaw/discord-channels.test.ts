@@ -20,7 +20,6 @@ const policy: CreationPolicy = {
   categoryId: category,
   accountId: 'bot',
   agentId: 'main',
-  instance: 'home',
 };
 const input = {
   policy: 'projects',
@@ -63,6 +62,10 @@ describe('explicit channel creation', () => {
       target: 'created-' + channel,
     });
     expect(result.session_key).toBeUndefined();
+    expect(result).not.toHaveProperty('instance');
+    expect(
+      JSON.parse(await readFile(join(f.dir, input.operation_id + '.json'), 'utf8'))
+    ).not.toHaveProperty('instance');
     expect(f.inspect.mock.calls.map((c) => c[1])).toEqual([category, channel]);
     const restarted = new ChannelCreation(f.dir, [policy], f.invoke, f.inspect);
     expect(await restarted.create(input)).toEqual(result);
@@ -89,6 +92,32 @@ describe('explicit channel creation', () => {
         f.inspect
       ).admitted()
     ).toEqual([]);
+  });
+  it('rejects removed policy selectors rather than retaining them in policy digests', async () => {
+    const f = await fixture();
+    expect(
+      () =>
+        new DiscordService({
+          stateDir: f.dir,
+          targets: [],
+          creationPolicies: [{ ...policy, instance: 'default' } as CreationPolicy],
+          acknowledgeInboundRouting: true,
+        })
+    ).toThrow('Invalid creation policy field');
+    expect(f.invoke).not.toHaveBeenCalled();
+  });
+  it('rejects duplicate creation policy names before constructing adapters', async () => {
+    const f = await fixture();
+    expect(
+      () =>
+        new DiscordService({
+          stateDir: f.dir,
+          targets: [],
+          creationPolicies: [policy, { ...policy, agentId: 'writer' }],
+          acknowledgeInboundRouting: true,
+        })
+    ).toThrow('DUPLICATE_CREATION_POLICY');
+    expect(f.invoke).not.toHaveBeenCalled();
   });
   it('does not dispatch concurrent duplicate creation', async () => {
     const f = await fixture();
@@ -168,7 +197,6 @@ describe('explicit channel creation', () => {
       stateDir: f.dir,
       targets: [],
       creationPolicies: [policy],
-      gatewayInstance: 'home',
       acknowledgeInboundRouting: true,
     };
     const reader = vi.fn<DiscordReader>(async (_scope, request) =>
@@ -230,17 +258,12 @@ describe('explicit channel creation', () => {
     const f = await fixture();
     expect(
       () =>
-        new DiscordService(
-          { gatewayInstance: 'home', stateDir: f.dir, targets: [], creationPolicies: [policy] },
-          f.invoke
-        )
+        new DiscordService({ stateDir: f.dir, targets: [], creationPolicies: [policy] }, f.invoke)
     ).toThrow('CREATION_ROUTING_ACKNOWLEDGEMENT_REQUIRED');
   });
 });
 describe('closed Gateway adapter', () => {
-  const instances = [
-    { name: 'home', url: 'http://127.0.0.1:18789', token: 'test-only-credential' },
-  ];
+  const gatewayConfig = { url: 'http://127.0.0.1:18789', token: 'test-only-credential' };
   it('uses server credentials, fixed action, account and category without redirects', async () => {
     const fetcher = vi.fn(
       async () =>
@@ -250,7 +273,12 @@ describe('closed Gateway adapter', () => {
         )
     );
     expect(
-      await channelInvoker(instances, fetcher)(policy, 'new-project', 'notes', input.operation_id)
+      await channelInvoker(gatewayConfig, fetcher)(
+        policy,
+        'new-project',
+        'notes',
+        input.operation_id
+      )
     ).toMatchObject({ channel: { id: channel } });
     const [url, opts] = fetcher.mock.calls[0] as any;
     expect(url).toBe('http://127.0.0.1:18789/tools/invoke');
@@ -275,7 +303,7 @@ describe('closed Gateway adapter', () => {
   it.each([401, 403, 404, 429])('returns safe known rejection code for HTTP %i', async (status) => {
     const fetcher = vi.fn(async () => new Response('secret', { status }));
     await expect(
-      channelInvoker(instances, fetcher)(policy, 'test', undefined, input.operation_id)
+      channelInvoker(gatewayConfig, fetcher)(policy, 'test', undefined, input.operation_id)
     ).rejects.toMatchObject({ code: 'GATEWAY_HTTP_' + status, uncertain: false });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
@@ -284,11 +312,11 @@ describe('closed Gateway adapter', () => {
       throw new Error('private transport details');
     });
     await expect(
-      channelInvoker(instances, fetcher)(policy, 'test', undefined, input.operation_id)
+      channelInvoker(gatewayConfig, fetcher)(policy, 'test', undefined, input.operation_id)
     ).rejects.toMatchObject({ code: 'GATEWAY_OUTCOME_UNKNOWN', uncertain: true });
     vi.stubEnv('OPENCLAW_SESSION_KEY', 'agent:main:test');
     await expect(
-      channelInvoker(instances, fetcher)(policy, 'test', undefined, input.operation_id)
+      channelInvoker(gatewayConfig, fetcher)(policy, 'test', undefined, input.operation_id)
     ).rejects.toThrow('AGENT_PROVENANCE_DENIED');
     expect(fetcher).toHaveBeenCalledTimes(1);
   });

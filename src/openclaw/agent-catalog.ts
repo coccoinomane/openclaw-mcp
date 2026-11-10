@@ -1,6 +1,6 @@
 import { discoverGatewayAgents, type GatewayRosterLoader } from './gateway-discovery.js';
 import type { DiscordConfig } from './discord.js';
-import type { AgentBinding, InstanceConfig } from './types.js';
+import type { AgentBinding, GatewayConfig } from './types.js';
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -34,34 +34,19 @@ function bindings(value: unknown, roster: Array<{ id: string }>): AgentBinding[]
   });
 }
 
-/** Load only operator-selected catalogs; never read the full OpenClaw configuration. */
+/** Load only the operator-selected catalog, never the full OpenClaw configuration. */
 export async function loadAgentCatalog(
-  configs: InstanceConfig[],
+  config: GatewayConfig,
   env: NodeJS.ProcessEnv = process.env,
   gatewayLoader: GatewayRosterLoader = discoverGatewayAgents
-): Promise<InstanceConfig[]> {
-  const gateway = env.MCP_AGENT_DISCOVERY === 'gateway';
-  if (env.MCP_AGENT_DISCOVERY && env.MCP_AGENT_DISCOVERY !== 'gateway')
+): Promise<GatewayConfig> {
+  const discovery = env.MCP_AGENT_DISCOVERY === 'gateway';
+  if (env.MCP_AGENT_DISCOVERY && !discovery)
     throw new Error('MCP_AGENT_DISCOVERY must be gateway when enabled');
-  if (!gateway && env.MCP_AGENT_DISCOVERY_STATE_DIR)
+  if (!discovery && env.MCP_AGENT_DISCOVERY_STATE_DIR)
     throw new Error('Agent discovery state directory requires MCP_AGENT_DISCOVERY=gateway');
-  const result = configs.map((config) => ({ ...config }));
-  const assigned = new Set<string>();
-  const apply = (instance: unknown, rawAgents: unknown, rawBindings: unknown) => {
-    if (typeof instance !== 'string') throw new Error('Agent catalog requires an instance');
-    const config = result.find((entry) => entry.name === instance);
-    if (!config) throw new Error(`Agent catalog references unknown instance "${instance}"`);
-    if (assigned.has(instance) || config.agents !== undefined || config.bindings !== undefined)
-      throw new Error(`Multiple agent catalog sources for instance "${instance}"`);
-    assigned.add(instance);
-    if (gateway && rawAgents === undefined && rawBindings !== undefined) {
-      // Bindings remain operator supplied; validate them against the fetched roster below.
-      config.bindings = rawBindings as AgentBinding[];
-    } else {
-      config.agents = agents(rawAgents);
-      if (rawBindings !== undefined) config.bindings = bindings(rawBindings, config.agents);
-    }
-  };
+  const result = { ...config };
+  let rawBindings: unknown = config.bindings;
   if (env.MCP_AGENT_CATALOG) {
     let catalog: unknown;
     try {
@@ -69,73 +54,56 @@ export async function loadAgentCatalog(
     } catch {
       throw new Error('MCP_AGENT_CATALOG contains invalid JSON');
     }
-    if (!Array.isArray(catalog)) throw new Error('MCP_AGENT_CATALOG must be an array');
-    for (const entry of catalog) {
-      if (
-        !object(entry) ||
-        Object.keys(entry).some((key) => !['instance', 'agents', 'bindings'].includes(key))
-      )
-        throw new Error('Invalid agent catalog instance entry');
-      apply(entry.instance, entry.agents, entry.bindings);
-    }
+    if (
+      !object(catalog) ||
+      Object.keys(catalog).some((key) => !['agents', 'bindings'].includes(key))
+    )
+      throw new Error('MCP_AGENT_CATALOG must be an object with agents and/or bindings');
+    if (config.agents !== undefined || config.bindings !== undefined)
+      throw new Error('Multiple agent catalog sources');
+    if (!discovery || catalog.agents !== undefined) result.agents = agents(catalog.agents);
+    rawBindings = catalog.bindings;
   }
-  if (gateway) {
-    for (const config of result) {
-      if (config.agents !== undefined)
-        throw new Error('Gateway discovery cannot be combined with a static agent roster');
+  if (discovery) {
+    if (result.agents !== undefined)
+      throw new Error('Gateway discovery cannot be combined with a static agent roster');
+    const roster = await gatewayLoader(result, env);
+    try {
+      if (!object(roster) || !Array.isArray(roster.agents)) throw new Error();
+      const visible = roster.agents.filter((entry: unknown) => {
+        if (
+          !object(entry) ||
+          (entry.kind !== undefined && entry.kind !== 'agent' && entry.kind !== 'system')
+        )
+          throw new Error();
+        return entry.kind !== 'system';
+      });
+      result.agents = agents(visible);
+    } catch {
+      throw new Error('Gateway returned an invalid agent roster');
     }
-    // Await every connection's cleanup even if one instance fails. No partial catalog is installed.
-    const rosters = await Promise.allSettled(result.map((config) => gatewayLoader(config, env)));
-    for (let index = 0; index < result.length; index++) {
-      const roster = rosters[index];
-      if (roster.status === 'rejected') throw roster.reason;
-      try {
-        const value = roster.value;
-        if (!object(value) || !Array.isArray(value.agents)) throw new Error();
-        const visible = value.agents.filter((entry: unknown) => {
-          if (
-            !object(entry) ||
-            (entry.kind !== undefined && entry.kind !== 'agent' && entry.kind !== 'system')
-          )
-            throw new Error();
-          return entry.kind !== 'system';
-        });
-        result[index].agents = agents(visible);
-      } catch {
-        throw new Error(
-          'Gateway returned an invalid agent roster for instance "' + result[index].name + '"'
-        );
-      }
-      // defaultId/selectionRequired are not new routing rules: retain configured/model defaults.
-    }
+    // Retain configured/model defaults rather than inferring a routing policy from the roster.
   }
-  // Validate inline per-instance catalogs too.
-  for (const config of result) {
-    if (config.agents !== undefined) config.agents = agents(config.agents);
-    if (config.bindings !== undefined)
-      config.bindings = bindings(config.bindings, config.agents ?? []);
-  }
+  if (result.agents !== undefined) result.agents = agents(result.agents);
+  if (rawBindings !== undefined) result.bindings = bindings(rawBindings, result.agents ?? []);
   return result;
 }
 
 /** Make existing Discord agents selectable without expanding Discord permission scopes. */
 export function includeConfiguredDiscordAgents(
-  configs: InstanceConfig[],
+  config: GatewayConfig,
   discord?: DiscordConfig
-): InstanceConfig[] {
-  if (!discord) return configs;
-  const result = configs.map((config) => ({ ...config, agents: [...(config.agents ?? [])] }));
-  const add = (instance: string | undefined, agentId: string) => {
-    if (instance === undefined) return;
-    const config = result.find((entry) => entry.name === instance);
-    if (!config) throw new Error(`Discord references unknown instance "${instance}"`);
-    const normalized = id(agentId);
-    if (!config.agents.some((agent) => agent.id.toLowerCase() === normalized))
-      config.agents.push({ id: normalized });
-  };
-  const local = discord.gatewayInstance ?? (configs.length === 1 ? configs[0].name : undefined);
-  for (const mapping of [...discord.targets, ...(discord.discoveryScopes ?? [])])
-    add(local, mapping.agentId);
-  for (const policy of discord.creationPolicies ?? []) add(policy.instance, policy.agentId);
+): GatewayConfig {
+  if (!discord) return config;
+  const result = { ...config, agents: [...(config.agents ?? [])] };
+  for (const mapping of [
+    ...discord.targets,
+    ...(discord.discoveryScopes ?? []),
+    ...(discord.creationPolicies ?? []),
+  ]) {
+    const agentId = id(mapping.agentId);
+    if (!result.agents.some((agent) => agent.id.toLowerCase() === agentId))
+      result.agents.push({ id: agentId });
+  }
   return result;
 }

@@ -58,7 +58,6 @@ async function fixture() {
     stateDir: dir,
     targets: [target],
     acknowledgeInboundRouting: true,
-    gatewayInstance: 'home',
     threadMember: { userId: '400000000000000006', accountId: 'bot' },
     maxOperations: 1,
   };
@@ -468,7 +467,6 @@ describe('closed request publication', () => {
   it('loads only the operator name and accepts missing or empty configuration', () => {
     const env = {
       MCP_DISCORD_ENABLED: 'true',
-      MCP_DISCORD_GATEWAY_INSTANCE: 'home',
       MCP_DISCORD_STATE_DIR: '/tmp/private-test-state',
       MCP_DISCORD_TARGETS: JSON.stringify([target]),
     };

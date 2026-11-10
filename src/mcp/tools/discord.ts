@@ -10,11 +10,6 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { DiscordService } from '../../openclaw/discord.js';
 import { errorResponse, structuredJsonResponse } from '../../utils/response-helpers.js';
 const selectors = {
-  instance: {
-    type: 'string',
-    minLength: 1,
-    description: 'Configured Discord Gateway instance; asserts the selected route.',
-  },
   agent_id: {
     type: 'string',
     pattern: '^[a-z0-9][a-z0-9_-]{0,63}$',
@@ -172,10 +167,8 @@ export async function handleDiscord(service: DiscordService, name: string, input
     return errorResponse('Invalid Discord tool arguments');
   try {
     if (
-      (input.instance !== undefined &&
-        (typeof input.instance !== 'string' || !input.instance.trim())) ||
-      (input.agent_id !== undefined &&
-        (typeof input.agent_id !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(input.agent_id)))
+      input.agent_id !== undefined &&
+      (typeof input.agent_id !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(input.agent_id))
     )
       return errorResponse('Invalid Discord route selectors');
     if (name === 'openclaw_discord_create_channel')

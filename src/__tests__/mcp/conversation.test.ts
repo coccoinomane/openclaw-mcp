@@ -18,15 +18,11 @@ describe('MCP conversation keys', () => {
 
   it('creates a distinct UUID for each new conversation, even on one connection', () => {
     const keys = Array.from({ length: 200 }, () =>
-      createConversationKey(
-        'default',
-        { serverLabel: 'mcp.example', clientName: 'Desktop' },
-        'research'
-      )
+      createConversationKey({ serverLabel: 'mcp.example', clientName: 'Desktop' }, 'research')
     );
     expect(new Set(keys).size).toBe(200);
     for (const key of keys)
-      expect(key).toMatch(new RegExp(`^agent:research:mcp:mcp.example:desktop:default:${UUID}$`));
+      expect(key).toMatch(new RegExp(`^agent:research:mcp:mcp.example:desktop:${UUID}$`));
   });
 
   it.each([
@@ -38,14 +34,13 @@ describe('MCP conversation keys', () => {
     [undefined, 'unknown'],
     ['Mixed Case App', 'mixed-case-app'],
   ])('bounds untrusted display labels without namespace injection (%s)', (name, expected) => {
-    const key = createConversationKey('default', { serverLabel: 'server', clientName: name });
-    expect(key.split(':').slice(0, 4)).toEqual(['mcp', 'server', expected, 'default']);
+    const key = createConversationKey({ serverLabel: 'server', clientName: name });
+    expect(key.split(':').slice(0, 3)).toEqual(['mcp', 'server', expected]);
     expect(validateId(key, 'session_id').valid).toBe(true);
   });
 
   it('keeps maximum-size keys reusable under the existing 256-character validation', () => {
     const key = createConversationKey(
-      'i'.repeat(64),
       { serverLabel: 's'.repeat(300), clientName: 'c'.repeat(1000) },
       'a'.repeat(64)
     );

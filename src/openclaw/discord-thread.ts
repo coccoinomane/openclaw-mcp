@@ -1,7 +1,7 @@
 import { assertTargetAllowed } from './discord-policy.js';
 import { assertServiceProvenance, DiscordError, type AdmittedTarget } from './discord-channels.js';
 import type { DiscordConfig } from './discord.js';
-import type { InstanceConfig } from './types.js';
+import type { GatewayConfig } from './types.js';
 
 export type ThreadInvoker = (
   target: AdmittedTarget,
@@ -11,15 +11,13 @@ export type ThreadInvoker = (
 
 /** Fixed message/thread-create request; never a general Gateway proxy. */
 export function threadInvoker(
-  instances: InstanceConfig[],
+  gateway: GatewayConfig,
   config: DiscordConfig,
   fetcher = fetch
 ): ThreadInvoker {
-  const matches = instances.filter((i) => i.name === config.gatewayInstance);
-  if (matches.length !== 1 || !matches[0].token)
-    throw new DiscordError('THREAD_GATEWAY_CONFIGURATION_INVALID');
-  const instance = { ...matches[0] };
-  const url = new URL('/tools/invoke', instance.url);
+  const { url: gatewayUrl, token } = gateway;
+  if (!token) throw new DiscordError('THREAD_GATEWAY_CONFIGURATION_INVALID');
+  const url = new URL('/tools/invoke', gatewayUrl);
   if (
     url.username ||
     url.password ||
@@ -45,7 +43,7 @@ export function threadInvoker(
         method: 'POST',
         redirect: 'error',
         signal: AbortSignal.timeout(30000),
-        headers: { Authorization: 'Bearer ' + instance.token, 'Content-Type': 'application/json' },
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tool: 'message',
           sessionKey: 'agent:' + target.agentId + ':main',

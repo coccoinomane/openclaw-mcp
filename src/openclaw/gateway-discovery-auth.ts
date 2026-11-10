@@ -85,7 +85,6 @@ function validateIdentity(value: unknown): DeviceIdentity {
 
 /** This integration owns its keys; it never opens OpenClaw's CLI identity files. */
 export function gatewayDiscoveryAuth(
-  instance: string,
   url: string,
   env: NodeJS.ProcessEnv,
   options: { existingOnly?: boolean; identityOnly?: boolean } = {}
@@ -99,9 +98,9 @@ export function gatewayDiscoveryAuth(
   if (!isAbsolute(directory)) throw new Error('Discovery state directory must be absolute');
   if (!options.existingOnly) mkdirSync(directory, { recursive: true, mode: 0o700 });
   privateEntry(lstatSync(directory), true);
-  // Bind storage to the configured instance AND full endpoint, never just device/role.
+  // Bind storage to the full endpoint, never just device/role.
   const key = createHash('sha256')
-    .update(JSON.stringify([instance, url]))
+    .update(JSON.stringify([url]))
     .digest('hex');
   const identityPath = join(directory, key + '.identity.json');
   const tokenPath = join(directory, key + '.operator.json');

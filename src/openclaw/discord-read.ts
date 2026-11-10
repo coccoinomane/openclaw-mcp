@@ -1,6 +1,6 @@
 import { assertServiceProvenance, DiscordError } from './discord-channels.js';
 import type { DiscordConfig } from './discord.js';
-import type { InstanceConfig } from './types.js';
+import type { GatewayConfig } from './types.js';
 
 type ReadScope = {
   guildId: string;
@@ -25,21 +25,17 @@ const scopeKey = (s: ReadScope) => JSON.stringify([s.guildId, s.accountId, s.age
 
 /** Fixed service reads through the existing authorized HTTP tool surface. */
 export function channelReader(
-  instances: InstanceConfig[],
+  gateway: GatewayConfig,
   config: DiscordConfig,
   fetcher = fetch
 ): DiscordReader {
-  const matches = instances.filter((i) => i.name === config.gatewayInstance);
-  if (matches.length !== 1 || !matches[0].token)
-    throw new DiscordError('READ_GATEWAY_CONFIGURATION_INVALID');
-  const instance = { ...matches[0] };
+  const { url: gatewayUrl, token } = gateway;
+  if (!token) throw new DiscordError('READ_GATEWAY_CONFIGURATION_INVALID');
   const policies = config.creationPolicies ?? [];
-  if (policies.some((p) => p.instance !== instance.name))
-    throw new DiscordError('READ_GATEWAY_MISMATCH');
   const scopes = new Set(
     [...config.targets, ...(config.discoveryScopes ?? []), ...policies].map(scopeKey)
   );
-  const url = new URL('/tools/invoke', instance.url);
+  const url = new URL('/tools/invoke', gatewayUrl);
   if (
     url.username ||
     url.password ||
@@ -107,7 +103,7 @@ export function channelReader(
         method: 'POST',
         redirect: 'error',
         signal: AbortSignal.timeout(30000),
-        headers: { Authorization: 'Bearer ' + instance.token, 'Content-Type': 'application/json' },
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tool: 'message',
           sessionKey: 'agent:' + scope.agentId + ':main',

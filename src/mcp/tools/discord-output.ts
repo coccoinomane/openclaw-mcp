@@ -3,7 +3,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 type OutputSchema = NonNullable<Tool['outputSchema']>;
 const string = { type: 'string' };
 const boolean = { type: 'boolean' };
-const route = { instance: string, agent_id: string, account_id: string };
+const route = { agent_id: string, account_id: string };
 const nullableString = { type: ['string', 'null'] };
 const retrySafe = { type: 'boolean', const: false };
 const error = {

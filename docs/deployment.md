@@ -4,7 +4,7 @@
 
 The provided `docker-compose.yml` runs the MCP bridge server in a hardened container.
 The OpenClaw gateway runs on your host machine (or elsewhere) — the bridge connects to it
-via `host.docker.internal`.
+via `host.docker.internal`. One MCP deployment connects to one OpenClaw installation; use separate deployments with separate configuration and private state directories for additional installations.
 
 ```yaml
 services:
@@ -184,7 +184,7 @@ Without this, HTTP chat/reachability requests receive `405 Method Not Allowed` f
 
 The bridge requires no installed OpenClaw CLI. Optional roster discovery and Discord agent execution use the Gateway SDK over WebSocket. Discord metadata/permission reads and thread/channel creation still use authenticated `/tools/invoke`; membership and exact prompt publication use Discord REST. See the [call inventory](discord-sdk.md#remaining-httprest-calls-and-sdk-feasibility).
 
-For Discord or Gateway discovery, extend the service's environment allowlist and mount private writable persistent identity/state directories. The basic Compose example above supplies neither. Set `MCP_DISCORD_GATEWAY_INSTANCE` when enabling Discord, provision its SDK identity, and keep bot credentials in the service secret store. Remove the obsolete CLI selectors using the [upgrade checklist](discord-sdk.md#upgrade-from-cli-based-releases).
+For Discord or Gateway discovery, extend the service's environment allowlist and mount private writable persistent identity/state directories. The basic Compose example above supplies neither. Provision the SDK identity for the configured Gateway and keep bot credentials in the service secret store. Remove the obsolete CLI selectors using the [upgrade checklist](discord-sdk.md#upgrade-from-cli-based-releases).
 
 Remote SDK and Discord Gateway HTTP endpoints require HTTPS and WebSocket upgrades. `http://host.docker.internal` and HTTP Docker service hostnames in generic-chat examples are not loopback for these adapters. Use a suitable HTTPS Gateway endpoint with device authentication; `local-shared-token` accepts only literal loopback `127.0.0.1` or `[::1]` as seen from the bridge process. Do not weaken authentication or clear provenance markers to make a container connect.
 

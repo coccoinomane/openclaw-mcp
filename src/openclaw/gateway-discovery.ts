@@ -3,12 +3,12 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from '@openclaw/gateway-pr
 import { readConnectErrorDetailCode } from '@openclaw/gateway-protocol/connect-error-details';
 import { SERVER_VERSION } from '../config/constants.js';
 import { gatewayDiscoveryAuth } from './gateway-discovery-auth.js';
-import type { InstanceConfig } from './types.js';
+import type { GatewayConfig } from './types.js';
 
 export type DiscoveryClient = Pick<GatewayClient, 'start' | 'request' | 'stopAndWait'>;
 export type DiscoveryClientFactory = (options: GatewayClientOptions) => DiscoveryClient;
 export type GatewayRosterLoader = (
-  config: InstanceConfig,
+  config: GatewayConfig,
   env: NodeJS.ProcessEnv
 ) => Promise<unknown>;
 const READY_TIMEOUT_MS = 15_000;
@@ -16,14 +16,11 @@ const REQUEST_TIMEOUT_MS = 30_000;
 
 /** Only agents.list is exposed here; this is not a general RPC adapter. */
 export async function discoverGatewayAgents(
-  config: InstanceConfig,
+  config: GatewayConfig,
   env: NodeJS.ProcessEnv = process.env,
   createClient: DiscoveryClientFactory = (options) => new GatewayClient(options)
 ): Promise<unknown> {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(config.name))
-    throw new Error('Invalid discovery instance name');
-  const fail = (reason: string) =>
-    new Error('Gateway agent discovery for instance "' + config.name + '": ' + reason);
+  const fail = (reason: string) => new Error('Gateway agent discovery: ' + reason);
   let url: URL;
   try {
     url = new URL(config.url);
@@ -42,7 +39,7 @@ export async function discoverGatewayAgents(
   }
   let auth: ReturnType<typeof gatewayDiscoveryAuth>;
   try {
-    auth = gatewayDiscoveryAuth(config.name, url.toString(), env);
+    auth = gatewayDiscoveryAuth(url.toString(), env);
   } catch {
     throw fail(
       'cannot load private device state; check the discovery state directory and permissions'

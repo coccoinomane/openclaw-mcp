@@ -13,13 +13,13 @@ Prepared on 2026-11-01 in feature/discord-skills-mcp, based on fork/main at 04ba
 - Private prompt files, cleanup, recorded partial creation, uncertain run status, explicit unverified delivery, exclusive operation claims, file/directory sync, restart and duplicate suppression. No blind retry.
 - Official 2.4.0 Skills catalog/attachment on 2026-07-28 HTTP through createMcpHandler and 2.1.2 Node adapter, alongside existing stateful HTTP/SSE/stdio and resource fallback.
 - Packaged English SKILL.md and recovery reference; SDK manifests include both files and SHA-256 digests. Description is below 500 UTF-8 bytes.
-- Existing direct HTTP chat, multi-instance registry, continuity contract and legacy connection ownership retained. Modern async ownership is tied to validated access tokens; anonymous modern async calls fail closed.
+- Existing direct HTTP chat, continuity contract and legacy connection ownership retained. Modern async ownership is tied to validated access tokens; anonymous modern async calls fail closed.
 - Explicit Origin checks ahead of auth/transport; existing Host protection retained.
 - Docker copy/include rules for packaged skills.
 
 ## Validation
 
-Lint, typecheck, the full 288-test Vitest suite and build pass. Added tests cover mocked CLI execution/provenance, validation, allowlists, wrong guild/parent, partial results, timeout ambiguity, duplicate and concurrent calls, restart records, private state permissions, prompt cleanup, pagination, explicit channel creation/admission, policy revocation, category moves, separate opt-in, HTTP auth failures, uncertain creation and provenance rejection. Official SkillsClient verifies list/get/read and support-file digests. Real local transport tests cover modern and legacy clients on the actual server entry point, PKCE OAuth discovery gating, token ownership isolation, continuity metadata, Host and Origin rejection. Existing auth, SSE, stdio and multi-instance tests remain green.
+Lint, typecheck, the full 288-test Vitest suite and build pass. Added tests cover mocked CLI execution/provenance, validation, allowlists, wrong guild/parent, partial results, timeout ambiguity, duplicate and concurrent calls, restart records, private state permissions, prompt cleanup, pagination, explicit channel creation/admission, policy revocation, category moves, separate opt-in, HTTP auth failures, uncertain creation and provenance rejection. Official SkillsClient verifies list/get/read and support-file digests. Real local transport tests cover modern and legacy clients on the actual server entry point, PKCE OAuth discovery gating, token ownership isolation, continuity metadata, Host and Origin rejection. Existing auth, SSE and stdio tests remain green.
 
 The compiled stdio bundle was launched from /tmp and successfully read its packaged skill. npm pack --dry-run includes SKILL.md and its support file. Docker was inspected but not built or deployed.
 

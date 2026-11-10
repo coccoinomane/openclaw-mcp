@@ -10,7 +10,7 @@ import { SERVER_VERSION } from '../config/constants.js';
 import { assertServiceProvenance, DiscordError } from './discord-channels.js';
 import { gatewayDiscoveryAuth } from './gateway-discovery-auth.js';
 import type { DiscordConfig } from './discord.js';
-import type { InstanceConfig } from './types.js';
+import type { GatewayConfig } from './types.js';
 
 export type AgentReceipt = { runId: string; sessionKey: string; agentId: string };
 export type DiscordAgentRequest = {
@@ -59,21 +59,19 @@ function requestFailure(error: unknown, uncertain: boolean): DiscordError {
 
 /** Fixed agent/wait/abort calls with explicit service authentication. */
 export function discordAgentTransport(
-  instances: InstanceConfig[],
+  gateway: GatewayConfig,
   config: DiscordConfig,
   env: NodeJS.ProcessEnv = process.env,
   createClient: AgentClientFactory = (options) => new GatewayClient(options)
 ): DiscordAgentTransport {
+  const { url: gatewayUrl, token } = gateway;
   const authMode = env.MCP_DISCORD_SDK_AUTH ?? 'device';
   if (!['device', 'local-shared-token'].includes(authMode))
     throw new DiscordError('SDK_AUTH_MODE_INVALID');
   const localSharedToken = authMode === 'local-shared-token';
-  const matches = instances.filter((i) => i.name === config.gatewayInstance);
-  if (matches.length !== 1) throw new DiscordError('SDK_GATEWAY_CONFIGURATION_INVALID');
-  const instance = { ...matches[0] };
   let url: URL;
   try {
-    url = new URL(instance.url);
+    url = new URL(gatewayUrl);
     if (
       url.username ||
       url.password ||
@@ -92,7 +90,7 @@ export function discordAgentTransport(
     // Literal loopback addresses avoid DNS or hosts-file changes sending the shared secret off-host.
     if (!['127.0.0.1', '[::1]'].includes(url.hostname))
       throw new DiscordError('SDK_SHARED_TOKEN_LOOPBACK_REQUIRED');
-    if (typeof instance.token !== 'string' || !instance.token || /\s/.test(instance.token))
+    if (typeof token !== 'string' || !token || /\s/.test(token))
       throw new DiscordError('SDK_SHARED_TOKEN_REQUIRED');
   }
 
@@ -102,7 +100,6 @@ export function discordAgentTransport(
     let auth: ReturnType<typeof gatewayDiscoveryAuth>;
     try {
       auth = gatewayDiscoveryAuth(
-        instance.name,
         url.toString(),
         {
           ...env,
@@ -134,7 +131,7 @@ export function discordAgentTransport(
     let client: AgentClient | undefined;
     const options: GatewayClientOptions = {
       url: url.toString(),
-      ...(localSharedToken ? { token: instance.token } : {}),
+      ...(localSharedToken ? { token } : {}),
       deviceIdentity: auth.identity,
       hostDeps: {
         ...auth.hostDeps,

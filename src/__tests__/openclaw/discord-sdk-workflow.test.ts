@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { DiscordService, loadDiscordConfig, type DiscordConfig } from '../../openclaw/discord.js';
 import { channelReader } from '../../openclaw/discord-read.js';
@@ -37,7 +38,7 @@ const reply = {
   operation_id: input.operation_id,
   prompt: input.prompt,
 };
-const instances = [{ name: 'home', url: 'http://127.0.0.1:18789', token: 'fixture-only' }];
+const gatewayConfig = { url: 'http://127.0.0.1:18789', token: 'fixture-only' };
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((r) => {
@@ -67,7 +68,6 @@ async function fixture(archived = false) {
   const config: DiscordConfig = {
     stateDir: dir,
     targets: [target],
-    gatewayInstance: 'home',
     acknowledgeInboundRouting: true,
     threadMember: { userId: '400000000000000006', accountId: 'bot' },
   };
@@ -118,6 +118,7 @@ async function fixture(archived = false) {
         events.push('agent');
         const record = JSON.parse(await readFile(join(dir, input.operation_id + '.json'), 'utf8'));
         expect(record.agent_idempotency_key).toBe(request.idempotencyKey);
+        expect(record).not.toHaveProperty('instance');
         await accepted({
           runId: 'owned-run',
           sessionKey: request.sessionKey,
@@ -143,8 +144,8 @@ async function fixture(archived = false) {
       config,
       undefined,
       undefined,
-      channelReader(instances, config, fetcher),
-      threadInvoker(instances, config, fetcher),
+      channelReader(gatewayConfig, config, fetcher),
+      threadInvoker(gatewayConfig, config, fetcher),
       member,
       publish,
       agent
@@ -167,42 +168,25 @@ async function fixture(archived = false) {
   return f;
 }
 describe('required SDK adapters', () => {
-  it('requires an explicit single Gateway instance', () => {
-    const env = {
+  it('loads Discord configuration without a Gateway selector', () => {
+    const config = loadDiscordConfig({
       MCP_DISCORD_ENABLED: 'true',
       MCP_DISCORD_STATE_DIR: '/fixture',
       MCP_DISCORD_TARGETS: JSON.stringify([target]),
-    };
-    expect(() => loadDiscordConfig(env)).toThrow('DISCORD_GATEWAY_INSTANCE_REQUIRED');
-    expect(
-      loadDiscordConfig({ ...env, MCP_DISCORD_GATEWAY_INSTANCE: 'home' })?.gatewayInstance
-    ).toBe('home');
+    });
+    expect(config?.targets).toEqual([target]);
+    expect(config).not.toHaveProperty('gatewayInstance');
   });
-  it.each(['', ' ', '../default', 'home/remote'])(
-    'rejects invalid Gateway association %j',
-    (instance) => {
-      expect(() =>
-        loadDiscordConfig({
-          MCP_DISCORD_ENABLED: 'true',
-          MCP_DISCORD_STATE_DIR: '/fixture',
-          MCP_DISCORD_TARGETS: JSON.stringify([target]),
-          MCP_DISCORD_GATEWAY_INSTANCE: instance,
-        })
-      ).toThrow('DISCORD_GATEWAY_INSTANCE_REQUIRED');
-    }
-  );
-  it('does not accept the removed instance alias or expose transport selection', () => {
+  it('does not expose removed Gateway selectors or CLI transport selection', () => {
     const env = {
       MCP_DISCORD_ENABLED: 'true',
       MCP_DISCORD_STATE_DIR: '/fixture',
       MCP_DISCORD_TARGETS: JSON.stringify([target]),
     };
-    expect(() => loadDiscordConfig({ ...env, MCP_DISCORD_CLI_GATEWAY_INSTANCE: 'home' })).toThrow(
-      'DISCORD_GATEWAY_INSTANCE_REQUIRED'
-    );
     const config = loadDiscordConfig({
       ...env,
       MCP_DISCORD_GATEWAY_INSTANCE: 'home',
+      MCP_DISCORD_CLI_GATEWAY_INSTANCE: 'obsolete',
       MCP_DISCORD_AGENT_TRANSPORT: 'cli',
       MCP_DISCORD_EXECUTABLE: '/never/run',
       MCP_DISCORD_CLI_TIMEOUT_MS: '1',
@@ -216,6 +200,7 @@ describe('required SDK adapters', () => {
       'threadCreateMode',
       'gatewayReadsEnabled',
       'cliGatewayInstance',
+      'gatewayInstance',
     ])
       expect(config).not.toHaveProperty(key);
     expect(JSON.stringify(discordTurnOutput)).not.toContain('"cli"');
@@ -243,6 +228,13 @@ describe('ordinary Discord workflows without subprocesses', () => {
         agent_transport: 'sdk',
         channel_id: thread,
       });
+      expect(result).not.toHaveProperty('instance');
+      expect(result.agent_idempotency_key).toBe(
+        'discord-run-' +
+          createHash('sha256')
+            .update(JSON.stringify([input.operation_id]))
+            .digest('hex')
+      );
       expect(f.agent.run).not.toHaveBeenCalled();
       await f.started.promise;
       expect(f.agent.run.mock.calls[0][0]).toEqual({

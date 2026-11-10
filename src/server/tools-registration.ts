@@ -23,7 +23,7 @@ import { validateId, validateInputIsObject } from '../utils/validation.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-import type { InstanceRegistry } from '../openclaw/registry.js';
+import type { OpenClawGateway } from '../openclaw/gateway.js';
 import { SERVER_ICON_SVG_BASE64 } from '../config/constants.js';
 import { log, logError } from '../utils/logger.js';
 import * as tools from '../mcp/tools/index.js';
@@ -31,7 +31,7 @@ import { conversationServerLabel } from '../mcp/conversation.js';
 import type { ToolResponse } from '../utils/response-helpers.js';
 
 export interface ToolRegistrationDeps {
-  registry: InstanceRegistry;
+  gateway: OpenClawGateway;
   discord?: DiscordService;
   skills?: SkillCatalog;
   serverName: string;
@@ -80,7 +80,7 @@ function toolSet(
   clientName: () => string | undefined,
   ownerId: string = randomUUID()
 ) {
-  const { registry } = deps;
+  const { gateway } = deps;
 
   // Identity of this MCP connection, used to scope async tasks.
   //
@@ -97,17 +97,16 @@ function toolSet(
   });
 
   const toolHandlers = new Map<string, (input: unknown) => Promise<ToolResponse>>([
-    ['openclaw_chat', (input) => tools.handleOpenclawChat(registry, input, conversationContext())],
-    ['openclaw_status', (input) => tools.handleOpenclawStatus(registry, input)],
+    ['openclaw_chat', (input) => tools.handleOpenclawChat(gateway, input, conversationContext())],
+    ['openclaw_status', (input) => tools.handleOpenclawStatus(gateway, input)],
     [
       'openclaw_chat_async',
-      (input) => tools.handleOpenclawChatAsync(registry, input, ownerId, conversationContext()),
+      (input) => tools.handleOpenclawChatAsync(gateway, input, ownerId, conversationContext()),
     ],
-    ['openclaw_task_status', (input) => tools.handleOpenclawTaskStatus(registry, input, ownerId)],
-    ['openclaw_task_list', (input) => tools.handleOpenclawTaskList(registry, input, ownerId)],
-    ['openclaw_task_cancel', (input) => tools.handleOpenclawTaskCancel(registry, input, ownerId)],
-    ['openclaw_agents', (input) => tools.handleOpenclawAgents(registry, input)],
-    ['openclaw_instances', (input) => tools.handleOpenclawInstances(registry, input)],
+    ['openclaw_task_status', (input) => tools.handleOpenclawTaskStatus(gateway, input, ownerId)],
+    ['openclaw_task_list', (input) => tools.handleOpenclawTaskList(gateway, input, ownerId)],
+    ['openclaw_task_cancel', (input) => tools.handleOpenclawTaskCancel(gateway, input, ownerId)],
+    ['openclaw_agents', (input) => tools.handleOpenclawAgents(gateway, input)],
   ]);
 
   const allTools: import('@modelcontextprotocol/sdk/types.js').Tool[] = [
@@ -117,7 +116,6 @@ function toolSet(
     tools.openclawTaskStatusTool,
     tools.openclawTaskListTool,
     tools.openclawTaskCancelTool,
-    tools.openclawInstancesTool,
     tools.openclawAgentsTool,
   ];
 
@@ -125,21 +123,11 @@ function toolSet(
     allTools.push(...discordTools);
     for (const tool of discordTools)
       toolHandlers.set(tool.name, async (input) => {
-        if (
-          validateInputIsObject(input) &&
-          (input.instance !== undefined || input.agent_id !== undefined)
-        ) {
-          for (const field of ['instance', 'agent_id']) {
-            if (input[field] !== undefined) {
-              const checked = validateId(input[field], field);
-              if (!checked.valid) return errorResponse(checked.error);
-            }
-          }
+        if (validateInputIsObject(input) && input.agent_id !== undefined) {
+          const checked = validateId(input.agent_id, 'agent_id');
+          if (!checked.valid) return errorResponse(checked.error);
           try {
-            registry.resolve(
-              (input.instance as string | undefined) ?? deps.discord!.config.gatewayInstance,
-              input.agent_id as string | undefined
-            );
+            gateway.resolve(checked.value);
           } catch (error) {
             return errorResponse(
               error instanceof Error ? error.message : 'Invalid Discord route selector'

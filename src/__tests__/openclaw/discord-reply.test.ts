@@ -47,7 +47,6 @@ async function fixture() {
       },
     ],
     acknowledgeInboundRouting: true,
-    gatewayInstance: 'home',
   };
   const metadata: any = {
     id: thread,
@@ -364,7 +363,7 @@ describe('existing public thread replies', () => {
       'different arguments'
     );
   });
-  it('serializes distinct IDs for the same session across service instances', async () => {
+  it('serializes distinct IDs for the same session across service objects', async () => {
     const f = await fixture();
     const results = await Promise.all([
       f.service.reply(input),
@@ -539,11 +538,7 @@ describe('existing public thread replies', () => {
         f.config,
         undefined,
         undefined,
-        channelReader(
-          [{ name: 'home', url: 'http://127.0.0.1:18789', token: 'test-only' }],
-          f.config,
-          network
-        ),
+        channelReader({ url: 'http://127.0.0.1:18789', token: 'test-only' }, f.config, network),
         f.createThread,
         threadMemberAdder(f.config, { DISCORD_BOT_TOKEN: 'test-only' }, network),
         requestPublisher(f.config, { DISCORD_BOT_TOKEN: 'test-only' }, network),

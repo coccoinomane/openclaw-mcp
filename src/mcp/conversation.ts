@@ -1,4 +1,4 @@
-import type { InstanceRegistry } from '../openclaw/registry.js';
+import type { OpenClawGateway } from '../openclaw/gateway.js';
 import { validateId } from '../utils/validation.js';
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
@@ -30,22 +30,16 @@ export function conversationServerLabel(issuerUrl?: string): string {
  * session key. Without a known target, leave default resolution to Gateway.
  * Never guess "main" or change a caller-supplied key.
  */
-export function createConversationKey(
-  instanceName: string,
-  context: ConversationContext = {},
-  agentId?: string
-): string {
+export function createConversationKey(context: ConversationContext = {}, agentId?: string): string {
   const server = sessionLabel(context.serverLabel ?? conversationServerLabel(), 'local');
   const client = sessionLabel(context.clientName, 'unknown');
-  const instance = sessionLabel(instanceName, 'default');
-  const key = `mcp:${server}:${client}:${instance}:${randomUUID()}`;
+  const key = `mcp:${server}:${client}:${randomUUID()}`;
   return agentId ? `agent:${agentId}:${key}` : key;
 }
 
 /** Resolve routing once while preserving legacy caller-supplied session semantics. */
 export function resolveConversation(
-  registry: InstanceRegistry,
-  instance: string | undefined,
+  gateway: OpenClawGateway,
   selector: unknown,
   sessionId?: string
 ) {
@@ -59,12 +53,12 @@ export function resolveConversation(
   if (selected && sessionAgent && selected !== sessionAgent.toLowerCase()) {
     throw new Error('agent_id conflicts with the agent in session_id');
   }
-  const resolved = registry.resolve(instance, selected);
+  const resolved = gateway.resolve(selected);
   const normalizedSessionAgent = sessionAgent?.toLowerCase();
   // Returned agent_id must be reusable as an explicit selector. Legacy keys
   // can name agents outside the local catalog without making them selectable.
   const agentId = normalizedSessionAgent
-    ? registry.listAgents(resolved.name).some((agent) => agent.agentId === normalizedSessionAgent)
+    ? gateway.listAgents().some((agent) => agent.agentId === normalizedSessionAgent)
       ? normalizedSessionAgent
       : undefined
     : resolved.agentId;

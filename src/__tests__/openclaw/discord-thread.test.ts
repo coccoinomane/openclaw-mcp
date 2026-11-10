@@ -23,11 +23,10 @@ const target = {
 const base: DiscordConfig = {
   stateDir: '/unused-test-state',
   targets: [target],
-  gatewayInstance: 'home',
   threadMember: { userId: owner, accountId: 'bot' },
   acknowledgeInboundRouting: true,
 };
-const instances = [{ name: 'home', url: 'http://127.0.0.1:18789', token: 'mock-gateway-secret' }];
+const gatewayConfig = { url: 'http://127.0.0.1:18789', token: 'mock-gateway-secret' };
 const env = { DISCORD_BOT_TOKEN: 'mock-bot-secret' };
 const input = {
   target: 'work',
@@ -103,8 +102,8 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
       config,
       undefined,
       undefined,
-      channelReader(instances, config, gateway),
-      threadInvoker(instances, config, gateway),
+      channelReader(gatewayConfig, config, gateway),
+      threadInvoker(gatewayConfig, config, gateway),
       threadMemberAdder(config, env, member),
       async (_t, _id, _prompt, _op, sent) => {
         events.push('publish');
@@ -342,17 +341,14 @@ describe('operator configuration and closed inputs', () => {
   it('requires explicit opt-in with bounded configuration and credentials', () => {
     const vars = {
       MCP_DISCORD_ENABLED: 'true',
-      MCP_DISCORD_GATEWAY_INSTANCE: 'home',
       MCP_DISCORD_STATE_DIR: '/unused-test-state',
       MCP_DISCORD_TARGETS: JSON.stringify([target]),
     };
     expect(loadDiscordConfig(vars)).toMatchObject({
-      gatewayInstance: 'home',
       threadMember: undefined,
     });
-    expect(threadInvoker(instances, base)).toEqual(expect.any(Function));
+    expect(threadInvoker(gatewayConfig, base)).toEqual(expect.any(Function));
     expect(threadMemberAdder({ ...base, threadMember: undefined }, env)).toBeUndefined();
-    expect(() => loadDiscordConfig({ ...vars, MCP_DISCORD_GATEWAY_INSTANCE: undefined })).toThrow();
     expect(() =>
       loadDiscordConfig({ ...vars, MCP_DISCORD_THREAD_MEMBER_ENABLED: 'true' })
     ).toThrow();
@@ -376,13 +372,12 @@ describe('operator configuration and closed inputs', () => {
         MCP_DISCORD_THREAD_MEMBER_ACCOUNT_ID: 'bot',
       })?.threadMember
     ).toEqual({ userId: owner, accountId: 'bot' });
-    for (const list of [
-      [],
-      [instances[0], instances[0]],
-      [{ ...instances[0], token: undefined }],
-      [{ ...instances[0], url: 'http://remote.invalid' }],
+    for (const gateway of [
+      { ...gatewayConfig, token: undefined },
+      { ...gatewayConfig, token: '' },
+      { ...gatewayConfig, url: 'http://remote.invalid' },
     ])
-      expect(() => threadInvoker(list, base)).toThrow();
+      expect(() => threadInvoker(gateway, base)).toThrow();
   });
   it.each(['userId', 'token', 'url', 'args', 'accountId', 'threadCreateMode'])(
     'rejects client override %s before effects',
@@ -401,7 +396,7 @@ describe('operator configuration and closed inputs', () => {
     vi.stubEnv('OPENCLAW_CALLER_ID', 'agent');
     await expect(f.service.ask(input)).rejects.toThrow('AGENT_PROVENANCE_DENIED');
     await expect(
-      threadInvoker(instances, base, f.gateway)!(target, 'Task', input.operation_id)
+      threadInvoker(gatewayConfig, base, f.gateway)!(target, 'Task', input.operation_id)
     ).rejects.toThrow('AGENT_PROVENANCE_DENIED');
     await expect(threadMemberAdder(base, env, f.member)!(target, thread)).rejects.toThrow(
       'AGENT_PROVENANCE_DENIED'
@@ -413,7 +408,7 @@ describe('operator configuration and closed inputs', () => {
   it('rejects unconfigured gateway/member account mappings', async () => {
     const f = await fixture();
     await expect(
-      threadInvoker(instances, base, f.gateway)!(
+      threadInvoker(gatewayConfig, base, f.gateway)!(
         { ...target, channelId: thread },
         'Task',
         input.operation_id
@@ -439,7 +434,6 @@ describe('operator configuration and closed inputs', () => {
       'original request to forward unchanged'
     );
     expect(Object.keys(tool.inputSchema.properties!)).toEqual([
-      'instance',
       'agent_id',
       'target',
       'operation_id',

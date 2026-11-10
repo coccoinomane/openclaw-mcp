@@ -1,6 +1,6 @@
 # Historical assessment: replacing the OpenClaw CLI with the Gateway SDK
 
-Historical assessment: 9 November 2026, before removal of the CLI transport. The assessment and test evidence below are preserved as written, not current setup instructions or a live-equivalence claim.
+Historical assessment: 9 November 2026, before removal of the CLI transport. The assessment and test evidence below are historical, not current setup instructions or a live-equivalence claim. Obsolete connection-topology advice has been removed.
 
 **Current implementation:** Discord agent execution always uses the pinned 2026.10.9 SDK; Gateway HTTP and Discord REST adapters remain. Agent discovery supports `gateway` or an unset/static roster only. There is no CLI mode or fallback. Use the [current SDK setup and migration guide](discord-sdk.md), [remaining HTTP/REST inventory and feasibility advice](discord-sdk.md#remaining-httprest-calls-and-sdk-feasibility), and [multi-agent setup](multiagent.md). Current live evidence and remaining deployment gates are recorded in the SDK guide.
 
@@ -22,13 +22,13 @@ Evidence functions include installed `closeDiscordThreadSessions`, `createThread
 
 Yes. The official `@openclaw/gateway-client` can retrieve the agent list and start the same Discord agent turns that we currently launch through the CLI. It can also request channel information, thread lists and permissions. Removing those subprocesses would allow the MCP service to work without a local OpenClaw CLI, including when a Gateway is remote.
 
-It would add a WebSocket connection and its authentication lifecycle. It is not a direct replacement for an HTTP fetch call, and it would not automatically make every Discord adapter support multiple Gateways.
+It would add a WebSocket connection and its authentication lifecycle. It is not a direct replacement for an HTTP fetch call.
 
 Thread creation itself already has an HTTP implementation. Keep it initially; see [the current Discord workflow and limits](discord-skills.md#how-discord-requests-reach-openclaw).
 
 ## Start with agent discovery
 
-Create one SDK connection for each configured OpenClaw instance. Use that instance’s address and credentials, and call `agents.list`. Several agents on the same instance can share its connection. Keep credentials, cached agent lists and pending runs separate between instances.
+Create one SDK connection to the configured OpenClaw Gateway using its address and credentials, and call `agents.list`. Several agents share this connection. Additional OpenClaw installations require separate MCP deployments with separate credentials and state.
 
 The roster implementation returns IDs only and preserves existing configured/model defaults. It does not adopt a Gateway `defaultId` or introduce required-selection enforcement. The Gateway also reports `selectionRequired`; any future change to that behavior needs a separate design rather than treating the first agent as an intentional choice.
 
@@ -39,9 +39,9 @@ Recommend making configuration-derived binding import explicit opt-in. If enable
 ## What must change before using the SDK?
 
 - **Node version:** updated for roster discovery: Node >=22.19.0, Node 24 Docker images, and CI covering the minimum release and Node 24.
-- **Authentication:** a token that works for HTTP does not guarantee a remote WebSocket connection with the required permissions. Provision a persistent device identity and handle pairing where required. Store its credentials separately for each instance.
+- **Authentication:** a token that works for HTTP does not guarantee a remote WebSocket connection with the required permissions. Provision a persistent device identity and handle pairing where required. Keep its credentials private to that MCP deployment.
 - **Permissions:** request explicit scopes. The inspected SDK defaults to `operator.admin`; discovery only needs `operator.read`. Discord tool/action RPCs require `operator.write`, even for read-only actions. Existing channel restrictions still apply.
-- **Connection lifetime:** current discovery waits for authentication, reads once at startup and closes every connection. Failures stop startup; there is no live roster refresh. Future long-lived clients would need reconnect recovery, and must never repeat an agent request merely because its connection dropped.
+- **Connection lifetime:** current discovery waits for authentication, reads once at startup and closes the connection. Failures stop startup; there is no live roster refresh. Future long-lived clients would need reconnect recovery, and must never repeat an agent request merely because its connection dropped.
 
 The npm stable version observed during this assessment was 2026.11.2. A 2026.10.9 package matching the installed Gateway was also available. Use an exact, compatibility-tested version rather than upgrading the Gateway as part of this migration.
 
@@ -59,7 +59,7 @@ Channel and thread reads can move to an internal, action-restricted `tools.invok
 
 ## Suggested order and acceptance checks
 
-1. Add the SDK connection and agent discovery. Test the intended device identity, scopes, two separate Gateways, missing defaults, reconnection and cleanup. Keep ordinary chat over HTTP.
+1. Add the SDK connection and agent discovery. Test the intended device identity, scopes, multiple agents, missing defaults, reconnection and cleanup. Keep ordinary chat over HTTP.
 2. Add opt-in binding import if automatic Discord mapping is needed. Test unsupported bindings and saved-but-unapplied configuration; do not silently guess a route.
 3. Replace Discord reads and agent execution. Test acceptance versus completion, disconnect recovery, denied channels, explicit cancellation and failed or partial delivery. Verify no duplicate requests or messages.
 

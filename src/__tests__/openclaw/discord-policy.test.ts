@@ -19,7 +19,7 @@ const guild = '700000000000000001',
 const scope = { guildId: guild, accountId: 'bot', agentId: 'main', normalRouting: true };
 const parent = { id: channel, guild_id: guild, type: 0, name: 'Work', parent_id: category };
 const cat = { id: category, guild_id: guild, type: 4, name: 'Projects' };
-const instances = [{ name: 'home', url: 'http://127.0.0.1:18789', token: 'mock' }];
+const gatewayConfig = { url: 'http://127.0.0.1:18789', token: 'mock' };
 const dirs: string[] = [];
 const services: DiscordService[] = [];
 const input = (target: string) => ({
@@ -38,7 +38,6 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
     discoveryScopes: [scope],
     channelWhitelist: [],
     channelBlacklist: [],
-    gatewayInstance: 'home',
     acknowledgeInboundRouting: true,
     ...overrides,
   };
@@ -181,7 +180,7 @@ describe('scoped channel discovery', () => {
           JSON.stringify({ ok: true, result: { details: { ok: true, channels: f.data } } })
         )
     );
-    const reader = channelReader(instances, f.config, fetcher)!;
+    const reader = channelReader(gatewayConfig, f.config, fetcher)!;
     await reader(scope, { action: 'channel-list' });
     await expect(reader({ ...scope, guildId: future }, { action: 'channel-list' })).rejects.toThrow(
       'READ_SCOPE_DENIED'
@@ -215,7 +214,7 @@ describe('operation policy enforcement', () => {
     expect(f.reader).not.toHaveBeenCalled();
   });
   it('denies admitted-created aliases and their dynamic equivalents', async () => {
-    const policy = { ...scope, name: 'projects', categoryId: category, instance: 'home' };
+    const policy = { ...scope, name: 'projects', categoryId: category };
     const f = await fixture({ creationPolicies: [policy], channelBlacklist: [inbox] });
     await writeFile(
       join(f.config.stateDir, 'created-policy-test-001.json'),
@@ -281,7 +280,7 @@ describe('operation policy enforcement', () => {
     const fetcher = vi.fn();
     const t = dynamicTarget(scope, inbox);
     await expect(
-      threadInvoker(instances, config, fetcher)!(t, 'Task', 'policy-operation-001')
+      threadInvoker(gatewayConfig, config, fetcher)!(t, 'Task', 'policy-operation-001')
     ).rejects.toThrow('CHANNEL_POLICY_DENIED');
     await expect(
       threadMemberAdder(config, { DISCORD_BOT_TOKEN: 'mock' }, fetcher)!(t, thread)
@@ -350,7 +349,7 @@ describe('policy interactions', () => {
     expect(f.agent.run).not.toHaveBeenCalled();
   });
   it('retains admitted category checks for a crafted dynamic alias', async () => {
-    const policy = { ...scope, name: 'projects', categoryId: category, instance: 'home' };
+    const policy = { ...scope, name: 'projects', categoryId: category };
     const f = await fixture({ creationPolicies: [policy] });
     await writeFile(
       join(f.config.stateDir, 'created-policy-test-002.json'),
@@ -370,7 +369,7 @@ describe('policy interactions', () => {
     expect(f.agent.run).not.toHaveBeenCalled();
   });
   it('denies blacklisted categories before channel creation effects', async () => {
-    const policy = { ...scope, name: 'projects', categoryId: category, instance: 'home' };
+    const policy = { ...scope, name: 'projects', categoryId: category };
     const f = await fixture({ creationPolicies: [policy], channelBlacklist: [category] });
     await expect(
       f.service.createChannel({
@@ -385,7 +384,7 @@ describe('policy interactions', () => {
     expect(f.reader).not.toHaveBeenCalled();
   });
   it('preserves allowed category creation and admits the resulting channel', async () => {
-    const policy = { ...scope, name: 'projects', categoryId: category, instance: 'home' };
+    const policy = { ...scope, name: 'projects', categoryId: category };
     const f = await fixture({ creationPolicies: [policy] });
     f.data.push({ ...parent, id: future, name: 'New' });
     expect(
@@ -436,7 +435,7 @@ describe('policy interactions', () => {
     const fetcher = vi.fn(async () => new Response('', { status: 403 }));
     const t = dynamicTarget(scope, channel);
     await expect(
-      threadInvoker(instances, config, fetcher)!(t, 'Task', 'policy-operation-002')
+      threadInvoker(gatewayConfig, config, fetcher)!(t, 'Task', 'policy-operation-002')
     ).rejects.toThrow('GATEWAY_HTTP_403');
     await expect(
       threadMemberAdder(config, { DISCORD_BOT_TOKEN: 'mock' }, fetcher)!(t, thread)
@@ -469,7 +468,6 @@ describe('policy interactions', () => {
 describe('configuration validation', () => {
   const env = {
     MCP_DISCORD_ENABLED: 'true',
-    MCP_DISCORD_GATEWAY_INSTANCE: 'home',
     MCP_DISCORD_STATE_DIR: '/unused-test-state',
     MCP_DISCORD_DISCOVERY_SCOPES: JSON.stringify([scope]),
   };

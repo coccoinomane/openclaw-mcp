@@ -7,7 +7,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpServer, createModernMcpServer } from '../../server/tools-registration.js';
-import { InstanceRegistry } from '../../openclaw/registry.js';
+import { OpenClawGateway } from '../../openclaw/gateway.js';
 import type { DiscordService } from '../../openclaw/discord.js';
 import { DiscordError } from '../../openclaw/discord-channels.js';
 import { discordTools } from '../../mcp/tools/discord.js';
@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 async function connect(modern: boolean, discord: DiscordService) {
   const deps = {
-    registry: new InstanceRegistry([{ name: 'default', url: 'http://127.0.0.1:1' }], 'openclaw'),
+    gateway: new OpenClawGateway({ url: 'http://127.0.0.1:1' }, 'openclaw'),
     serverName: 'schema-test',
     serverVersion: '1',
     discord,
@@ -62,7 +62,7 @@ describe.each([false, true])('Discord output validation (modern=%s)', (modern) =
   it('rejects unknown selector agents before dispatch on every transport', async () => {
     const channels = vi.fn(async () => ({ channels: [], creation_policies: [] }));
     const client = await connect(modern, {
-      config: { gatewayInstance: 'default' },
+      config: {},
       channels,
     } as unknown as DiscordService);
     const result = await client.callTool({

@@ -1,5 +1,5 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { InstanceRegistry } from '../../openclaw/registry.js';
+import type { OpenClawGateway } from '../../openclaw/gateway.js';
 import {
   successResponse,
   errorResponse,
@@ -16,9 +16,10 @@ import {
 export const openclawChatTool: Tool = {
   name: 'openclaw_chat',
   description:
-    'Send a message to OpenClaw and get a response. Save the returned session_id, instance and agent_id (when present) and reuse them for follow-up turns. Omitting session_id starts a new conversation. The key is returned in structuredContent and an additional text block, including on Gateway errors; errors may follow accepted work, so do not automatically resend.',
+    'Send a message to OpenClaw and get a response. Save the returned session_id and agent_id (when present) and reuse them for follow-up turns. Omitting session_id starts a new conversation. The key is returned in structuredContent and an additional text block, including on Gateway errors; errors may follow accepted work, so do not automatically resend.',
   inputSchema: {
     type: 'object',
+    additionalProperties: false,
     properties: {
       message: {
         type: 'string',
@@ -30,23 +31,25 @@ export const openclawChatTool: Tool = {
           'Gateway conversation key returned by a previous chat. Reuse it unchanged for follow-up turns; omit for a new conversation. Distinct from MCP transport session and task IDs.',
       },
       agent_id: { type: 'string', description: 'Configured agent ID from openclaw_agents.' },
-      instance: {
-        type: 'string',
-        description:
-          'Target OpenClaw instance name. Use openclaw_instances to list available instances. Defaults to the default instance.',
-      },
     },
     required: ['message'],
   },
 };
 
 export async function handleOpenclawChat(
-  registry: InstanceRegistry,
+  gateway: OpenClawGateway,
   input: unknown,
   context: ConversationContext = {}
 ): Promise<ToolResponse> {
   if (!validateInputIsObject(input)) {
     return errorResponse('Invalid input: expected an object');
+  }
+  if (
+    Object.keys(input).some(
+      (key) => !Object.prototype.hasOwnProperty.call(openclawChatTool.inputSchema.properties, key)
+    )
+  ) {
+    return errorResponse('Unknown argument');
   }
 
   const msgResult = validateMessage(input.message);
@@ -63,31 +66,22 @@ export async function handleOpenclawChat(
     sessionId = sidResult.value;
   }
 
-  let instanceName: string | undefined;
-  if (input.instance !== undefined) {
-    const instResult = validateId(input.instance, 'instance');
-    if (instResult.valid === false) {
-      return errorResponse(instResult.error);
-    }
-    instanceName = instResult.value;
-  }
-
-  let effectiveInstance: string;
+  let resolvedConversation = false;
   let agentId: string | undefined;
   try {
-    const resolved = resolveConversation(registry, instanceName, input.agent_id, sessionId);
-    const { client, name } = resolved;
+    const resolved = resolveConversation(gateway, input.agent_id, sessionId);
+    const { client } = resolved;
     agentId = resolved.agentId;
-    effectiveInstance = name;
-    sessionId ??= createConversationKey(name, context, agentId);
+    resolvedConversation = true;
+    sessionId ??= createConversationKey(context, agentId);
     const response = await client.chat(msgResult.value, sessionId);
-    return withConversation(successResponse(response.response), sessionId, name, agentId);
+    return withConversation(successResponse(response.response), sessionId, agentId);
   } catch (error) {
     const response = errorResponse(
       error instanceof Error ? error.message : 'Failed to chat with OpenClaw'
     );
-    return sessionId && effectiveInstance
-      ? withConversation(response, sessionId, effectiveInstance, agentId)
+    return sessionId && resolvedConversation
+      ? withConversation(response, sessionId, agentId)
       : response;
   }
 }

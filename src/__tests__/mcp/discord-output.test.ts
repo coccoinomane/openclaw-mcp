@@ -38,6 +38,7 @@ async function checked(service: DiscordService, name: string, input: any = {}) {
   const response = await handleDiscord(service, 'openclaw_discord_' + name, input);
   expect(response.isError).not.toBe(true);
   valid(name, response.structuredContent);
+  expect(JSON.stringify(response.structuredContent)).not.toContain('"instance"');
   // JSON transport drops undefined optional properties; preserve the original text.
   expect(response.content[0].text).toBe(JSON.stringify(response.structuredContent, null, 2));
   valid(name, JSON.parse(response.content[0].text));
@@ -116,7 +117,6 @@ async function fixture() {
     {
       stateDir,
       acknowledgeInboundRouting: true,
-      gatewayInstance: 'home',
       targets: [
         {
           name: 'work',
@@ -134,7 +134,6 @@ async function fixture() {
           categoryId: category,
           accountId: 'bot',
           agentId: 'main',
-          instance: 'home',
         },
       ],
     },
@@ -185,6 +184,26 @@ const creation = {
 };
 
 describe('Discord output contracts', () => {
+  it.each(discordTools)('$name rejects removed selectors before service dispatch', async (tool) => {
+    const dispatch = vi.fn();
+    const service = {
+      channels: dispatch,
+      threads: dispatch,
+      ask: dispatch,
+      reply: dispatch,
+      status: dispatch,
+      createChannel: dispatch,
+    } as unknown as DiscordService;
+    const args = Object.fromEntries((tool.inputSchema.required ?? []).map((key) => [key, 'value']));
+    expect(tool.inputSchema.properties).not.toHaveProperty('instance');
+    expect(JSON.stringify(tool.outputSchema)).not.toContain('"instance"');
+    for (const extra of [{ instance: 'removed' }, { unexpected: 'value' }]) {
+      const response = await handleDiscord(service, tool.name, { ...args, ...extra });
+      expect(response.isError).toBe(true);
+      expect(dispatch).not.toHaveBeenCalled();
+    }
+  });
+
   it('validates channels, nullable metadata, categories and creation policies', async () => {
     const f = await fixture();
     const initial = await checked(f.service, 'channels');

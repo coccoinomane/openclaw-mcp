@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.coccoinomane/openclaw-mcp",
   "title": "OpenClaw MCP Server",
-  "description": "MCP server bridging Claude.ai/Desktop with self-hosted OpenClaw via OAuth 2.1.",
+  "description": "MCP server connecting Claude.ai/Desktop to one OpenClaw Gateway with multiple agents via OAuth 2.1.",
   "repository": {
     "url": "https://github.com/coccoinomane/openclaw-mcp",
     "source": "github"
@@ -21,7 +21,7 @@
       "environmentVariables": [
         {
           "name": "OPENCLAW_URL",
-          "description": "URL of your OpenClaw gateway",
+          "description": "URL of the single OpenClaw Gateway for this MCP deployment",
           "default": "http://127.0.0.1:18789",
           "isRequired": true
         },
@@ -54,7 +54,7 @@
       "environmentVariables": [
         {
           "name": "OPENCLAW_URL",
-          "description": "URL of your OpenClaw gateway",
+          "description": "URL of the single OpenClaw Gateway for this MCP deployment",
           "default": "http://127.0.0.1:18789",
           "isRequired": true
         },

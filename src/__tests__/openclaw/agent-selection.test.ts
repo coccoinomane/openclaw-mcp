@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { InstanceRegistry } from '../../openclaw/registry.js';
+import { OpenClawGateway } from '../../openclaw/gateway.js';
 import { handleOpenclawChat } from '../../mcp/tools/chat.js';
 import { discordBindingResolver } from '../../openclaw/discord-bindings.js';
 
@@ -20,14 +20,14 @@ describe('integrated agent routing', () => {
         return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }));
       })
     );
-    const registry = new InstanceRegistry(
-      [{ name: 'local', url: 'http://localhost', agents: [{ id: 'alpha' }, { id: 'beta' }] }],
+    const gateway = new OpenClawGateway(
+      { url: 'http://localhost', agents: [{ id: 'alpha' }, { id: 'beta' }] },
       'openclaw/alpha'
     );
     await Promise.all([
-      handleOpenclawChat(registry, { message: 'one', agent_id: 'alpha' }),
-      handleOpenclawChat(registry, { message: 'two', agent_id: 'beta' }),
-      handleOpenclawChat(registry, { message: 'default' }),
+      handleOpenclawChat(gateway, { message: 'one', agent_id: 'alpha' }),
+      handleOpenclawChat(gateway, { message: 'two', agent_id: 'beta' }),
+      handleOpenclawChat(gateway, { message: 'default' }),
     ]);
     expect(requests.map((request) => request.agent)).toEqual(['alpha', 'beta', undefined]);
     expect(requests.map((request) => request.model)).toEqual([

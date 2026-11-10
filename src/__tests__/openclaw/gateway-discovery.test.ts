@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { verify } from 'node:crypto';
+import { createHash, verify } from 'node:crypto';
 import {
   chmodSync,
   mkdtempSync,
@@ -20,12 +20,11 @@ import {
 } from '../../openclaw/gateway-discovery.js';
 import { gatewayDiscoveryAuth } from '../../openclaw/gateway-discovery-auth.js';
 import { loadAgentCatalog } from '../../openclaw/agent-catalog.js';
-import { InstanceRegistry } from '../../openclaw/registry.js';
+import { OpenClawGateway } from '../../openclaw/gateway.js';
 
 let directory: string;
 let env: NodeJS.ProcessEnv;
 const local = {
-  name: 'local',
   url: 'http://127.0.0.1:18789',
   token: 'bootstrap-secret',
   agentId: 'main',
@@ -73,7 +72,7 @@ describe('Gateway roster discovery', () => {
   it('uses a signed backend identity and only agents.list/operator.read, preserving defaults and manual routes', async () => {
     const transport = fake();
     const bindings = [{ agentId: 'writer', match: { channel: 'discord', guildId: '123' } }];
-    const configs = await loadAgentCatalog([{ ...local, bindings }], env, (config, environment) =>
+    const configs = await loadAgentCatalog({ ...local, bindings }, env, (config, environment) =>
       discoverGatewayAgents(config, environment, transport.create)
     );
     expect(transport.options[0]).toMatchObject({
@@ -93,15 +92,15 @@ describe('Gateway roster discovery', () => {
       ['agents.list', {}, { timeoutMs: 30000 }],
     ]);
     expect(transport.clients[0].stopAndWait).toHaveBeenCalledWith({ timeoutMs: 1000 });
-    expect(configs[0].agents).toEqual([{ id: 'main' }, { id: 'writer' }]);
-    expect(configs[0].bindings).toEqual(bindings);
-    const registry = new InstanceRegistry(configs);
-    expect(registry.resolve().agentId).toBe('main');
-    expect(registry.listAgents()).toEqual([
-      { instance: 'local', agentId: 'main', isDefault: true },
-      { instance: 'local', agentId: 'writer', isDefault: false },
+    expect(configs.agents).toEqual([{ id: 'main' }, { id: 'writer' }]);
+    expect(configs.bindings).toEqual(bindings);
+    const gateway = new OpenClawGateway(configs);
+    expect(gateway.resolve().agentId).toBe('main');
+    expect(gateway.listAgents()).toEqual([
+      { agentId: 'main', isDefault: true },
+      { agentId: 'writer', isDefault: false },
     ]);
-    expect(JSON.stringify(registry.listAgents())).not.toMatch(
+    expect(JSON.stringify(gateway.listAgents())).not.toMatch(
       /private|never-return|bootstrap-secret|selectionRequired/
     );
   });
@@ -112,47 +111,19 @@ describe('Gateway roster discovery', () => {
     expect(transport.clients[0].request).not.toHaveBeenCalled();
     transport.options[0].onHelloOk!({} as never);
     await task;
-    const configs = await loadAgentCatalog([local], env, async () => roster);
-    expect(configs[0]).not.toHaveProperty('bindings');
+    const configs = await loadAgentCatalog(local, env, async () => roster);
+    expect(configs).not.toHaveProperty('bindings');
   });
 
-  it('isolates connections, device identities and credentials for two Gateways', async () => {
-    const transport = fake();
-    const remote = { name: 'remote', url: 'https://gateway.example', token: 'remote-secret' };
-    const configs = await loadAgentCatalog([local, remote], env, (config, environment) =>
-      discoverGatewayAgents(config, environment, transport.create)
-    );
-    expect(configs).toHaveLength(2);
-    expect(transport.options.map((o) => o.url)).toEqual([
-      'ws://127.0.0.1:18789/',
-      'wss://gateway.example/',
-    ]);
-    expect(transport.options.map((o) => o.token)).toEqual(['bootstrap-secret', 'remote-secret']);
-    expect(transport.options[0].deviceIdentity!.deviceId).not.toBe(
-      transport.options[1].deviceIdentity!.deviceId
-    );
-    for (const client of transport.clients) {
-      expect(client.request).toHaveBeenCalledTimes(1);
-      expect(client.stopAndWait).toHaveBeenCalledTimes(1);
-    }
-  });
-
-  it('fails the whole startup for one failed instance and awaits every cleanup', async () => {
-    const transport = fake((opts) => {
-      if (opts.url!.includes('gateway.example'))
-        opts.onConnectError!(new Error('secret upstream failure'));
-      else opts.onHelloOk!({} as never);
-    });
-    const task = loadAgentCatalog(
-      [local, { name: 'remote', url: 'https://gateway.example', token: 'other' }],
-      env,
-      (config, environment) => discoverGatewayAgents(config, environment, transport.create)
-    );
-    await expect(task).rejects.toThrow(
-      'instance "remote": connection or agents.list request failed'
-    );
-    for (const client of transport.clients) expect(client.stopAndWait).toHaveBeenCalledTimes(1);
-    expect(transport.clients[1].request).not.toHaveBeenCalled();
+  it('fails startup on a connection error and awaits cleanup', async () => {
+    const transport = fake((opts) => opts.onConnectError!(new Error('secret upstream failure')));
+    await expect(
+      loadAgentCatalog(local, env, (config, environment) =>
+        discoverGatewayAgents(config, environment, transport.create)
+      )
+    ).rejects.toThrow('Gateway agent discovery: connection or agents.list request failed');
+    expect(transport.clients[0].stopAndWait).toHaveBeenCalledTimes(1);
+    expect(transport.clients[0].request).not.toHaveBeenCalled();
     expect(local).not.toHaveProperty('agents');
   });
 
@@ -236,11 +207,30 @@ describe('Gateway roster discovery', () => {
 });
 
 describe('discovery device credentials', () => {
-  it('persists valid signing keys and scoped tokens without cross-instance reuse', async () => {
-    const a = gatewayDiscoveryAuth('a', 'wss://a.example/', env);
-    const b = gatewayDiscoveryAuth('b', 'wss://a.example/', env);
-    const c = gatewayDiscoveryAuth('a', 'wss://b.example/', env);
-    expect(new Set([a.identity.deviceId, b.identity.deviceId, c.identity.deviceId]).size).toBe(3);
+  it('keys persistent identity and tokens only by the full endpoint', async () => {
+    const url = 'wss://gateway.example/path';
+    const auth = gatewayDiscoveryAuth(url, env);
+    const key = createHash('sha256')
+      .update(JSON.stringify([url]))
+      .digest('hex');
+    expect(readdirSync(directory)).toEqual([key + '.identity.json']);
+    await auth.hostDeps.storeDeviceAuthToken!({
+      deviceId: auth.identity.deviceId,
+      role: 'operator',
+      token: 'test-device-token',
+      scopes: ['operator.read'],
+    });
+    expect(readdirSync(directory).sort()).toEqual([key + '.identity.json', key + '.operator.json']);
+    expect(gatewayDiscoveryAuth(url, env, { existingOnly: true }).identity).toEqual(auth.identity);
+    expect(() => gatewayDiscoveryAuth(url + '/other', env, { existingOnly: true })).toThrow(
+      'Approved device required'
+    );
+  });
+
+  it('persists valid signing keys and scoped tokens without cross-endpoint reuse', async () => {
+    const a = gatewayDiscoveryAuth('wss://a.example/', env);
+    const b = gatewayDiscoveryAuth('wss://b.example/', env);
+    expect(a.identity.deviceId).not.toBe(b.identity.deviceId);
     const signature = a.hostDeps.signDevicePayload!(a.identity.privateKeyPem, 'challenge');
     expect(
       verify(
@@ -257,7 +247,7 @@ describe('discovery device credentials', () => {
       scopes: ['operator.read'],
       expectedToken: null,
     });
-    const again = gatewayDiscoveryAuth('a', 'wss://a.example/', env);
+    const again = gatewayDiscoveryAuth('wss://a.example/', env);
     expect(again.identity).toEqual(a.identity);
     expect(again.hasToken).toBe(true);
     expect(
@@ -271,20 +261,20 @@ describe('discovery device credentials', () => {
       role: 'operator',
       expectedToken: 'stale',
     });
-    expect(gatewayDiscoveryAuth('a', 'wss://a.example/', env).hasToken).toBe(true);
+    expect(gatewayDiscoveryAuth('wss://a.example/', env).hasToken).toBe(true);
     await a.hostDeps.clearDeviceAuthToken!({
       deviceId: a.identity.deviceId,
       role: 'operator',
       expectedToken: 'device-secret',
     });
-    expect(gatewayDiscoveryAuth('a', 'wss://a.example/', env).hasToken).toBe(false);
+    expect(gatewayDiscoveryAuth('wss://a.example/', env).hasToken).toBe(false);
     if (process.platform !== 'win32')
       for (const file of readdirSync(directory))
         expect(statSync(join(directory, file)).mode & 0o777).toBe(0o600);
   });
 
   it('reuses the stored token instead of a bootstrap token on subsequent discovery', async () => {
-    const auth = gatewayDiscoveryAuth(local.name, 'ws://127.0.0.1:18789/', env);
+    const auth = gatewayDiscoveryAuth('ws://127.0.0.1:18789/', env);
     await auth.hostDeps.storeDeviceAuthToken!({
       deviceId: auth.identity.deviceId,
       role: 'operator',
@@ -304,10 +294,10 @@ describe('discovery device credentials', () => {
   });
 
   it('fails closed on corrupt identity instead of replacing it', () => {
-    gatewayDiscoveryAuth('a', 'wss://a.example/', env);
+    gatewayDiscoveryAuth('wss://a.example/', env);
     const path = join(directory, readdirSync(directory)[0]);
     writeFileSync(path, '{}');
-    expect(() => gatewayDiscoveryAuth('a', 'wss://a.example/', env)).toThrow(
+    expect(() => gatewayDiscoveryAuth('wss://a.example/', env)).toThrow(
       'Invalid discovery identity'
     );
     expect(readFileSync(path, 'utf8')).toBe('{}');
@@ -316,16 +306,16 @@ describe('discovery device credentials', () => {
   it.skipIf(process.platform === 'win32')(
     'rejects public permissions and symlinked identity',
     () => {
-      gatewayDiscoveryAuth('a', 'wss://a.example/', env);
+      gatewayDiscoveryAuth('wss://a.example/', env);
       const path = join(directory, readdirSync(directory)[0]);
       chmodSync(path, 0o644);
-      expect(() => gatewayDiscoveryAuth('a', 'wss://a.example/', env)).toThrow('private');
+      expect(() => gatewayDiscoveryAuth('wss://a.example/', env)).toThrow('private');
       chmodSync(path, 0o600);
       const copy = path + '.copy';
       writeFileSync(copy, readFileSync(path), { mode: 0o600 });
       rmSync(path);
       symlinkSync(copy, path);
-      expect(() => gatewayDiscoveryAuth('a', 'wss://a.example/', env)).toThrow();
+      expect(() => gatewayDiscoveryAuth('wss://a.example/', env)).toThrow();
     }
   );
 });

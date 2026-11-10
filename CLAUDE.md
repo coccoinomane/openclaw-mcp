@@ -1,7 +1,7 @@
 # OpenClaw MCP Server
 
 ## Project Overview
-OpenClaw MCP (Model Context Protocol) server provides a bridge between Claude (Desktop & Claude.ai) and the OpenClaw AI assistant. It implements the MCP specification to expose OpenClaw capabilities as tools that Claude can invoke.
+OpenClaw MCP (Model Context Protocol) server provides a bridge between Claude (Desktop & Claude.ai) and the OpenClaw AI assistant. It implements the MCP specification to expose OpenClaw capabilities as tools that Claude can invoke. One MCP deployment connects to one OpenClaw installation and can expose multiple agents on that Gateway. Multiple OpenClaw installations require separate MCP deployments.
 
 ## Security Policy (CRITICAL)
 This is a **security-critical** MCP server. Follow these rules:

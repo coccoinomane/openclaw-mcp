@@ -547,8 +547,8 @@ pre, code { font-family: 'JetBrains Mono', monospace; }
         <p>Strict Zod-based schema validation ensures Claude provides the exact parameters your agent needs.</p>
       </div>
       <div class="feature-card">
-        <h3 class="font-syne">Multi-Instance</h3>
-        <p>Orchestrate multiple OpenClaw gateways (prod, staging, dev) from a single MCP server with named instance routing.</p>
+        <h3 class="font-syne">Multiple Agents</h3>
+        <p>Choose among agents on one OpenClaw Gateway. One MCP deployment connects to one OpenClaw installation; use separate MCP deployments for additional installations.</p>
       </div>
     </div>
   </div>
@@ -569,6 +569,7 @@ pre, code { font-family: 'JetBrains Mono', monospace; }
           <table class="tools-table font-mono">
             <thead><tr><th>Tool Name</th><th>Function</th></tr></thead>
             <tbody>
+              <tr><td>openclaw_agents</td><td>Discover agents on the connected Gateway</td></tr>
               <tr><td>openclaw_chat</td><td>Simple text inference</td></tr>
               <tr><td>openclaw_status</td><td>Agent health check</td></tr>
             </tbody>

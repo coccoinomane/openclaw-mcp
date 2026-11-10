@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import express from 'express';
 import * as registration from '../../server/tools-registration.js';
 import { createHttpServer } from '../../server/http.js';
-import type { InstanceRegistry } from '../../openclaw/registry.js';
+import type { OpenClawGateway } from '../../openclaw/gateway.js';
 
 const cleanups: Array<() => Promise<unknown>> = [];
 const initialize = {
@@ -26,9 +26,9 @@ const status = {
 
 async function bridge(auth = false) {
   const health = vi.fn().mockResolvedValue({ status: 'ok' });
-  const registry = {
-    resolve: () => ({ name: 'default', client: { health } }),
-  } as unknown as InstanceRegistry;
+  const gateway = {
+    resolve: () => ({ client: { health } }),
+  } as unknown as OpenClawGateway;
   const factory = vi.spyOn(registration, 'createMcpServer');
   const logs = vi.spyOn(console, 'error').mockImplementation(() => {});
   const before = { SIGINT: process.listeners('SIGINT'), SIGTERM: process.listeners('SIGTERM') };
@@ -45,7 +45,7 @@ async function bridge(auth = false) {
       ...(auth ? { authConfig: { clientId: 'test-client', clientSecret: 'test-secret' } } : {}),
     },
     {
-      registry,
+      gateway,
       serverName: 'test',
       serverVersion: '1',
     }

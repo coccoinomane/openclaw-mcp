@@ -12,7 +12,7 @@ import { log, logError, setDebugEnabled } from './utils/logger.js';
 import { parseArguments } from './cli.js';
 import { discordBindingResolver } from './openclaw/discord-bindings.js';
 import { includeConfiguredDiscordAgents, loadAgentCatalog } from './openclaw/agent-catalog.js';
-import { InstanceRegistry } from './openclaw/registry.js';
+import { OpenClawGateway } from './openclaw/gateway.js';
 import { createMcpServer, type ToolRegistrationDeps } from './server/tools-registration.js';
 import { createHttpServer, parseTrustProxy, type HttpServerConfig } from './server/http.js';
 
@@ -32,36 +32,37 @@ args.model = trimmedModel;
 
 async function main() {
   const discordConfig = loadDiscordConfig();
-  args.instances = includeConfiguredDiscordAgents(
-    await loadAgentCatalog(args.instances),
+  const gatewayConfig = includeConfiguredDiscordAgents(
+    await loadAgentCatalog({
+      url: args.openclawUrl,
+      token: args.gatewayToken,
+      agentId: args.agentId,
+      timeout: args.timeout,
+    }),
     discordConfig
   );
-  const registry = new InstanceRegistry(args.instances, args.model);
+  const gateway = new OpenClawGateway(gatewayConfig, args.model);
   const deps: ToolRegistrationDeps = {
-    registry,
+    gateway,
     serverName: SERVER_NAME,
     serverVersion: SERVER_VERSION,
     issuerUrl: args.issuerUrl,
   };
   deps.skills = await loadPackagedSkills();
   if (discordConfig) {
-    const bindings = registry.getBindings(discordConfig.gatewayInstance);
+    const bindings = gatewayConfig.bindings;
     if (bindings !== undefined) discordConfig.importedRouteAgent = discordBindingResolver(bindings);
-    if (
-      discordConfig.creationPolicies?.some(
-        (p) => !args.instances.some((i) => i.name === p.instance && i.token)
-      )
-    )
-      throw new Error('Channel creation requires a configured gateway instance with credentials');
+    if (discordConfig.creationPolicies?.length && !gatewayConfig.token)
+      throw new Error('Channel creation requires Gateway credentials');
     deps.discord = new DiscordService(
       discordConfig,
-      channelInvoker(args.instances),
+      channelInvoker(gatewayConfig),
       undefined,
-      channelReader(args.instances, discordConfig),
-      threadInvoker(args.instances, discordConfig),
+      channelReader(gatewayConfig, discordConfig),
+      threadInvoker(gatewayConfig, discordConfig),
       threadMemberAdder(discordConfig),
       requestPublisher(discordConfig),
-      discordAgentTransport(args.instances, discordConfig)
+      discordAgentTransport(gatewayConfig, discordConfig)
     );
   }
   log(`Starting ${SERVER_NAME} v${SERVER_VERSION}`);
@@ -72,11 +73,7 @@ async function main() {
     log('Debug logging: enabled');
   }
 
-  // Log instance configuration
-  for (const instance of registry.list()) {
-    const defaultLabel = instance.isDefault ? ' (default)' : '';
-    log(`Instance "${instance.name}": ${instance.url}${defaultLabel}`);
-  }
+  log(`Gateway: ${gatewayConfig.url}`);
 
   if (args.transport === 'sse' || args.transport === 'http') {
     if (args.transport === 'sse') {

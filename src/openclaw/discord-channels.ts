@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, open, readFile, readdir, rename } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { InstanceConfig } from './types.js';
+import type { GatewayConfig } from './types.js';
 
 export interface CreationPolicy {
   name: string;
@@ -9,7 +9,6 @@ export interface CreationPolicy {
   categoryId: string;
   accountId: string;
   agentId: string;
-  instance: string;
   normalRouting?: boolean;
 }
 export class DiscordError extends Error {
@@ -36,12 +35,12 @@ export type ChannelInvoker = (
   operation: string
 ) => Promise<any>;
 /** Closed API: callers cannot select a tool, action, URL, headers or arbitrary arguments. */
-export function channelInvoker(instances: InstanceConfig[], fetcher = fetch): ChannelInvoker {
+export function channelInvoker(gateway: GatewayConfig, fetcher = fetch): ChannelInvoker {
+  const { url: gatewayUrl, token } = gateway;
   return async (policy, name, topic, operation) => {
     assertServiceProvenance();
-    const instance = instances.find((i) => i.name === policy.instance);
-    if (!instance?.token) throw new DiscordError('GATEWAY_CREDENTIAL_MISSING');
-    const url = new URL('/tools/invoke', instance.url);
+    if (!token) throw new DiscordError('GATEWAY_CREDENTIAL_MISSING');
+    const url = new URL('/tools/invoke', gatewayUrl);
     if (
       url.protocol !== 'https:' &&
       !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
@@ -53,7 +52,7 @@ export function channelInvoker(instances: InstanceConfig[], fetcher = fetch): Ch
         method: 'POST',
         redirect: 'error',
         signal: AbortSignal.timeout(30000),
-        headers: { Authorization: 'Bearer ' + instance.token, 'Content-Type': 'application/json' },
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tool: 'message',
           sessionKey: 'agent:' + policy.agentId + ':main',
@@ -202,7 +201,6 @@ export class ChannelCreation {
     }
     const record: any = {
       kind: 'channel_create',
-      instance: p.instance,
       agent_id: p.agentId,
       policy: p.name,
       policy_digest: hash(p),

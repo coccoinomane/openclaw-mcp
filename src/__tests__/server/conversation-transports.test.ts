@@ -201,7 +201,6 @@ describe('conversation metadata across real MCP transports', () => {
       const env = {
         MCP_DISCORD_ENABLED: 'true',
         MCP_DISCORD_STATE_DIR: '/unused-test-state',
-        MCP_DISCORD_GATEWAY_INSTANCE: 'default',
         OPENCLAW_GATEWAY_TOKEN: 'mock-read-token',
         MCP_DISCORD_TARGETS: JSON.stringify([
           { name: 'work', guildId: guild, channelId: channel, accountId: 'bot', agentId: 'main' },
@@ -230,7 +229,7 @@ describe('conversation metadata across real MCP transports', () => {
       }
       cleanups.push(() => client.close());
       const listing = await client.listTools();
-      expect(listing.tools).toHaveLength(14);
+      expect(listing.tools).toHaveLength(13);
       for (const tool of discordTools) {
         expect(listing.tools.find((t) => t.name === tool.name)?.outputSchema).toEqual(
           tool.outputSchema
@@ -311,11 +310,11 @@ describe('conversation metadata across real MCP transports', () => {
         expect(result.isError).not.toBe(true);
         expect(text(result)).toBe(`reply:hello-${index}`);
         const metadata = result.structuredContent!;
-        expect(metadata.instance).toBe('default');
+        expect(metadata).not.toHaveProperty('instance');
         expect(JSON.parse(text(result, 1))).toEqual(metadata);
         expect(metadata.session_id).toMatch(
           new RegExp(
-            `^agent:research:mcp:trusted\\.example:${index === 2 ? 'other-client' : 'desktop-client'}:default:[0-9a-f-]{36}$`
+            `^agent:research:mcp:trusted\\.example:${index === 2 ? 'other-client' : 'desktop-client'}:[0-9a-f-]{36}$`
           )
         );
         return metadata.session_id as string;
@@ -327,7 +326,6 @@ describe('conversation metadata across real MCP transports', () => {
         'openclaw_agents',
         'openclaw_chat',
         'openclaw_chat_async',
-        'openclaw_instances',
         'openclaw_status',
         'openclaw_task_cancel',
         'openclaw_task_list',
@@ -340,7 +338,7 @@ describe('conversation metadata across real MCP transports', () => {
       ).toBe(true);
       const discovery = await call(first, 'openclaw_agents', {});
       expect(discovery.structuredContent).toEqual({
-        agents: [{ instance: 'default', agent_id: 'research', is_default: true }],
+        agents: [{ agent_id: 'research', is_default: true }],
         total: 1,
       });
       const validateAgents = new AjvJsonSchemaValidator().getValidator(
@@ -359,12 +357,12 @@ describe('conversation metadata across real MCP transports', () => {
       const unnamed = await connectHttp(base, '', transport);
       const unnamedResult = await call(unnamed, 'openclaw_chat', { message: 'unnamed' });
       expect(unnamedResult.structuredContent!.session_id).toMatch(
-        /^agent:research:mcp:trusted\.example:unknown:default:/
+        /^agent:research:mcp:trusted\.example:unknown:/
       );
       const hostileName = await connectHttp(base, 'agent:other:cron:injected/child', transport);
       const hostileResult = await call(hostileName, 'openclaw_chat', { message: 'hostile label' });
       expect(hostileResult.structuredContent!.session_id).toMatch(
-        /^agent:research:mcp:trusted\.example:agent-other-cron-injected-child:default:/
+        /^agent:research:mcp:trusted\.example:agent-other-cron-injected-child:/
       );
       const followUp = await call(first, 'openclaw_chat', {
         message: 'follow-up',
@@ -376,9 +374,8 @@ describe('conversation metadata across real MCP transports', () => {
       const queued = await call(first, 'openclaw_chat_async', {
         message: 'background follow-up',
         session_id: keys[0],
-        instance: 'default',
       });
-      expect(queued.structuredContent).toMatchObject({ session_id: keys[0], instance: 'default' });
+      expect(queued.structuredContent).toMatchObject({ session_id: keys[0] });
       expect(JSON.parse(text(queued))).toEqual(queued.structuredContent);
       const taskId = queued.structuredContent!.task_id;
       const otherStatus = await call(sameName, 'openclaw_task_status', { task_id: taskId });
@@ -397,7 +394,6 @@ describe('conversation metadata across real MCP transports', () => {
       expect(status!.structuredContent).toMatchObject({
         status: 'completed',
         session_id: keys[0],
-        instance: 'default',
         result: 'reply:background follow-up',
       });
       expect(mock.requests.at(-1)).toEqual({ key: keys[0], message: 'background follow-up' });
@@ -431,7 +427,7 @@ describe('conversation metadata across real MCP transports', () => {
         .replace(/^[._-]+|[._-]+$/g, '')
         .slice(0, 40) || 'local';
     expect(result.structuredContent?.session_id).toEqual(
-      expect.stringContaining(`mcp:${hostLabel}:terminal-client:default:`)
+      expect.stringContaining(`mcp:${hostLabel}:terminal-client:`)
     );
     expect(text(result)).toBe('reply:stdio hello');
     expect(JSON.parse(text(result, 1))).toEqual(result.structuredContent);
@@ -458,7 +454,7 @@ describe('mixed-era production endpoint', () => {
       arguments: { message: 'modern hello' },
     });
     expect((result.structuredContent as Record<string, unknown>)?.session_id).toMatch(
-      /^agent:research:mcp:trusted[.]example:modern-desktop:default:/
+      /^agent:research:mcp:trusted[.]example:modern-desktop:/
     );
     const legacy = await connectHttp(base, 'Legacy', 'http');
     expect((await legacy.listResources()).resources).toHaveLength(1);

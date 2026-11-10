@@ -55,10 +55,9 @@ async function fixture(grant: string[] | null = ['operator.read', 'operator.writ
   const config: DiscordConfig = {
     stateDir: dir,
     targets: [],
-    gatewayInstance: 'home',
   };
   const env = { MCP_DISCORD_SDK_STATE_DIR: dir };
-  const auth = gatewayDiscoveryAuth('home', 'ws://127.0.0.1:18789/', {
+  const auth = gatewayDiscoveryAuth('ws://127.0.0.1:18789/', {
     MCP_AGENT_DISCOVERY_STATE_DIR: dir,
   });
   if (grant)
@@ -92,8 +91,8 @@ async function fixture(grant: string[] | null = ['operator.read', 'operator.writ
   });
   const make = (
     overrides: NodeJS.ProcessEnv = env,
-    list = [{ name: 'home', url: 'http://127.0.0.1:18789', token: 'fixture-shared-token' }]
-  ) => discordAgentTransport(list, config, overrides, factory)!;
+    gateway = { url: 'http://127.0.0.1:18789', token: 'fixture-shared-token' }
+  ) => discordAgentTransport(gateway, config, overrides, factory)!;
   return {
     dir,
     config,
@@ -163,9 +162,7 @@ describe('SDK service authentication', () => {
     'https://host.invalid/?token=x',
   ])('denies unsafe endpoint %s', async (url) => {
     const f = await fixture();
-    expect(() => f.make(undefined, [{ name: 'home', url, token: '' }])).toThrow(
-      'INSECURE_GATEWAY_URL'
-    );
+    expect(() => f.make(undefined, { url, token: '' })).toThrow('INSECURE_GATEWAY_URL');
   });
 });
 
@@ -174,7 +171,7 @@ describe('explicit local shared-token authentication', () => {
     MCP_DISCORD_SDK_STATE_DIR: dir,
     MCP_DISCORD_SDK_AUTH: 'local-shared-token',
   });
-  it('uses the existing dedicated identity and instance token without a paired token', async () => {
+  it('uses the existing dedicated identity and Gateway token without a paired token', async () => {
     const f = await fixture(null);
     await f.make(localEnv(f.dir)).ready();
     expect(f.options[0]).toMatchObject({
@@ -227,20 +224,18 @@ describe('explicit local shared-token authentication', () => {
     'https://[::2]',
   ])('rejects nonliteral-loopback endpoint %s before connecting', async (url) => {
     const f = await fixture(null);
-    expect(() =>
-      f.make(localEnv(f.dir), [{ name: 'home', url, token: 'fixture-shared-token' }])
-    ).toThrow('SDK_SHARED_TOKEN_LOOPBACK_REQUIRED');
+    expect(() => f.make(localEnv(f.dir), { url, token: 'fixture-shared-token' })).toThrow(
+      'SDK_SHARED_TOKEN_LOOPBACK_REQUIRED'
+    );
     expect(f.factory).not.toHaveBeenCalled();
   });
   it('supports literal IPv6 loopback with its endpoint-bound identity', async () => {
     const f = await fixture(null);
-    const auth = gatewayDiscoveryAuth('home', 'ws://[::1]:18789/', {
+    const auth = gatewayDiscoveryAuth('ws://[::1]:18789/', {
       MCP_AGENT_DISCOVERY_STATE_DIR: f.dir,
     });
     await f
-      .make(localEnv(f.dir), [
-        { name: 'home', url: 'http://[::1]:18789', token: 'fixture-shared-token' },
-      ])
+      .make(localEnv(f.dir), { url: 'http://[::1]:18789', token: 'fixture-shared-token' })
       .ready();
     expect(f.options[0].deviceIdentity.deviceId).toBe(auth.identity.deviceId);
   });
@@ -248,9 +243,9 @@ describe('explicit local shared-token authentication', () => {
     'rejects missing or malformed shared token %j',
     async (token) => {
       const f = await fixture(null);
-      expect(() =>
-        f.make(localEnv(f.dir), [{ name: 'home', url: 'http://127.0.0.1:18789', token }])
-      ).toThrow('SDK_SHARED_TOKEN_REQUIRED');
+      expect(() => f.make(localEnv(f.dir), { url: 'http://127.0.0.1:18789', token })).toThrow(
+        'SDK_SHARED_TOKEN_REQUIRED'
+      );
       expect(f.factory).not.toHaveBeenCalled();
     }
   );
@@ -352,7 +347,7 @@ describe('explicit local shared-token authentication', () => {
   });
 });
 describe('SDK agent lifecycle', () => {
-  it('maps exact CLI routing/history parameters and waits for durable acceptance before final handling', async () => {
+  it('maps exact agent routing/history parameters and waits for durable acceptance before final handling', async () => {
     const f = await fixture();
     const persist = deferred<void>();
     const capture = vi.fn(() => persist.promise);
@@ -653,7 +648,7 @@ describe('official SDK protocol with an in-memory socket', () => {
         };
       };
       const transport = discordAgentTransport(
-        [{ name: 'home', url: 'http://127.0.0.1:18789' }],
+        { url: 'http://127.0.0.1:18789' },
         f.config,
         { MCP_DISCORD_SDK_STATE_DIR: f.dir },
         factory

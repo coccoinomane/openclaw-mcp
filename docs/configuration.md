@@ -18,95 +18,24 @@ All configuration can be done via environment variables. Copy `.env.example` to 
 
 > **Note:** An unrecognized `OPENCLAW_AGENT_ID` is rejected by the gateway with `400 Bad Request` (`"Unknown agent '<id>'."`) — it does **not** silently fall back to the default agent. A typo will surface as a loud error, not a silent misroute.
 
-### Multi-Instance Mode
+### One Gateway per MCP deployment
 
-Orchestrate multiple OpenClaw gateways from a single MCP server. Set `OPENCLAW_INSTANCES` as a JSON array — when present, it takes precedence over `OPENCLAW_URL` / `OPENCLAW_GATEWAY_TOKEN`.
+One MCP deployment connects to one OpenClaw installation. Configure its URL and credential with `OPENCLAW_URL` and `OPENCLAW_GATEWAY_TOKEN`. Direct chat, agent discovery and Discord all use this connection. Multiple agents on that Gateway remain supported; use `agent_id` to select one.
 
-```
-                         ┌─────────────────┐
-                         │  Claude Client   │
-                         └────────┬────────┘
-                                  │
-                    ┌─────────────▼─────────────┐
-                    │   OpenClaw MCP Bridge      │
-                    │                            │
-                    │   instance="prod"  ──────────────► OpenClaw GW (prod)
-                    │   instance="staging" ────────────► OpenClaw GW (staging)
-                    │   instance="dev"  ───────────────► OpenClaw GW (dev)
-                    │   (no instance)   ──► default ──► OpenClaw GW (prod)
-                    └────────────────────────────┘
-```
+Use separate MCP deployments for multiple OpenClaw installations. Give each deployment its own connection settings, client endpoint and private state directories. Tool callers cannot choose another Gateway.
 
-| Variable             | Description                    | Default                       |
-| -------------------- | ------------------------------ | ----------------------------- |
-| `OPENCLAW_INSTANCES` | JSON array of instance configs | (none — single-instance mode) |
+### Deployment preparation
 
-**Example:**
+This is a breaking configuration change with no runtime compatibility mode. Before upgrading:
 
-```bash
-OPENCLAW_INSTANCES='[
-  {"name": "prod", "url": "http://prod:18789", "token": "tok1", "default": true},
-  {"name": "staging", "url": "http://staging:18789", "token": "tok2"},
-  {"name": "dev", "url": "http://dev:18789", "token": "tok3"}
-]'
-```
+- Drain active work and preserve operation records and uncertain session claims. Do not replay an uncertain write after the upgrade.
+- Configure one Gateway URL/token per deployment. Remove obsolete connection-list and Gateway-selector settings from the service environment and launcher allowlists.
+- Change `MCP_AGENT_CATALOG` to one object such as `{"agents":[{"id":"main"},{"id":"research"}],"bindings":[]}`. Keep bindings only when you intend to supply routing; omit `agents` for a bindings-only catalog with Gateway discovery. Arrays of connection catalogs are not supported.
+- Keep `agentId` in Discord creation policies; remove their old connection selector. Update clients to retain `session_id` and optional `agent_id`, with no connection selector in tool calls or response parsing.
+- Prepare SDK identity state for the normalized WebSocket endpoint. The filename prefix is `SHA256(JSON.stringify([url]))`, where `url` is the normalized `ws:` or `wss:` URL. The service does not read old name-qualified identity filenames or migrate them at runtime. An operator must provision or migrate the integration-owned identity and matching approved token before enabling Discord writes. Preserve private permissions and never substitute CLI identity state.
+- Review existing Discord journals and admissions before deployment. Changed policy fingerprints can invalidate old admissions; preserve evidence and reconcile it under operator control rather than deleting records to force retries.
 
-Each instance object supports:
-
-| Field     | Type    | Required | Description                                                              |
-| --------- | ------- | -------- | ------------------------------------------------------------------------ |
-| `name`    | string  | Yes      | Unique instance name (1-64 chars, alphanumeric/dashes/underscores)       |
-| `url`     | string  | Yes      | OpenClaw gateway URL (http or https only)                                |
-| `token`   | string  | No       | Bearer token for gateway authentication                                  |
-| `agentId` | string  | No       | Named agent to route requests to on this instance's gateway              |
-| `timeout` | number  | No       | Request timeout in ms (inherits global `OPENCLAW_TIMEOUT_MS` if omitted) |
-| `default` | boolean | No       | Mark as the default instance (first instance is default if none marked)  |
-
-`agentId` is sent as the `x-openclaw-agent-id` header. When omitted, the gateway uses its default agent. An unrecognized value is rejected with `400 Bad Request`, not silently routed to the default.
-
-**Using instances in tools:**
-
-All gateway-facing tools (`openclaw_chat`, `openclaw_status`, `openclaw_chat_async`) accept an optional `instance` parameter. When omitted, the default instance is used.
-
-```
-# Target a specific instance
-openclaw_chat message="Hello" instance="staging"
-
-# Check health of a specific gateway
-openclaw_status instance="prod"
-
-# List all available instances (names, URLs, default — tokens are never exposed)
-openclaw_instances
-
-# Async tasks also support instance targeting
-openclaw_chat_async message="Run migration" instance="dev"
-
-# Filter task list by instance
-openclaw_task_list instance="staging"
-```
-
-**How instance resolution works:**
-
-1. If `instance` parameter is provided → use that instance
-2. If `instance` is omitted → use the instance marked as `default`
-3. If no instance is marked as default → the first instance in the array is used
-
-Each instance gets its own isolated HTTP client with independent auth token, timeout, and base URL. Async tasks store the target instance ID so results are always routed correctly.
-
-**Docker Compose with multi-instance:**
-
-```yaml
-services:
-  mcp-bridge:
-    image: ghcr.io/freema/openclaw-mcp:latest
-    environment:
-      - OPENCLAW_INSTANCES=[{"name":"prod","url":"http://prod-gw:18789","token":"tok1","default":true},{"name":"staging","url":"http://staging-gw:18789","token":"tok2"}]
-      - AUTH_ENABLED=true
-      - MCP_CLIENT_ID=openclaw
-      - MCP_CLIENT_SECRET=${MCP_CLIENT_SECRET}
-```
-
-**Backward compatibility:** When `OPENCLAW_INSTANCES` is not set, the server creates a single `"default"` instance from `OPENCLAW_URL` + `OPENCLAW_GATEWAY_TOKEN`. This preserves single-instance chat routing. Discord and discovery upgrades must still remove the obsolete CLI settings described in the [migration guide](discord-sdk.md#upgrade-from-cli-based-releases).
+See [SDK authentication](discord-sdk.md#service-authentication) and [CLI release upgrades](discord-sdk.md#upgrade-from-cli-based-releases). No Gateway restart, credential edit or live migration is implied by these instructions.
 
 ### Discord and Gateway SDK settings
 
@@ -114,9 +43,9 @@ The bridge never invokes the OpenClaw CLI. Discord uses SDK agent calls plus fix
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `MCP_AGENT_DISCOVERY` | `gateway` reads every configured Gateway roster at startup; unset uses static catalogs/configured agents. No `cli` mode. | Unset |
+| `MCP_AGENT_CATALOG` | One object with `agents` and optional `bindings`; a bindings-only object is allowed with Gateway discovery. | Unset |
+| `MCP_AGENT_DISCOVERY` | `gateway` reads the configured Gateway roster at startup; unset uses static catalogs/configured agents. No `cli` mode. | Unset |
 | `MCP_AGENT_DISCOVERY_STATE_DIR` | Private persistent discovery identity/token directory; valid only with Gateway discovery. | `~/.openclaw-mcp/gateway-discovery` |
-| `MCP_DISCORD_GATEWAY_INSTANCE` | Required when Discord is enabled; existing instance name, or `default` for one instance. | None |
 | `MCP_DISCORD_SDK_AUTH` | `device`, or explicitly authorized `local-shared-token` on literal loopback only. | `device` |
 | `MCP_DISCORD_SDK_STATE_DIR` | Private pre-provisioned Discord integration identity/device state. | `gateway-sdk` inside `MCP_DISCORD_STATE_DIR` |
 
@@ -223,7 +152,7 @@ For production with Claude.ai, keep DCR disabled and use the pre-configured `MCP
 
 ## Conversation labels and routing
 
-Generated conversation keys use the configured issuer hostname (`MCP_ISSUER_URL` / `--issuer-url`), or the OS hostname when no issuer is configured. Client initialize names supply display labels only. An explicit target agent is included in generated keys; if none is known locally, Gateway default routing applies. For deterministic multi-agent routing, configure `agentId` on each instance and reuse the returned `instance` and `session_id` together. See [conversation continuity](conversation-continuity.md) for the full response contract and limitations.
+Generated conversation keys use the configured issuer hostname (`MCP_ISSUER_URL` / `--issuer-url`), or the OS hostname when no issuer is configured. Client initialize names supply display labels only. An explicit target agent is included in generated keys; if none is known locally, Gateway default routing applies. For deterministic multi-agent routing, configure `OPENCLAW_AGENT_ID` or select `agent_id` explicitly, and reuse the returned `session_id` and optional `agent_id` together through the same MCP deployment. See [conversation continuity](conversation-continuity.md) for the full response contract and limitations.
 
 ## Agent selection
 

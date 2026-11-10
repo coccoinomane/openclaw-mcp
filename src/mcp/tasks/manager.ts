@@ -37,7 +37,6 @@ export interface Task {
   /** Connection that owns this task. Never exposed to clients. */
   ownerId: string;
   sessionId?: string;
-  instanceId?: string;
   agentId?: string;
   /** Immutable request route; may differ from a legacy supplied session agent. */
   routingAgentId?: string;
@@ -50,7 +49,6 @@ export interface TaskCreateOptions {
   /** Connection creating the task — required, see "Ownership" above. */
   ownerId: string;
   sessionId?: string;
-  instanceId?: string;
   agentId?: string;
   /** Immutable request route; may differ from a legacy supplied session agent. */
   routingAgentId?: string;
@@ -98,7 +96,6 @@ class TaskManager {
       createdAt: new Date(),
       ownerId: options.ownerId,
       sessionId: options.sessionId,
-      instanceId: options.instanceId,
       agentId: options.agentId,
       routingAgentId: options.routingAgentId,
       priority: options.priority ?? 0,
@@ -126,7 +123,7 @@ class TaskManager {
    */
   list(
     ownerId: string,
-    filter?: { status?: TaskStatus; sessionId?: string; instanceId?: string; agentId?: string }
+    filter?: { status?: TaskStatus; sessionId?: string; agentId?: string }
   ): Task[] {
     let tasks = Array.from(this.tasks.values()).filter((t) => t.ownerId === ownerId);
 
@@ -135,9 +132,6 @@ class TaskManager {
     }
     if (filter?.sessionId) {
       tasks = tasks.filter((t) => t.sessionId === filter.sessionId);
-    }
-    if (filter?.instanceId) {
-      tasks = tasks.filter((t) => t.instanceId === filter.instanceId);
     }
 
     if (filter?.agentId) tasks = tasks.filter((t) => t.agentId === filter.agentId);

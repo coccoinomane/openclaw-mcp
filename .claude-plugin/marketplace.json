@@ -9,7 +9,7 @@
     {
       "name": "openclaw",
       "source": "./plugins/claude/openclaw",
-      "description": "OpenClaw AI assistant integration. Chat, manage sessions, access memory, and run async tasks through your OpenClaw instance.",
+      "description": "OpenClaw AI assistant integration. Chat, manage sessions, access memory, and run async tasks through one OpenClaw installation.",
       "version": "0.1.0",
       "author": {
         "name": "Tomas Grasl"

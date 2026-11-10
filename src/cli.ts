@@ -1,7 +1,6 @@
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { DEFAULT_OPENCLAW_URL, DEFAULT_MODEL } from './config/constants.js';
-import type { InstanceConfig } from './openclaw/types.js';
 
 export interface CliArgs {
   openclawUrl: string;
@@ -20,7 +19,6 @@ export interface CliArgs {
   redirectUris: string[] | undefined;
   allowDcr: boolean;
   trustProxy: string | undefined;
-  instances: InstanceConfig[];
 }
 
 export function parseArguments(version: string): CliArgs {
@@ -114,55 +112,9 @@ export function parseArguments(version: string): CliArgs {
         'Express trust proxy setting when behind a reverse proxy (e.g. "1", "true", or a CIDR)',
       default: process.env.TRUST_PROXY || undefined,
     })
+    .strict()
     .help()
     .parseSync();
-
-  // Build instance configs: OPENCLAW_INSTANCES takes precedence, otherwise single-instance from existing env vars
-  let instances: InstanceConfig[];
-  const instancesEnv = process.env.OPENCLAW_INSTANCES;
-
-  if (instancesEnv) {
-    try {
-      const parsed = JSON.parse(instancesEnv);
-      if (!Array.isArray(parsed) || parsed.length === 0) {
-        throw new Error('OPENCLAW_INSTANCES must be a non-empty JSON array');
-      }
-      // Validate each item has required fields
-      for (const item of parsed) {
-        if (!item || typeof item.name !== 'string' || !item.name.trim()) {
-          throw new Error(
-            'Each instance in OPENCLAW_INSTANCES must have a non-empty string "name"'
-          );
-        }
-        if (typeof item.url !== 'string' || !item.url.trim()) {
-          throw new Error(`Instance "${item.name}": must have a non-empty string "url"`);
-        }
-      }
-      // Apply global timeout fallback for instances that don't specify their own
-      instances = (parsed as InstanceConfig[]).map((cfg) => ({
-        ...cfg,
-        agentId: cfg.agentId ?? (argv['agent-id'] as string | undefined),
-        timeout: cfg.timeout ?? argv.timeout,
-      }));
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        throw new Error(`OPENCLAW_INSTANCES contains invalid JSON: ${error.message}`);
-      }
-      throw error;
-    }
-  } else {
-    // Backward-compatible: single instance from existing env vars / CLI args
-    instances = [
-      {
-        name: 'default',
-        url: argv['openclaw-url'] as string,
-        token: argv['gateway-token'] as string | undefined,
-        agentId: argv['agent-id'] as string | undefined,
-        timeout: argv.timeout,
-        default: true,
-      },
-    ];
-  }
 
   return {
     openclawUrl: argv['openclaw-url'] as string,
@@ -186,6 +138,5 @@ export function parseArguments(version: string): CliArgs {
       : undefined,
     allowDcr: argv['allow-dcr'] as boolean,
     trustProxy: argv['trust-proxy'] as string | undefined,
-    instances,
   };
 }

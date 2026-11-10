@@ -5,7 +5,7 @@
  */
 
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { InstanceRegistry } from '../../openclaw/registry.js';
+import type { OpenClawGateway } from '../../openclaw/gateway.js';
 import {
   structuredJsonResponse,
   errorResponse,
@@ -28,9 +28,10 @@ import { validateInputIsObject, validateMessage, validateId } from '../../utils/
 export const openclawChatAsyncTool: Tool = {
   name: 'openclaw_chat_async',
   description:
-    'Send a message to OpenClaw asynchronously. Returns a task_id immediately that can be polled for results. Use this for potentially long-running conversations. Save the returned session_id and instance and reuse both for follow-up turns; omission starts a new conversation. Poll the task after enqueue; do not resend ambiguous failures automatically.',
+    'Send a message to OpenClaw asynchronously. Returns a task_id immediately that can be polled for results. Use this for potentially long-running conversations. Save the returned session_id and agent_id (when present) and reuse them for follow-up turns; omission starts a new conversation. Poll the task after enqueue; do not resend ambiguous failures automatically.',
   inputSchema: {
     type: 'object',
+    additionalProperties: false,
     properties: {
       message: {
         type: 'string',
@@ -46,10 +47,6 @@ export const openclawChatAsyncTool: Tool = {
         description: 'Task priority (higher = processed first). Default: 0',
       },
       agent_id: { type: 'string', description: 'Configured agent ID from openclaw_agents.' },
-      instance: {
-        type: 'string',
-        description: 'Target OpenClaw instance name. Defaults to the default instance.',
-      },
     },
     required: ['message'],
   },
@@ -58,15 +55,15 @@ export const openclawChatAsyncTool: Tool = {
 export const openclawTaskStatusTool: Tool = {
   name: 'openclaw_task_status',
   description:
-    'Check the status of an async task. Returns status, session_id, and result if completed. Save session_id and instance for follow-up chat calls, including after failures.',
+    'Check the status of an async task. Returns status, session_id, and result if completed. Save session_id and agent_id for follow-up chat calls, including after failures.',
   inputSchema: {
     type: 'object',
+    additionalProperties: false,
     properties: {
       agent_id: {
         type: 'string',
         description: 'Optional assertion of the stored task agent; cannot retarget.',
       },
-      instance: { type: 'string', description: 'Optional assertion of the stored task instance.' },
       task_id: {
         type: 'string',
         description: 'The task ID returned from openclaw_chat_async',
@@ -79,9 +76,10 @@ export const openclawTaskStatusTool: Tool = {
 export const openclawTaskListTool: Tool = {
   name: 'openclaw_task_list',
   description:
-    'List owned tasks with session_id and instance for conversation reuse. Optionally filter by status, session, or instance.',
+    'List owned tasks with session_id and agent_id for conversation reuse. Optionally filter by status, session, or agent.',
   inputSchema: {
     type: 'object',
+    additionalProperties: false,
     properties: {
       status: {
         type: 'string',
@@ -93,10 +91,6 @@ export const openclawTaskListTool: Tool = {
         description: 'Filter by session ID',
       },
       agent_id: { type: 'string', description: 'Configured agent ID from openclaw_agents.' },
-      instance: {
-        type: 'string',
-        description: 'Filter by instance name',
-      },
     },
     required: [],
   },
@@ -107,12 +101,12 @@ export const openclawTaskCancelTool: Tool = {
   description: "Cancel a pending task. Only works for tasks that haven't started yet.",
   inputSchema: {
     type: 'object',
+    additionalProperties: false,
     properties: {
       agent_id: {
         type: 'string',
         description: 'Optional assertion of the stored task agent; cannot retarget.',
       },
-      instance: { type: 'string', description: 'Optional assertion of the stored task instance.' },
       task_id: {
         type: 'string',
         description: 'The task ID to cancel',
@@ -127,16 +121,16 @@ export const openclawTaskCancelTool: Tool = {
 // ============================================================================
 
 let processorRunning = false;
-let processorRegistry: InstanceRegistry | null = null;
+let processorGateway: OpenClawGateway | null = null;
 
-async function processTask(task: Task, registry: InstanceRegistry): Promise<void> {
+async function processTask(task: Task, gateway: OpenClawGateway): Promise<void> {
   taskManager.updateStatus(task.id, 'running');
 
   let client;
   try {
-    client = registry.resolve(task.instanceId, task.routingAgentId).client;
+    client = gateway.resolve(task.routingAgentId).client;
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Instance not available';
+    const errorMsg = error instanceof Error ? error.message : 'Gateway not available';
     taskManager.updateStatus(task.id, 'failed', undefined, errorMsg);
     return;
   }
@@ -152,13 +146,13 @@ async function processTask(task: Task, registry: InstanceRegistry): Promise<void
 }
 
 async function taskProcessor(): Promise<void> {
-  if (!processorRegistry) return;
+  if (!processorGateway) return;
 
   while (processorRunning) {
     const task = taskManager.getNextPending();
 
     if (task) {
-      await processTask(task, processorRegistry);
+      await processTask(task, processorGateway);
     } else {
       // No pending tasks, wait a bit
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -166,10 +160,10 @@ async function taskProcessor(): Promise<void> {
   }
 }
 
-export function startTaskProcessor(registry: InstanceRegistry): void {
+export function startTaskProcessor(gateway: OpenClawGateway): void {
   if (processorRunning) return;
 
-  processorRegistry = registry;
+  processorGateway = gateway;
   processorRunning = true;
   taskProcessor().catch(() => {
     processorRunning = false;
@@ -182,13 +176,21 @@ export function startTaskProcessor(registry: InstanceRegistry): void {
 // ============================================================================
 
 export async function handleOpenclawChatAsync(
-  registry: InstanceRegistry,
+  gateway: OpenClawGateway,
   input: unknown,
   ownerId: string,
   context: ConversationContext = {}
 ): Promise<ToolResponse> {
   if (!validateInputIsObject(input)) {
     return errorResponse('Invalid input: expected an object');
+  }
+  if (
+    Object.keys(input).some(
+      (key) =>
+        !Object.prototype.hasOwnProperty.call(openclawChatAsyncTool.inputSchema.properties, key)
+    )
+  ) {
+    return errorResponse('Unknown argument');
   }
 
   const msgResult = validateMessage(input.message);
@@ -213,30 +215,20 @@ export async function handleOpenclawChatAsync(
     priority = input.priority;
   }
 
-  // Resolve instance name (validate it exists before queueing)
-  let instanceId: string;
+  // Validate the selected agent before queueing.
   let agentId: string | undefined;
   let routingAgentId: string | undefined;
   try {
-    let instanceName: string | undefined;
-    if (input.instance !== undefined) {
-      const instResult = validateId(input.instance, 'instance');
-      if (instResult.valid === false) {
-        return errorResponse(instResult.error);
-      }
-      instanceName = instResult.value;
-    }
-    const resolved = resolveConversation(registry, instanceName, input.agent_id, sessionId);
+    const resolved = resolveConversation(gateway, input.agent_id, sessionId);
     agentId = resolved.agentId;
     routingAgentId = resolved.routingAgentId;
-    instanceId = resolved.name;
-    sessionId ??= createConversationKey(instanceId, context, agentId);
+    sessionId ??= createConversationKey(context, agentId);
   } catch (error) {
-    return errorResponse(error instanceof Error ? error.message : 'Invalid instance');
+    return errorResponse(error instanceof Error ? error.message : 'Invalid agent');
   }
 
   // Ensure processor is running
-  startTaskProcessor(registry);
+  startTaskProcessor(gateway);
 
   // Create task
   const task = taskManager.create({
@@ -245,7 +237,6 @@ export async function handleOpenclawChatAsync(
     ownerId,
     sessionId,
     priority,
-    instanceId,
     agentId,
     routingAgentId,
   });
@@ -253,7 +244,6 @@ export async function handleOpenclawChatAsync(
   return structuredJsonResponse({
     task_id: task.id,
     status: task.status,
-    instance: instanceId,
     ...(agentId ? { agent_id: agentId } : {}),
     session_id: sessionId,
     message: 'Task queued. Use openclaw_task_status to check progress.',
@@ -261,12 +251,20 @@ export async function handleOpenclawChatAsync(
 }
 
 export async function handleOpenclawTaskStatus(
-  _registry: InstanceRegistry,
+  _gateway: OpenClawGateway,
   input: unknown,
   ownerId: string
 ): Promise<ToolResponse> {
   if (!validateInputIsObject(input)) {
     return errorResponse('Invalid input: expected an object');
+  }
+  if (
+    Object.keys(input).some(
+      (key) =>
+        !Object.prototype.hasOwnProperty.call(openclawTaskStatusTool.inputSchema.properties, key)
+    )
+  ) {
+    return errorResponse('Unknown argument');
   }
 
   const tidResult = validateId(input.task_id, 'task_id');
@@ -289,7 +287,6 @@ export async function handleOpenclawTaskStatus(
     task_id: task.id,
     type: task.type,
     status: task.status,
-    instance: task.instanceId,
     ...(task.agentId ? { agent_id: task.agentId } : {}),
     session_id: task.sessionId,
     created_at: task.createdAt.toISOString(),
@@ -320,12 +317,20 @@ const VALID_TASK_STATUSES: readonly TaskStatus[] = [
 ];
 
 export async function handleOpenclawTaskList(
-  _registry: InstanceRegistry,
+  _gateway: OpenClawGateway,
   input: unknown,
   ownerId: string
 ): Promise<ToolResponse> {
   if (!validateInputIsObject(input)) {
     return errorResponse('Invalid input: expected an object');
+  }
+  if (
+    Object.keys(input).some(
+      (key) =>
+        !Object.prototype.hasOwnProperty.call(openclawTaskListTool.inputSchema.properties, key)
+    )
+  ) {
+    return errorResponse('Unknown argument');
   }
 
   let status: TaskStatus | undefined;
@@ -348,15 +353,6 @@ export async function handleOpenclawTaskList(
     session_id = sidResult.value;
   }
 
-  let instanceFilter: string | undefined;
-  if (input.instance !== undefined) {
-    const instResult = validateId(input.instance, 'instance');
-    if (instResult.valid === false) {
-      return errorResponse(instResult.error);
-    }
-    instanceFilter = instResult.value;
-  }
-
   let agentFilter: string | undefined;
   if (input.agent_id !== undefined) {
     const checked = validateId(input.agent_id, 'agent_id');
@@ -367,7 +363,6 @@ export async function handleOpenclawTaskList(
   const tasks = taskManager.list(ownerId, {
     status,
     sessionId: session_id,
-    instanceId: instanceFilter,
     agentId: agentFilter,
   });
   const stats = taskManager.stats(ownerId);
@@ -376,7 +371,6 @@ export async function handleOpenclawTaskList(
     task_id: t.id,
     type: t.type,
     status: t.status,
-    instance: t.instanceId,
     ...(t.agentId ? { agent_id: t.agentId } : {}),
     session_id: t.sessionId,
     priority: t.priority,
@@ -388,12 +382,20 @@ export async function handleOpenclawTaskList(
 }
 
 export async function handleOpenclawTaskCancel(
-  _registry: InstanceRegistry,
+  _gateway: OpenClawGateway,
   input: unknown,
   ownerId: string
 ): Promise<ToolResponse> {
   if (!validateInputIsObject(input)) {
     return errorResponse('Invalid input: expected an object');
+  }
+  if (
+    Object.keys(input).some(
+      (key) =>
+        !Object.prototype.hasOwnProperty.call(openclawTaskCancelTool.inputSchema.properties, key)
+    )
+  ) {
+    return errorResponse('Unknown argument');
   }
 
   const tidResult = validateId(input.task_id, 'task_id');
@@ -416,39 +418,29 @@ export async function handleOpenclawTaskCancel(
     const response = errorResponse(
       `Cannot cancel task with status: ${task.status}. Only pending tasks can be cancelled.`
     );
-    return task.sessionId
-      ? withConversation(response, task.sessionId, task.instanceId, task.agentId)
-      : response;
+    return task.sessionId ? withConversation(response, task.sessionId, task.agentId) : response;
   }
 
   const cancelled = taskManager.cancel(task_id, ownerId);
   if (!cancelled) {
     const response = errorResponse('Failed to cancel task');
-    return task.sessionId
-      ? withConversation(response, task.sessionId, task.instanceId, task.agentId)
-      : response;
+    return task.sessionId ? withConversation(response, task.sessionId, task.agentId) : response;
   }
 
   return structuredJsonResponse({
     task_id,
     status: 'cancelled',
     session_id: task.sessionId,
-    instance: task.instanceId,
     ...(task.agentId ? { agent_id: task.agentId } : {}),
     message: 'Task cancelled successfully',
   });
 }
 
 function taskSelectorConflict(input: Record<string, unknown>, task: Task): string | undefined {
-  for (const [key, stored] of [
-    ['instance', task.instanceId],
-    ['agent_id', task.agentId],
-  ]) {
-    if (input[key] === undefined) continue;
-    const checked = validateId(input[key], key);
-    if (!checked.valid) return checked.error;
-    const normalized = key === 'agent_id' ? checked.value.toLowerCase() : checked.value;
-    if (normalized !== stored) return `${key} conflicts with the stored task route`;
-  }
+  if (input.agent_id === undefined) return undefined;
+  const checked = validateId(input.agent_id, 'agent_id');
+  if (!checked.valid) return checked.error;
+  if (checked.value.toLowerCase() !== task.agentId)
+    return 'agent_id conflicts with the stored task route';
   return undefined;
 }

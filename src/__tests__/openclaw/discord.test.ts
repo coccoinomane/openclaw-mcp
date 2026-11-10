@@ -130,7 +130,6 @@ async function fixture(
     cancel: vi.fn(async () => {}),
   } satisfies DiscordAgentTransport;
   const config: DiscordConfig = {
-    gatewayInstance: 'home',
     stateDir,
     acknowledgeInboundRouting: true,
     targets: [
@@ -178,18 +177,14 @@ const input = {
   prompt: 'Please help $(not-a-shell)',
 };
 describe('Discord service', () => {
-  it('requires an explicit Gateway and probes SDK readiness before any reads or writes', async () => {
+  it('loads without a Gateway selector and probes SDK readiness before any reads or writes', async () => {
     const f = await fixture();
     const loaded = loadDiscordConfig({
       MCP_DISCORD_ENABLED: 'true',
       MCP_DISCORD_STATE_DIR: f.config.stateDir,
       MCP_DISCORD_TARGETS: JSON.stringify(f.config.targets),
-      MCP_DISCORD_GATEWAY_INSTANCE: 'home',
     });
-    expect(loaded?.gatewayInstance).toBe('home');
-    expect(() => f.make({ ...f.config, gatewayInstance: undefined })).toThrow(
-      'DISCORD_GATEWAY_INSTANCE_REQUIRED'
-    );
+    expect(loaded).not.toHaveProperty('gatewayInstance');
     f.agent.ready.mockRejectedValueOnce(new DiscordError('SDK_AUTH_FAILED'));
     expect(await f.service.ask(input)).toMatchObject({
       status: 'run_failed',

@@ -41,7 +41,6 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
   const config: DiscordConfig = {
     stateDir,
     targets: [target],
-    gatewayInstance: 'local',
     ...overrides,
   };
   const reader = vi.fn(async () => ({
@@ -116,13 +115,12 @@ describe('Discord imported static agent routes', () => {
     const { service, config } = await fixture({
       importedRouteAgent: discordBindingResolver([binding('writer', { guildId: guild })]),
     });
-    const listed = await service.channels({ agent_id: 'writer', instance: 'local' });
+    const listed = await service.channels({ agent_id: 'writer' });
     expect(listed.channels).toHaveLength(1);
     expect(listed.channels[0]).toMatchObject({
       target: 'work',
       agent_id: 'writer',
       account_id: 'bot',
-      instance: 'local',
     });
     expect((await service.channels({ agent_id: 'main' })).channels).toEqual([]);
     expect(() =>
@@ -181,7 +179,6 @@ describe('Discord imported static agent routes', () => {
           categoryId: category,
           accountId: 'bot',
           agentId: 'main',
-          instance: 'local',
         },
       ],
       importedRouteAgent: discordBindingResolver([binding('writer', { guildId: guild })]),
@@ -202,7 +199,6 @@ describe('Discord imported static agent routes', () => {
           categoryId: category,
           accountId: 'bot',
           agentId: 'main',
-          instance: 'local',
         },
       ],
       importedRouteAgent: discordBindingResolver([
@@ -242,13 +238,11 @@ describe('Discord imported static agent routes', () => {
         target: 'work',
         status: 'completed',
         agent_id: 'writer',
-        instance: 'local',
         channel_id: thread,
       })
     );
     expect(await service.status('persisted-operation-001', { agent_id: 'writer' })).toMatchObject({
       agent_id: 'writer',
-      instance: 'local',
     });
     await expect(service.status('persisted-operation-001', { agent_id: 'main' })).rejects.toThrow(
       'ROUTE_SELECTOR_CONFLICT'
@@ -299,7 +293,7 @@ describe('Discord imported static agent routes', () => {
       );
     });
     const reader = channelReader(
-      [{ name: 'local', url: 'http://127.0.0.1:18789', token: 'mock' }],
+      { url: 'http://127.0.0.1:18789', token: 'mock' },
       config,
       fetcher
     )!;
@@ -332,13 +326,13 @@ describe('Discord imported static agent routes', () => {
     ).rejects.toThrow('READ_SCOPE_DENIED');
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
-  it('adds selectors to every strict schema and rejects malformed selectors before service calls', async () => {
+  it('adds only the agent selector to every strict schema and rejects malformed selectors before service calls', async () => {
     expect(
       discordTools.every(
         (t) =>
           t.inputSchema.additionalProperties === false &&
           t.inputSchema.properties?.agent_id &&
-          t.inputSchema.properties?.instance
+          !Object.hasOwn(t.inputSchema.properties ?? {}, 'instance')
       )
     ).toBe(true);
     const { service, reader } = await fixture();
@@ -346,7 +340,7 @@ describe('Discord imported static agent routes', () => {
       (await handleDiscord(service, 'openclaw_discord_channels', { agent_id: 1 })).isError
     ).toBe(true);
     expect(
-      (await handleDiscord(service, 'openclaw_discord_channels', { instance: ' ' })).isError
+      (await handleDiscord(service, 'openclaw_discord_channels', { instance: 'default' })).isError
     ).toBe(true);
     expect(
       (await handleDiscord(service, 'openclaw_discord_channels', { constructor: 'bad' })).isError

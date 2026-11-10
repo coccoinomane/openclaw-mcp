@@ -19,7 +19,6 @@ Activate when the user:
 | Task | Tool |
 |------|------|
 | Discover agents | `openclaw_agents` |
-| Discover instances | `openclaw_instances` |
 | Chat (sync) | `openclaw_chat` |
 | Chat (async) | `openclaw_chat_async` |
 | Task status | `openclaw_task_status` |
@@ -62,6 +61,6 @@ openclaw_task_status task_id="task_abc123"
 
 ## Agent selection
 
-Use `openclaw_agents` to discover the configured roster, optionally filtered by `instance`. Pass `instance` and `agent_id` to chat or async chat when choosing an agent. Generic chat works without Discord. Save the returned `instance`, `agent_id` and `session_id` for follow-ups; an explicit agent must agree with an agent-qualified session key. Status and cancellation use the task's stored route and retain existing ownership checks.
+One MCP deployment connects to one OpenClaw installation; additional installations need separate deployments. Use `openclaw_agents` to discover the configured roster. Pass `agent_id` to chat or async chat when choosing an agent. Generic chat works without Discord. Save the returned `agent_id` and `session_id` for follow-ups; an explicit agent must agree with an agent-qualified session key. Status and cancellation use the task's stored route and retain existing ownership checks.
 
 All authenticated clients share access to every configured agent. Selecting an agent does not change caller identity or the operator's Discord forwarding attribution. For Discord work use the packaged coordinator workflow and discover permitted targets; selectors cannot override target or creation-policy routing.

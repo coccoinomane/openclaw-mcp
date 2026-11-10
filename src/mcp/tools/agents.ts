@@ -1,11 +1,11 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { InstanceRegistry } from '../../openclaw/registry.js';
+import type { OpenClawGateway } from '../../openclaw/gateway.js';
 import {
   errorResponse,
   structuredJsonResponse,
   type ToolResponse,
 } from '../../utils/response-helpers.js';
-import { validateId, validateInputIsObject } from '../../utils/validation.js';
+import { validateInputIsObject } from '../../utils/validation.js';
 
 export const openclawAgentsTool: Tool = {
   name: 'openclaw_agents',
@@ -13,12 +13,7 @@ export const openclawAgentsTool: Tool = {
     'List configured agents available to every authenticated client, including agents without Discord mappings. This is an operator catalog snapshot, not a live availability probe.',
   inputSchema: {
     type: 'object',
-    properties: {
-      instance: {
-        type: 'string',
-        description: 'Filter by configured instance name; omit to list all instances.',
-      },
-    },
+    properties: {},
     additionalProperties: false,
   },
   outputSchema: {
@@ -29,11 +24,10 @@ export const openclawAgentsTool: Tool = {
         items: {
           type: 'object',
           properties: {
-            instance: { type: 'string' },
             agent_id: { type: 'string' },
             is_default: { type: 'boolean' },
           },
-          required: ['instance', 'agent_id', 'is_default'],
+          required: ['agent_id', 'is_default'],
           additionalProperties: false,
         },
       },
@@ -45,21 +39,13 @@ export const openclawAgentsTool: Tool = {
 };
 
 export async function handleOpenclawAgents(
-  registry: InstanceRegistry,
+  gateway: OpenClawGateway,
   input: unknown
 ): Promise<ToolResponse> {
   if (!validateInputIsObject(input)) return errorResponse('Invalid input: expected an object');
-  if (Object.keys(input).some((key) => key !== 'instance'))
-    return errorResponse('Unknown argument');
-  let instance: string | undefined;
-  if (input.instance !== undefined) {
-    const checked = validateId(input.instance, 'instance');
-    if (!checked.valid) return errorResponse(checked.error);
-    instance = checked.value;
-  }
+  if (Object.keys(input).length) return errorResponse('Unknown argument');
   try {
-    const agents = registry.listAgents(instance).map((entry) => ({
-      instance: entry.instance,
+    const agents = gateway.listAgents().map((entry) => ({
       agent_id: entry.agentId,
       is_default: entry.isDefault,
     }));

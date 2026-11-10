@@ -1,6 +1,6 @@
 # OpenClaw Plugin for Claude Code
 
-Connect Claude Code to your OpenClaw AI assistant instance. Chat, check status, and delegate tasks.
+Connect Claude Code to your OpenClaw AI assistant. Each MCP deployment connects to one OpenClaw installation and can expose several agents. Use separate MCP deployments for additional installations. Chat, check status, and delegate tasks.
 
 The `openclaw-mcp` launcher is the bridge itself, not the OpenClaw CLI. The current fork needs no OpenClaw executable: direct chat uses HTTP, optional roster discovery uses the Gateway SDK, and Discord uses SDK agent calls plus fixed HTTP/REST adapters. The packaged npm launcher below targets upstream; use the fork build from the [repository installation guide](../../../README.md#install-this-fork) for these features.
 
@@ -23,7 +23,7 @@ OPENCLAW_URL=http://127.0.0.1:18789
 OPENCLAW_GATEWAY_TOKEN=your-gateway-token
 ```
 
-For the fork's Discord integration, configure `MCP_DISCORD_GATEWAY_INSTANCE` and the SDK service identity; there is no CLI transport selector. See [Discord setup](../../../docs/discord-skills.md) and the [upgrade checklist](../../../docs/discord-sdk.md#upgrade-from-cli-based-releases). Agent discovery accepts `MCP_AGENT_DISCOVERY=gateway` or an unset/static roster only.
+For the fork's Discord integration, configure the SDK service identity for the same Gateway connection; there is no CLI transport selector. See [Discord setup](../../../docs/discord-skills.md) and the [upgrade checklist](../../../docs/discord-sdk.md#upgrade-from-cli-based-releases). Agent discovery accepts `MCP_AGENT_DISCOVERY=gateway` or an unset/static roster only.
 
 ## Commands
 

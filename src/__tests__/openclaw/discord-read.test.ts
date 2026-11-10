@@ -22,10 +22,9 @@ const target = {
 const config: DiscordConfig = {
   stateDir: '/unused-test-state',
   targets: [target],
-  gatewayInstance: 'home',
   acknowledgeInboundRouting: true,
 };
-const instances = [{ name: 'home', url: 'http://127.0.0.1:18789', token: 'mock-credential' }];
+const gatewayConfig = { url: 'http://127.0.0.1:18789', token: 'mock-credential' };
 const parent = {
   id: channel,
   guild_id: guild,
@@ -64,7 +63,7 @@ function fixture(
 ) {
   const fetcher = vi.fn(async () => new Response(JSON.stringify(envelope({ ok: true, channels }))));
   const { invokeThread, agent } = adapters();
-  const reader = channelReader(instances, c, fetcher);
+  const reader = channelReader(gatewayConfig, c, fetcher);
   return {
     fetcher,
     invokeThread,
@@ -91,34 +90,21 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 describe('closed metadata reader', () => {
-  it('enables HTTP reads with the required gateway instance and no opt-in', () => {
+  it('enables HTTP reads with the single Gateway and no opt-in', () => {
     const loaded = loadDiscordConfig({
       MCP_DISCORD_ENABLED: 'true',
       MCP_DISCORD_STATE_DIR: '/unused-test-state',
       MCP_DISCORD_TARGETS: JSON.stringify([target]),
-      MCP_DISCORD_GATEWAY_INSTANCE: 'home',
     });
-    expect(loaded?.gatewayInstance).toBe('home');
-    expect(typeof channelReader(instances, loaded!)).toBe('function');
+    expect(loaded).not.toHaveProperty('gatewayInstance');
+    expect(typeof channelReader(gatewayConfig, loaded!)).toBe('function');
   });
 
-  it.each([undefined, ''])('requires the gateway instance when enabled: %j', (instance) => {
-    expect(() =>
-      loadDiscordConfig({
-        MCP_DISCORD_ENABLED: 'true',
-        MCP_DISCORD_STATE_DIR: '/unused-test-state',
-        MCP_DISCORD_TARGETS: JSON.stringify([target]),
-        MCP_DISCORD_GATEWAY_INSTANCE: instance,
-      })
-    ).toThrow('DISCORD_GATEWAY_INSTANCE_REQUIRED');
-  });
-
-  it('uses fixed server instance, account and agent with no redirects', async () => {
+  it('uses fixed Gateway credentials, account and agent with no redirects', async () => {
     const f = fixture();
     const result = await f.service.channels();
     expect(result.channels).toEqual([
       {
-        instance: 'home',
         agent_id: 'main',
         account_id: 'bot',
         target: 'work',
@@ -135,7 +121,7 @@ describe('closed metadata reader', () => {
     const [url, options] = f.fetcher.mock.calls[0] as any;
     expect(url).toBe('http://127.0.0.1:18789/tools/invoke');
     expect(options.redirect).toBe('error');
-    expect(options.headers.Authorization).toBe('Bearer ' + instances[0].token);
+    expect(options.headers.Authorization).toBe('Bearer ' + gatewayConfig.token);
     expect(JSON.parse(options.body)).toEqual({
       tool: 'message',
       sessionKey: 'agent:main:main',
@@ -144,6 +130,27 @@ describe('closed metadata reader', () => {
     expect(f.invokeThread).not.toHaveBeenCalled();
     expect(f.agent.ready).not.toHaveBeenCalled();
     expect(f.agent.run).not.toHaveBeenCalled();
+  });
+  it('shares one endpoint and credential across admitted agents without sharing permission scopes', async () => {
+    const writer = { ...target, name: 'writing', channelId: other, agentId: 'writer' };
+    const gateway = { ...gatewayConfig, agents: [{ id: 'main' }, { id: 'writer' }] };
+    const fetcher = vi.fn(
+      async () => new Response(JSON.stringify(envelope({ ok: true, channels: [] })))
+    );
+    const reader = channelReader(gateway, { ...config, targets: [target, writer] }, fetcher);
+    await reader(target, { action: 'channel-list' });
+    await reader(writer, { action: 'channel-list' });
+    for (const [url, options] of fetcher.mock.calls as any) {
+      expect(url).toBe(gateway.url + '/tools/invoke');
+      expect(options.headers.Authorization).toBe('Bearer ' + gateway.token);
+    }
+    expect(
+      (fetcher.mock.calls as any).map(([, options]: any) => JSON.parse(options.body).sessionKey)
+    ).toEqual(['agent:main:main', 'agent:writer:main']);
+    await expect(
+      reader({ ...target, agentId: 'unlisted' }, { action: 'channel-list' })
+    ).rejects.toThrow('READ_SCOPE_DENIED');
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
   it.each(['OPENCLAW_SHELL', 'OPENCLAW_AGENT_ID', 'OPENCLAW_SESSION_KEY', 'OPENCLAW_CALLER_ID'])(
     'denies %s provenance without fallback',
@@ -215,37 +222,13 @@ describe('closed metadata reader', () => {
     }
   );
 
-  it('rejects an absent gateway mapping instead of disabling HTTP reads', () => {
-    expect(() =>
-      channelReader(instances, {
-        ...config,
-        gatewayInstance: undefined,
-      } as unknown as DiscordConfig)
-    ).toThrow('READ_GATEWAY_CONFIGURATION_INVALID');
-  });
-  it('fails startup for configured but missing, duplicate, insecure or uncredentialed instances', () => {
-    for (const list of [
-      [],
-      [instances[0], instances[0]],
-      [{ ...instances[0], token: undefined }],
-      [{ ...instances[0], url: 'http://remote.invalid' }],
+  it('fails startup for an insecure or uncredentialed Gateway', () => {
+    for (const gateway of [
+      { ...gatewayConfig, token: undefined },
+      { ...gatewayConfig, token: '' },
+      { ...gatewayConfig, url: 'http://remote.invalid' },
     ])
-      expect(() => channelReader(list, config)).toThrow();
-    expect(() =>
-      channelReader(instances, {
-        ...config,
-        creationPolicies: [
-          {
-            name: 'p',
-            guildId: guild,
-            categoryId: category,
-            accountId: 'bot',
-            agentId: 'main',
-            instance: 'other',
-          },
-        ],
-      })
-    ).toThrow('READ_GATEWAY_MISMATCH');
+      expect(() => channelReader(gateway, config)).toThrow();
   });
   it.each([
     null,
@@ -344,7 +327,7 @@ describe('batched allowlist discovery', () => {
         c,
         undefined,
         undefined,
-        channelReader(instances, c, fetcher),
+        channelReader(gatewayConfig, c, fetcher),
         invokeThread,
         undefined,
         async (_t, _id, _p, _op, sent) => {
@@ -473,7 +456,6 @@ describe('batched allowlist discovery', () => {
         categoryId: category,
         accountId: 'bot',
         agentId: 'main',
-        instance: 'home',
       };
       const c = { ...config, stateDir, targets: [], creationPolicies: [policy] };
       const { invokeThread, agent } = adapters();
@@ -494,7 +476,7 @@ describe('batched allowlist discovery', () => {
         c,
         invoke,
         undefined,
-        channelReader(instances, c, fetcher),
+        channelReader(gatewayConfig, c, fetcher),
         invokeThread,
         undefined,
         undefined,

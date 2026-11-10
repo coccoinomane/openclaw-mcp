@@ -11,15 +11,15 @@ The bridge does not launch or require the OpenClaw CLI. Discord agent execution,
 
 There is no transport selector or CLI fallback. See [SDK authentication and deployment](discord-sdk.md), the [remaining HTTP/REST inventory](discord-sdk.md#remaining-httprest-calls-and-sdk-feasibility), and the [historical audit](gateway-sdk-feasibility.md) for limits that a transport change does not solve.
 
-## One Discord Gateway connection per MCP service
+## One Gateway connection per MCP service
 
-The Discord integration uses one Gateway association (`MCP_DISCORD_GATEWAY_INSTANCE`) and one bot account. It can serve several agents and permitted Discord servers through that setup.
+One MCP deployment connects to one OpenClaw installation. Direct chat, discovery and Discord share the configured Gateway URL and credential. The Discord integration uses one bot account and can serve several agents and permitted Discord servers.
 
-Generic chat can connect to multiple OpenClaw installations, but the complete Discord workflow cannot yet choose a different Gateway/bot setup for each request. Discovering agents or bindings from another installation does not change that limit. Until the adapters support per-instance dispatch, use a separately configured MCP service for another Discord Gateway/bot setup.
+Use a separate MCP deployment for each additional OpenClaw installation or Discord bot account, with its own configuration and private state. Tool callers cannot select a different Gateway.
 
 ## Scope
 
-Direct Ask OpenClaw continues to use the HTTP chat-completions endpoint. Its tools, session_id/instance response contract, and multi-instance routing are unchanged. Discord tools are an optional service capability combining the Gateway SDK, Gateway HTTP calls and Discord REST calls. They do not create subagents.
+Direct Ask OpenClaw continues to use the HTTP chat-completions endpoint. Responses include session_id and optional agent_id for conversation continuity. Discord tools are an optional service capability combining the Gateway SDK, Gateway HTTP calls and Discord REST calls. They do not create subagents.
 
 The /mcp endpoint routes 2026-07-28 requests through the official createMcpHandler factory and Node adapter. The SDK's isLegacyRequest classifier sends existing stateful 2025 clients to the unchanged legacy transport. Legacy SSE and stdio remain supported. The official Skills extension is available on modern HTTP; stdio, SSE and legacy HTTP expose the same packaged files through resources/list and resources/read. This is a staged migration: stdio and SSE do not advertise the new protocol or extension methods.
 
@@ -31,7 +31,6 @@ The settings below apply to every Discord deployment. Complete [SDK service auth
 
 Discord tools are absent unless MCP_DISCORD_ENABLED=true. Set these in the service's trusted environment, not tool input:
 
-- MCP_DISCORD_GATEWAY_INSTANCE: required existing OPENCLAW_INSTANCES name, or default for the single-instance setup. This selects the one Gateway used by all Discord adapters.
 - MCP_DISCORD_SDK_AUTH: device (default) or explicitly authorized local-shared-token on literal loopback.
 - MCP_DISCORD_SDK_STATE_DIR: private directory holding the pre-provisioned integration identity and, in device mode, its approved device token. Defaults to gateway-sdk inside MCP_DISCORD_STATE_DIR.
 - MCP_DISCORD_STATE_DIR: required absolute path to a private, durable local directory. Preserve it across restarts. Run one service process per state directory; all its transports share that process. Do not share it across security principals or expose it as a static directory.
@@ -60,7 +59,7 @@ Legacy target shape, with placeholders to replace before use:
 [{ "name": "project", "guildId": "GUILD_SNOWFLAKE", "channelId": "CHANNEL_SNOWFLAKE", "accountId": "bot", "agentId": "main", "normalRouting": true }]
 ```
 
-All Discord reads use the selected instance's existing Gateway bearer credential. The closed reader permits only message/channel-list, channel-info, thread-list, permissions and exact-ID read. It uses configured guild/account/agent mappings and never accepts client URLs, actions, credentials or raw arguments. Gateway policy remains authoritative. Missing instance credentials or invalid configuration fail startup; read errors never switch transports. Thread creation and optional channel creation use the same named instance. A deployment launcher that filters environment variables must explicitly pass the required settings.
+All Discord reads use the configured Gateway bearer credential. The closed reader permits only message/channel-list, channel-info, thread-list, permissions and exact-ID read. It uses configured guild/account/agent mappings and never accepts client URLs, actions, credentials or raw arguments. Gateway policy remains authoritative. Missing Gateway credentials or invalid configuration fail startup; read errors never switch transports. Thread creation and optional channel creation use the same Gateway connection. A deployment launcher that filters environment variables must explicitly pass the required settings.
 
 Only expose this capability to callers trusted to act within every configured target. This is a shared service allowlist, not per-user Discord ACLs. HTTP deployments should enable OAuth and restrict network access. Existing gateway policy and bot permissions remain authoritative. Guild identity is read back before writes; existing thread ancestry is checked before delivery.
 
@@ -68,21 +67,20 @@ Service provenance guards preserve OPENCLAW_SHELL and agent/session/caller ident
 
 ## Gateway thread creation and owner membership
 
-New threads are always created through the authenticated, closed message/thread-create HTTP adapter using MCP_DISCORD_GATEWAY_INSTANCE and that instance's server-side credential. Parent and thread checks use the HTTP read adapter; agent execution uses the SDK.
+New threads are always created through the authenticated, closed message/thread-create HTTP adapter using OPENCLAW_URL and its server-side OPENCLAW_GATEWAY_TOKEN. Parent and thread checks use the HTTP read adapter; agent execution uses the SDK.
 
 Creation never falls back to another transport, including on connection refusal. No HTTP response, timeout, connection reset, malformed result or partial creation authorizes a second create. Parent metadata failures stop before creation. The bridge never starts or restarts the Gateway.
 
 To add the owner to every newly created thread, configure the service environment:
 
 ```dotenv
-MCP_DISCORD_GATEWAY_INSTANCE=default
 MCP_DISCORD_THREAD_MEMBER_ENABLED=true
 MCP_DISCORD_THREAD_MEMBER_USER_ID=400000000000000006
 MCP_DISCORD_THREAD_MEMBER_ACCOUNT_ID=bot
 # Supply DISCORD_BOT_TOKEN through the service's private environment/secret store.
 ```
 
-Replace default and bot with the existing instance/account names. Membership is disabled unless explicitly enabled. The configured account must match every allowed target and creation policy; mixed-account deployments need separate services. Missing credentials fail startup. Clients cannot choose a user, credential, endpoint, or membership action. This adds no targets to the allowlist.
+Replace bot with the configured account name. Membership is disabled unless explicitly enabled. The configured account must match every allowed target and creation policy; mixed-account deployments need separate services. Missing credentials fail startup. Clients cannot choose a user, credential, endpoint, or membership action. This adds no targets to the allowlist.
 
 The native message tool has no thread-member-add action. After saving the new thread ID/link and verifying its guild, parent and thread type through the existing metadata reader, the service sends one PUT to https://discord.com/api/v10/channels/{newThreadId}/thread-members/{configuredUserId}, then one GET to the same URL. Both use the service's bot credential, reject redirects and preserve the service-provenance guard. Discord requires send permission and an unarchived thread. Its 204 response covers both added and already-present members; the GET must confirm the exact thread and user before member_verified becomes true. See [Discord's membership API](https://docs.discord.com/developers/resources/channel#add-thread-member).
 
@@ -130,11 +128,11 @@ There is no exactly-once guarantee across Discord and the local filesystem. A cr
 
 completed and generation_status describe agent generation, not independently verified Discord delivery. delivery_status separately reports sent/delivered, failed, partial_failed, suppressed or unverified. The SDK result may include deliveryStatus or nested delivery.status. Suppressed is never treated as visible delivery. When the delivery object includes a valid messageId, one bounded HTTP message read checks that exact ID and thread, setting delivery_verified; otherwise it remains false. No guessed text matching or extra message send is used. Links, session keys and run IDs are returned when known. Partial creation retains the thread and does not start the agent. Sanitized error codes distinguish rejected requests, uncertain outcomes and failed preflight checks without exposing raw credential-bearing responses.
 
-Modern HTTP async task ownership uses a hash of the validated access token, never clientInfo. Reconnects with that token retain access; token rotation changes ownership. Anonymous modern calls cannot start or access async tasks because there is no stable authenticated owner. Stateful legacy connections retain the prior connection-local ownership rules. All existing tool names remain listed.
+Modern HTTP async task ownership uses a hash of the validated access token, never clientInfo. Reconnects with that token retain access; token rotation changes ownership. Anonymous modern calls cannot start or access async tasks because there is no stable authenticated owner. Stateful legacy connections retain the prior connection-local ownership rules. All supported tools use the same agent-selection contract across transports.
 
 ## Explicit channel creation
 
-Enable MCP_DISCORD_CHANNEL_CREATE_ENABLED=true only after defining MCP_DISCORD_CREATION_POLICIES as a JSON array. Each policy has name, guildId, categoryId, accountId, agentId and instance; normalRouting:true additionally authorizes fresh-thread asks under newly admitted channels. The instance names an existing server-side gateway configuration with a credential. MCP_DISCORD_GATEWAY_INSTANCE must name that same instance. All policies use this one Gateway; clients cannot select another URL.
+Enable MCP_DISCORD_CHANNEL_CREATE_ENABLED=true only after defining MCP_DISCORD_CREATION_POLICIES as a JSON array. Each policy has name, guildId, categoryId, accountId and agentId; normalRouting:true additionally authorizes fresh-thread asks under newly admitted channels. All policies use the configured Gateway URL and credential; clients cannot select another URL.
 
 Set MCP_DISCORD_ACKNOWLEDGE_INBOUND_ROUTING=true only after verifying that new channels in each configured guild/category are allowed by OpenClaw and Discord and route inbound messages to the configured agent. The adapter does not change bindings, channel permissions, mention requirements or gateway policy. Explicit agentId does not prove inbound continuity. The acknowledgement and per-target normalRouting:true are explicit deployment prerequisites for the narrowed fresh-thread workflow; neither claims arbitrary existing-thread continuity. If those prerequisites are not satisfied, leave creation disabled.
 

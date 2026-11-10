@@ -1,12 +1,10 @@
-// Instance configuration for multi-instance support
+// Configuration for the single OpenClaw Gateway.
 
-export interface InstanceConfig {
-  name: string;
+export interface GatewayConfig {
   url: string;
   token?: string;
   agentId?: string;
   timeout?: number;
-  default?: boolean;
   agents?: Array<{ id: string }>;
   bindings?: AgentBinding[];
 }

@@ -10,14 +10,14 @@ import { createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpServer, createModernMcpServer } from '../../server/tools-registration.js';
 import { loadPackagedSkills, readSkillResource } from '../../server/skills.js';
-import { InstanceRegistry } from '../../openclaw/registry.js';
+import { OpenClawGateway } from '../../openclaw/gateway.js';
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
   for (const close of cleanups.splice(0).reverse()) await close();
 });
 async function deps() {
   return {
-    registry: new InstanceRegistry([{ name: 'default', url: 'http://127.0.0.1:1' }], 'openclaw'),
+    gateway: new OpenClawGateway({ url: 'http://127.0.0.1:1' }, 'openclaw'),
     serverName: 'test',
     serverVersion: '1',
     skills: await loadPackagedSkills(),

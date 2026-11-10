@@ -63,10 +63,10 @@ describe('withConversation', () => {
     ['explicit success', { ...successResponse('ok'), isError: false }],
   ] as const)('separates metadata and preserves the %s response', (_name, response) => {
     const firstBlock = { ...response.content[0] };
-    const metadata = { session_id: 'session-123', instance: 'work' };
-    const metadataText = '\n\n{"session_id":"session-123","instance":"work"}';
+    const metadata = { session_id: 'session-123', agent_id: 'work' };
+    const metadataText = '\n\n{"session_id":"session-123","agent_id":"work"}';
 
-    const result = withConversation(response, metadata.session_id, metadata.instance);
+    const result = withConversation(response, metadata.session_id, metadata.agent_id);
 
     expect(result.content).toEqual([firstBlock, { type: 'text', text: metadataText }]);
     expect(result.content[0]).toBe(response.content[0]);
