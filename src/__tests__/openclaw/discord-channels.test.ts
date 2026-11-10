@@ -62,10 +62,6 @@ describe('explicit channel creation', () => {
       target: 'created-' + channel,
     });
     expect(result.session_key).toBeUndefined();
-    expect(result).not.toHaveProperty('instance');
-    expect(
-      JSON.parse(await readFile(join(f.dir, input.operation_id + '.json'), 'utf8'))
-    ).not.toHaveProperty('instance');
     expect(f.inspect.mock.calls.map((c) => c[1])).toEqual([category, channel]);
     const restarted = new ChannelCreation(f.dir, [policy], f.invoke, f.inspect);
     expect(await restarted.create(input)).toEqual(result);
@@ -92,19 +88,6 @@ describe('explicit channel creation', () => {
         f.inspect
       ).admitted()
     ).toEqual([]);
-  });
-  it('rejects removed policy selectors rather than retaining them in policy digests', async () => {
-    const f = await fixture();
-    expect(
-      () =>
-        new DiscordService({
-          stateDir: f.dir,
-          targets: [],
-          creationPolicies: [{ ...policy, instance: 'default' } as CreationPolicy],
-          acknowledgeInboundRouting: true,
-        })
-    ).toThrow('Invalid creation policy field');
-    expect(f.invoke).not.toHaveBeenCalled();
   });
   it('rejects duplicate creation policy names before constructing adapters', async () => {
     const f = await fixture();

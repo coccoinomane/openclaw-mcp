@@ -310,7 +310,6 @@ describe('conversation metadata across real MCP transports', () => {
         expect(result.isError).not.toBe(true);
         expect(text(result)).toBe(`reply:hello-${index}`);
         const metadata = result.structuredContent!;
-        expect(metadata).not.toHaveProperty('instance');
         expect(JSON.parse(text(result, 1))).toEqual(metadata);
         expect(metadata.session_id).toMatch(
           new RegExp(

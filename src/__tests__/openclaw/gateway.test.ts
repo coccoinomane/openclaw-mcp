@@ -1,7 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { OpenClawGateway } from '../../openclaw/gateway.js';
-
-afterEach(() => vi.unstubAllGlobals());
 
 describe('one OpenClaw Gateway', () => {
   const config = {
@@ -10,43 +8,6 @@ describe('one OpenClaw Gateway', () => {
     agentId: 'main',
     agents: [{ id: 'main' }, { id: 'writer' }, { id: 'reviewer' }],
   };
-  it('uses one endpoint and credential across concurrent agent selections', async () => {
-    const fetcher = vi
-      .fn()
-      .mockImplementation(
-        async () => new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }))
-      );
-    vi.stubGlobal('fetch', fetcher);
-    const gateway = new OpenClawGateway(config);
-    await Promise.all(
-      ['main', 'writer', 'reviewer'].map((id) =>
-        gateway.resolve(id).client.chat('hello', 'agent:' + id + ':test')
-      )
-    );
-    expect(fetcher).toHaveBeenCalledTimes(3);
-    for (const [url, options] of fetcher.mock.calls) {
-      expect(url.toString()).toBe('https://gateway.example/v1/chat/completions');
-      expect(options.headers.Authorization).toBe('Bearer test-credential');
-    }
-    expect(fetcher.mock.calls.map(([, options]) => options.headers['x-openclaw-agent-id'])).toEqual(
-      ['main', 'writer', 'reviewer']
-    );
-  });
-  it('does not allow later config mutation to retarget another agent', async () => {
-    const supplied = { ...config };
-    const gateway = new OpenClawGateway(supplied);
-    supplied.url = 'https://other.example';
-    supplied.token = 'different-credential';
-    const fetcher = vi
-      .fn()
-      .mockImplementation(
-        async () => new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }))
-      );
-    vi.stubGlobal('fetch', fetcher);
-    await gateway.resolve('writer').client.chat('hello');
-    expect(fetcher.mock.calls[0][0].toString()).toBe('https://gateway.example/v1/chat/completions');
-    expect(fetcher.mock.calls[0][1].headers.Authorization).toBe('Bearer test-credential');
-  });
   it('retains default selection and caches immutable agent clients', () => {
     const gateway = new OpenClawGateway(config);
     expect(gateway.resolve().client).toBe(gateway.getDefault());

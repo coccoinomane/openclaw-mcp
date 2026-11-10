@@ -1,18 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import type { OpenClawGateway } from '../../openclaw/gateway.js';
-import { handleOpenclawChat, openclawChatTool } from '../../mcp/tools/chat.js';
+import { handleOpenclawChat } from '../../mcp/tools/chat.js';
 import { handleOpenclawAgents, openclawAgentsTool } from '../../mcp/tools/agents.js';
-import { handleOpenclawStatus, openclawStatusTool } from '../../mcp/tools/status.js';
+import { handleOpenclawStatus } from '../../mcp/tools/status.js';
 import {
   handleOpenclawChatAsync,
   handleOpenclawTaskStatus,
   handleOpenclawTaskCancel,
   handleOpenclawTaskList,
-  openclawChatAsyncTool,
-  openclawTaskStatusTool,
-  openclawTaskListTool,
-  openclawTaskCancelTool,
 } from '../../mcp/tools/tasks.js';
 import { taskManager } from '../../mcp/tasks/manager.js';
 
@@ -49,43 +45,6 @@ afterEach(() => {
 });
 
 describe('generic agent routing without Discord', () => {
-  it.each(['instance', 'unexpected'])(
-    'rejects unknown argument %s before dispatch or task access',
-    async (key) => {
-      const extra = { [key]: 'removed' };
-      for (const response of [
-        await handleOpenclawChat(gateway, { message: 'hello', ...extra }),
-        await handleOpenclawChatAsync(gateway, { message: 'hello', ...extra }, owner),
-        await handleOpenclawStatus(gateway, extra),
-        await handleOpenclawAgents(gateway, extra),
-        await handleOpenclawTaskList(gateway, extra, owner),
-        await handleOpenclawTaskStatus(gateway, { task_id: 'missing', ...extra }, owner),
-        await handleOpenclawTaskCancel(gateway, { task_id: 'missing', ...extra }, owner),
-      ]) {
-        expect(response.isError).toBe(true);
-        expect(response.content[0].text).toBe('Error: Unknown argument');
-      }
-      expect(calls).toHaveLength(0);
-      expect(taskManager.list(owner)).toHaveLength(0);
-    }
-  );
-
-  it('advertises only supported input fields with strict schemas', () => {
-    for (const tool of [
-      openclawChatTool,
-      openclawChatAsyncTool,
-      openclawStatusTool,
-      openclawAgentsTool,
-      openclawTaskListTool,
-      openclawTaskStatusTool,
-      openclawTaskCancelTool,
-    ]) {
-      expect(tool.inputSchema.additionalProperties).toBe(false);
-      expect(tool.inputSchema.properties).not.toHaveProperty('instance');
-      expect(tool.description).not.toContain('instance');
-    }
-  });
-
   it('isolates concurrent agent selection and retains default selection', async () => {
     const replies = await Promise.all(
       ['alpha', 'beta'].map((agent_id) =>

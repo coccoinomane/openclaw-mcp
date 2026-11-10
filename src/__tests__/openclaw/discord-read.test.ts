@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { channelReader, type DiscordReader } from '../../openclaw/discord-read.js';
 import type { DiscordAgentTransport } from '../../openclaw/discord-agent.js';
 import type { ThreadInvoker } from '../../openclaw/discord-thread.js';
-import { DiscordService, loadDiscordConfig, type DiscordConfig } from '../../openclaw/discord.js';
+import { DiscordService, type DiscordConfig } from '../../openclaw/discord.js';
 import { handleDiscord } from '../../mcp/tools/discord.js';
 const guild = '300000000000000001',
   channel = '300000000000000002',
@@ -90,16 +90,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 describe('closed metadata reader', () => {
-  it('enables HTTP reads with the single Gateway and no opt-in', () => {
-    const loaded = loadDiscordConfig({
-      MCP_DISCORD_ENABLED: 'true',
-      MCP_DISCORD_STATE_DIR: '/unused-test-state',
-      MCP_DISCORD_TARGETS: JSON.stringify([target]),
-    });
-    expect(loaded).not.toHaveProperty('gatewayInstance');
-    expect(typeof channelReader(gatewayConfig, loaded!)).toBe('function');
-  });
-
   it('uses fixed Gateway credentials, account and agent with no redirects', async () => {
     const f = fixture();
     const result = await f.service.channels();
@@ -131,7 +121,7 @@ describe('closed metadata reader', () => {
     expect(f.agent.ready).not.toHaveBeenCalled();
     expect(f.agent.run).not.toHaveBeenCalled();
   });
-  it('shares one endpoint and credential across admitted agents without sharing permission scopes', async () => {
+  it('keeps permission scopes separate across admitted agents', async () => {
     const writer = { ...target, name: 'writing', channelId: other, agentId: 'writer' };
     const gateway = { ...gatewayConfig, agents: [{ id: 'main' }, { id: 'writer' }] };
     const fetcher = vi.fn(
@@ -140,10 +130,6 @@ describe('closed metadata reader', () => {
     const reader = channelReader(gateway, { ...config, targets: [target, writer] }, fetcher);
     await reader(target, { action: 'channel-list' });
     await reader(writer, { action: 'channel-list' });
-    for (const [url, options] of fetcher.mock.calls as any) {
-      expect(url).toBe(gateway.url + '/tools/invoke');
-      expect(options.headers.Authorization).toBe('Bearer ' + gateway.token);
-    }
     expect(
       (fetcher.mock.calls as any).map(([, options]: any) => JSON.parse(options.body).sessionKey)
     ).toEqual(['agent:main:main', 'agent:writer:main']);

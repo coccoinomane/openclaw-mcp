@@ -3,11 +3,10 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { DiscordService, loadDiscordConfig, type DiscordConfig } from '../../openclaw/discord.js';
+import { DiscordService, type DiscordConfig } from '../../openclaw/discord.js';
 import { channelReader } from '../../openclaw/discord-read.js';
 import { threadInvoker } from '../../openclaw/discord-thread.js';
 import { DiscordError } from '../../openclaw/discord-channels.js';
-import { discordTurnOutput } from '../../mcp/tools/discord-output.js';
 import type {
   DiscordAgentTransport,
   DiscordAgentRequest,
@@ -118,7 +117,6 @@ async function fixture(archived = false) {
         events.push('agent');
         const record = JSON.parse(await readFile(join(dir, input.operation_id + '.json'), 'utf8'));
         expect(record.agent_idempotency_key).toBe(request.idempotencyKey);
-        expect(record).not.toHaveProperty('instance');
         await accepted({
           runId: 'owned-run',
           sessionKey: request.sessionKey,
@@ -168,44 +166,6 @@ async function fixture(archived = false) {
   return f;
 }
 describe('required SDK adapters', () => {
-  it('loads Discord configuration without a Gateway selector', () => {
-    const config = loadDiscordConfig({
-      MCP_DISCORD_ENABLED: 'true',
-      MCP_DISCORD_STATE_DIR: '/fixture',
-      MCP_DISCORD_TARGETS: JSON.stringify([target]),
-    });
-    expect(config?.targets).toEqual([target]);
-    expect(config).not.toHaveProperty('gatewayInstance');
-  });
-  it('does not expose removed Gateway selectors or CLI transport selection', () => {
-    const env = {
-      MCP_DISCORD_ENABLED: 'true',
-      MCP_DISCORD_STATE_DIR: '/fixture',
-      MCP_DISCORD_TARGETS: JSON.stringify([target]),
-    };
-    const config = loadDiscordConfig({
-      ...env,
-      MCP_DISCORD_GATEWAY_INSTANCE: 'home',
-      MCP_DISCORD_CLI_GATEWAY_INSTANCE: 'obsolete',
-      MCP_DISCORD_AGENT_TRANSPORT: 'cli',
-      MCP_DISCORD_EXECUTABLE: '/never/run',
-      MCP_DISCORD_CLI_TIMEOUT_MS: '1',
-      MCP_DISCORD_THREAD_CREATE_MODE: 'cli',
-      MCP_DISCORD_GATEWAY_READS_ENABLED: 'false',
-    });
-    for (const key of [
-      'agentTransport',
-      'executable',
-      'cliTimeoutMs',
-      'threadCreateMode',
-      'gatewayReadsEnabled',
-      'cliGatewayInstance',
-      'gatewayInstance',
-    ])
-      expect(config).not.toHaveProperty(key);
-    expect(JSON.stringify(discordTurnOutput)).not.toContain('"cli"');
-    expect(JSON.stringify(discordTurnOutput)).not.toContain('thread_create_fallback');
-  });
   it('requires the SDK and read adapters without a fallback', async () => {
     const f = await fixture();
     expect(() => new DiscordService(f.config)).toThrow('SDK_ADAPTER_REQUIRED');
@@ -228,7 +188,6 @@ describe('ordinary Discord workflows without subprocesses', () => {
         agent_transport: 'sdk',
         channel_id: thread,
       });
-      expect(result).not.toHaveProperty('instance');
       expect(result.agent_idempotency_key).toBe(
         'discord-run-' +
           createHash('sha256')

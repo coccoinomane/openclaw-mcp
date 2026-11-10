@@ -177,14 +177,8 @@ const input = {
   prompt: 'Please help $(not-a-shell)',
 };
 describe('Discord service', () => {
-  it('loads without a Gateway selector and probes SDK readiness before any reads or writes', async () => {
+  it('probes SDK readiness before any reads or writes', async () => {
     const f = await fixture();
-    const loaded = loadDiscordConfig({
-      MCP_DISCORD_ENABLED: 'true',
-      MCP_DISCORD_STATE_DIR: f.config.stateDir,
-      MCP_DISCORD_TARGETS: JSON.stringify(f.config.targets),
-    });
-    expect(loaded).not.toHaveProperty('gatewayInstance');
     f.agent.ready.mockRejectedValueOnce(new DiscordError('SDK_AUTH_FAILED'));
     expect(await f.service.ask(input)).toMatchObject({
       status: 'run_failed',

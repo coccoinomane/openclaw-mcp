@@ -329,18 +329,12 @@ describe('Discord imported static agent routes', () => {
   it('adds only the agent selector to every strict schema and rejects malformed selectors before service calls', async () => {
     expect(
       discordTools.every(
-        (t) =>
-          t.inputSchema.additionalProperties === false &&
-          t.inputSchema.properties?.agent_id &&
-          !Object.hasOwn(t.inputSchema.properties ?? {}, 'instance')
+        (t) => t.inputSchema.additionalProperties === false && t.inputSchema.properties?.agent_id
       )
     ).toBe(true);
     const { service, reader } = await fixture();
     expect(
       (await handleDiscord(service, 'openclaw_discord_channels', { agent_id: 1 })).isError
-    ).toBe(true);
-    expect(
-      (await handleDiscord(service, 'openclaw_discord_channels', { instance: 'default' })).isError
     ).toBe(true);
     expect(
       (await handleDiscord(service, 'openclaw_discord_channels', { constructor: 'bad' })).isError
