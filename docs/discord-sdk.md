@@ -74,7 +74,7 @@ This release has no CLI compatibility mode or aliases. Update the trusted servic
 - Replace `MCP_AGENT_DISCOVERY=cli` with `MCP_AGENT_DISCOVERY=gateway`, or unset discovery and configure a static roster. Remove obsolete CLI discovery selectors, including `MCP_AGENT_DISCOVERY_EXECUTABLE`. Gateway discovery does not import bindings; keep them explicit.
 - Retain `MCP_DISCORD_SDK_AUTH`, `MCP_DISCORD_SDK_STATE_DIR`, existing private operation state, Gateway credentials, bot credentials and Discord permissions. Provision the SDK identity before enabling writes.
 
-Drain active work before swapping releases. Preserve operation records and session locks. An uncertain operation is never safe to replay merely because the service version changed. Inspect its existing thread/run before separately authorizing another operation. A version rollback, if needed, is an operator deployment decision, not an environment switch in this release; review state compatibility first. No Gateway configuration edit, pairing change or Gateway restart is part of the transport migration.
+Drain active work before swapping releases. Preserve operation records and session locks. An uncertain operation is never safe to replay merely because the service version changed. Inspect its existing thread/run before separately authorizing another operation. No Gateway configuration edit, pairing change or Gateway restart is part of the transport migration.
 
 ## Remaining HTTP/REST calls and SDK feasibility
 
