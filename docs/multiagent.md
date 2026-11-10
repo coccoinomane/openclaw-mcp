@@ -10,7 +10,7 @@ This guide shows how to make those existing agents available through the MCP ser
 
 You need a working connection between the MCP server and OpenClaw, and at least two agents already created in OpenClaw. If the connection is not set up yet, follow [basic configuration](configuration.md) first.
 
-You also need a build that includes the multi-agent feature. It is on this repository’s `main` branch; the earlier v1.10.0 release archive does not include it. To build from source, follow [development](development.md).
+Multi-agent support is included in v2.0.0. Download the release archive or build from source following [development](development.md).
 
 An **agent ID** identifies an assistant inside OpenClaw, for example `alice`. One MCP deployment connects to one OpenClaw installation, and several agents can share that connection. Use separate MCP deployments for multiple installations. You do not need a local OpenClaw CLI to retrieve the roster.
 
