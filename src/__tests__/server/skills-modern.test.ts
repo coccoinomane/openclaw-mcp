@@ -58,7 +58,7 @@ describe('Skills and modern MCP', () => {
     expect(entry.resources).toHaveLength(2);
     const main = await skills.read(entry);
     expect(main.verified).toBe(true);
-    expect(main.text).toContain('Direct ask');
+    expect(main.text).toContain('General MCP features');
     const support = await skills.read(entry, 'references/recovery.md');
     expect(support.verified).toBe(true);
     const resources = await client.listResources();
