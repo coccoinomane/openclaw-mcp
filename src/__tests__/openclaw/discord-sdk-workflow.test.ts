@@ -68,6 +68,7 @@ async function fixture(archived = false) {
     stateDir: dir,
     targets: [target],
     acknowledgeInboundRouting: true,
+    threadCreationMode: 'classic',
     threadMember: { userId: '400000000000000006', accountId: 'bot' },
   };
   const events: string[] = [];

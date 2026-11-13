@@ -37,6 +37,7 @@ export interface DiscordConfig {
   maxOperations?: number;
   threadMember?: { userId: string; accountId: string };
   forwardingRequesterName?: string;
+  threadCreationMode?: 'silent-starter' | 'classic';
   acknowledgeInboundRouting?: boolean;
   targets: Array<{
     name: string;
@@ -72,6 +73,8 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
           }
         : undefined,
     forwardingRequesterName: env.MCP_DISCORD_FORWARDING_REQUESTER_NAME || undefined,
+    threadCreationMode: (env.MCP_DISCORD_THREAD_CREATION_MODE ??
+      'silent-starter') as DiscordConfig['threadCreationMode'],
     maxOperations: Number(env.MCP_DISCORD_MAX_OPERATIONS ?? 4),
     acknowledgeInboundRouting: env.MCP_DISCORD_ACKNOWLEDGE_INBOUND_ROUTING === 'true',
   };
@@ -79,6 +82,8 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
   return config;
 }
 function validateConfig(config: DiscordConfig) {
+  if (!['silent-starter', 'classic'].includes(config.threadCreationMode ?? 'silent-starter'))
+    throw new DiscordError('THREAD_CREATION_MODE_INVALID');
   for (const [label, values] of Object.entries({
     targets: config.targets,
     discoveryScopes: config.discoveryScopes === undefined ? [] : config.discoveryScopes,
@@ -229,6 +234,7 @@ interface Operation {
   message_id?: string;
   generation_status?: string;
   thread_create_transport?: 'gateway';
+  starter_message_id?: string;
   member_status?: 'disabled' | 'pending' | 'adding' | 'verified' | 'failed' | 'unknown';
   member_verified?: boolean;
   member_error_code?: string;
@@ -906,7 +912,15 @@ export class DiscordService {
         createDispatched = true;
         op.thread_create_transport = 'gateway';
         await save();
-        const created = await this.invokeThread!(t, input.title, input.operation_id);
+        const created = await this.invokeThread!(
+          t,
+          input.title,
+          input.operation_id,
+          async (messageId) => {
+            op.starter_message_id = messageId;
+            await save();
+          }
+        );
         id = created.thread?.id;
         check(id, snowflake, 'created thread ID');
         if (id === t.channelId) throw new DiscordError('CREATED_THREAD_ID_INVALID', true);

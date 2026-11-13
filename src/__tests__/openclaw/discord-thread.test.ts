@@ -21,6 +21,7 @@ const target = {
   normalRouting: true,
 };
 const base: DiscordConfig = {
+  threadCreationMode: 'classic',
   stateDir: '/unused-test-state',
   targets: [target],
   threadMember: { userId: owner, accountId: 'bot' },
@@ -61,7 +62,48 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
   const record = async () =>
     JSON.parse(await readFile(join(stateDir, input.operation_id + '.json'), 'utf8'));
   const gateway = vi.fn(async (_url: any, opts: any) => {
+    if (String(_url).startsWith('https://discord.com/')) {
+      events.push('starter-' + opts.method);
+      if (opts.method === 'GET')
+        expect(await record()).toMatchObject({ starter_message_id: thread, status: 'creating' });
+      return new Response(
+        JSON.stringify({
+          id: thread,
+          channel_id: channel,
+          author: { id: owner, bot: true },
+          content: input.title,
+          flags: 4100,
+          mention_everyone: false,
+          mentions: [],
+          mention_roles: [],
+        })
+      );
+    }
     const args = JSON.parse(opts.body).args;
+    if (args.action === 'permissions') {
+      events.push(args.action);
+      return envelope({
+        ok: true,
+        permissions: {
+          channelId: channel,
+          guildId: guild,
+          channelType: 0,
+          isDm: false,
+          permissions: [
+            'ViewChannel',
+            'SendMessages',
+            'ReadMessageHistory',
+            'CreatePublicThreads',
+            'SendMessagesInThreads',
+          ],
+        },
+      });
+    }
+    if (args.action === 'thread-create' && args.messageId)
+      expect(await record()).toMatchObject({
+        starter_message_id: args.messageId,
+        status: 'creating',
+      });
     events.push(args.action);
     if (args.action === 'thread-create') return envelope({ ok: true, thread: { id: thread } });
     return envelope({
@@ -103,7 +145,7 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
       undefined,
       undefined,
       channelReader(gatewayConfig, config, gateway),
-      threadInvoker(gatewayConfig, config, gateway),
+      threadInvoker(gatewayConfig, config, gateway, env),
       threadMemberAdder(config, env, member),
       async (_t, _id, _prompt, _op, sent) => {
         events.push('publish');
@@ -117,7 +159,7 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
   return { config, events, gateway, member, agent, record, service: service(), restart: service };
 }
 
-describe('Gateway-only new threads', () => {
+describe('Classic new threads', () => {
   it('persists thread then verified owner membership before ordinary SDK turn; replay is read-only', async () => {
     const f = await fixture();
     const result = await finished(f.service, input);
@@ -337,6 +379,87 @@ describe('Gateway-only new threads', () => {
   );
 });
 
+describe('Silent starter threads', () => {
+  it('defaults to a verified silent title starter without duplicating the prompt', async () => {
+    const f = await fixture({ threadCreationMode: undefined });
+    const result = await finished(f.service, input);
+    expect(result).toMatchObject({
+      status: 'completed',
+      starter_message_id: thread,
+      channel_id: thread,
+    });
+    expect(f.events).toEqual([
+      'channel-info',
+      'permissions',
+      'starter-POST',
+      'starter-GET',
+      'thread-create',
+      'channel-info',
+      'PUT',
+      'GET',
+      'publish',
+      'agent',
+    ]);
+    const post = f.gateway.mock.calls.find(
+      ([url, opts]) => String(url).startsWith('https://discord.com/') && opts.method === 'POST'
+    )!;
+    expect(JSON.parse(post[1].body)).toEqual({
+      content: input.title,
+      flags: 4100,
+      allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
+      nonce: expect.any(String),
+      enforce_nonce: true,
+    });
+    expect(JSON.parse(post[1].body).nonce.length).toBeLessThanOrEqual(25);
+    const create = f.gateway.mock.calls
+      .map(([, opts]) => opts.body && JSON.parse(opts.body))
+      .find((body) => body?.args?.action === 'thread-create');
+    expect(create.args.messageId).toBe(thread);
+    const calls = f.gateway.mock.calls.length;
+    expect(await f.restart().ask(input)).toEqual(result);
+    expect(f.gateway).toHaveBeenCalledTimes(calls);
+  });
+  it.each(['permissions', 'readback', 'create-timeout'])(
+    'stops safely on %s and never repeats effects on replay',
+    async (failure) => {
+      const f = await fixture({ threadCreationMode: 'silent-starter' });
+      const original = f.gateway.getMockImplementation()!;
+      f.gateway.mockImplementation(async (url, opts) => {
+        const args = opts.body && JSON.parse(opts.body).args;
+        if (failure === 'permissions' && args?.action === 'permissions')
+          return envelope({
+            ok: true,
+            permissions: {
+              channelId: channel,
+              guildId: guild,
+              channelType: 0,
+              isDm: false,
+              permissions: [],
+            },
+          });
+        if (
+          failure === 'readback' &&
+          String(url).startsWith('https://discord.com/') &&
+          opts.method === 'GET'
+        )
+          return new Response(JSON.stringify({ flags: 4 }));
+        if (failure === 'create-timeout' && args?.action === 'thread-create')
+          throw new Error('timeout');
+        return original(url, opts);
+      });
+      const result = await finished(f.service, input);
+      expect(result.status).not.toBe('completed');
+      expect(f.agent.run).not.toHaveBeenCalled();
+      if (failure === 'permissions') expect(f.events).not.toContain('starter-POST');
+      else expect(await f.record()).toMatchObject({ starter_message_id: thread });
+      if (failure === 'readback') expect(f.events).not.toContain('thread-create');
+      const calls = f.gateway.mock.calls.length;
+      expect(await f.restart().ask(input)).toEqual(result);
+      expect(f.gateway).toHaveBeenCalledTimes(calls);
+    }
+  );
+});
+
 describe('operator configuration and closed inputs', () => {
   it('requires explicit opt-in with bounded configuration and credentials', () => {
     const vars = {
@@ -346,7 +469,15 @@ describe('operator configuration and closed inputs', () => {
     };
     expect(loadDiscordConfig(vars)).toMatchObject({
       threadMember: undefined,
+      threadCreationMode: 'silent-starter',
     });
+    expect(
+      loadDiscordConfig({ ...vars, MCP_DISCORD_THREAD_CREATION_MODE: 'classic' })
+        ?.threadCreationMode
+    ).toBe('classic');
+    expect(() =>
+      loadDiscordConfig({ ...vars, MCP_DISCORD_THREAD_CREATION_MODE: 'invalid' })
+    ).toThrow('THREAD_CREATION_MODE_INVALID');
     expect(threadInvoker(gatewayConfig, base)).toEqual(expect.any(Function));
     expect(threadMemberAdder({ ...base, threadMember: undefined }, env)).toBeUndefined();
     expect(() =>

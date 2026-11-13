@@ -132,6 +132,7 @@ const turn: OutputSchema = {
     message_id: string,
     generation_status: string,
     thread_create_transport: { type: 'string', enum: ['gateway'] },
+    starter_message_id: string,
     member_status: {
       type: 'string',
       enum: ['disabled', 'pending', 'adding', 'verified', 'failed', 'unknown'],

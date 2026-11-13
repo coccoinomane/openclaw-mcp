@@ -2,18 +2,22 @@ import { assertTargetAllowed } from './discord-policy.js';
 import { assertServiceProvenance, DiscordError, type AdmittedTarget } from './discord-channels.js';
 import type { DiscordConfig } from './discord.js';
 import type { GatewayConfig } from './types.js';
+import { createHash } from 'node:crypto';
+import { channelReader } from './discord-read.js';
 
 export type ThreadInvoker = (
   target: AdmittedTarget,
   title: string,
-  operation: string
+  operation: string,
+  starterSaved?: (messageId: string) => Promise<void>
 ) => Promise<any>;
 
 /** Fixed message/thread-create request; never a general Gateway proxy. */
 export function threadInvoker(
   gateway: GatewayConfig,
   config: DiscordConfig,
-  fetcher = fetch
+  fetcher = fetch,
+  env = process.env
 ): ThreadInvoker {
   const { url: gatewayUrl, token } = gateway;
   if (!token) throw new DiscordError('THREAD_GATEWAY_CONFIGURATION_INVALID');
@@ -25,7 +29,7 @@ export function threadInvoker(
       !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))
   )
     throw new DiscordError('INSECURE_GATEWAY_URL');
-  return async (target, title, operation) => {
+  return async (target, title, operation, starterSaved) => {
     assertServiceProvenance();
     assertTargetAllowed(config, target, undefined, 'THREAD_SCOPE_DENIED');
     if (
@@ -37,6 +41,100 @@ export function threadInvoker(
       !/^[a-zA-Z0-9_-]{16,100}$/.test(operation)
     )
       throw new DiscordError('THREAD_ARGUMENTS_INVALID');
+    let messageId: string | undefined;
+    if ((config.threadCreationMode ?? 'silent-starter') === 'silent-starter') {
+      const botToken = env.DISCORD_BOT_TOKEN;
+      if (!botToken || /\s/.test(botToken)) throw new DiscordError('STARTER_CREDENTIAL_MISSING');
+      if (target.accountId !== config.threadMember?.accountId)
+        throw new DiscordError('STARTER_ACCOUNT_MISMATCH');
+      if (!starterSaved) throw new DiscordError('STARTER_JOURNAL_REQUIRED');
+      const { permissions: p } = await channelReader(
+        gateway,
+        config,
+        fetcher
+      )(target, {
+        action: 'permissions',
+        channelId: target.channelId,
+      });
+      if (
+        !p ||
+        p.channelId !== target.channelId ||
+        p.guildId !== target.guildId ||
+        p.isDm !== false ||
+        ![0, 5].includes(p.channelType) ||
+        !Array.isArray(p.permissions) ||
+        ![
+          'ViewChannel',
+          'SendMessages',
+          'ReadMessageHistory',
+          'CreatePublicThreads',
+          'SendMessagesInThreads',
+        ].every((name) => p.permissions.includes(name))
+      )
+        throw new DiscordError('STARTER_PERMISSIONS_DENIED');
+      const endpoint = 'https://discord.com/api/v10/channels/' + target.channelId + '/messages';
+      const request = async (method: 'POST' | 'GET', suffix = '') => {
+        try {
+          return await fetcher(endpoint + suffix, {
+            method,
+            redirect: 'error',
+            signal: AbortSignal.timeout(30000),
+            headers: { Authorization: 'Bot ' + botToken, 'Content-Type': 'application/json' },
+            ...(method === 'POST'
+              ? {
+                  body: JSON.stringify({
+                    content: title,
+                    flags: 4 | 4096,
+                    allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
+                    nonce: createHash('sha256')
+                      .update('thread-starter:' + operation)
+                      .digest('hex')
+                      .slice(0, 25),
+                    enforce_nonce: true,
+                  }),
+                }
+              : {}),
+          });
+        } catch {
+          throw new DiscordError('STARTER_OUTCOME_UNKNOWN', true);
+        }
+      };
+      const sent = await request('POST');
+      if (!sent.ok) throw new DiscordError('STARTER_HTTP_' + sent.status, true);
+      let posted: any;
+      try {
+        posted = await sent.json();
+      } catch {
+        throw new DiscordError('STARTER_UNVERIFIED', true);
+      }
+      if (typeof posted.id !== 'string' || !snowflake.test(posted.id))
+        throw new DiscordError('STARTER_UNVERIFIED', true);
+      messageId = posted.id;
+      await starterSaved(messageId!);
+      const read = await request('GET', '/' + messageId);
+      if (!read.ok) throw new DiscordError('STARTER_READ_HTTP_' + read.status, true);
+      let verified: any;
+      try {
+        verified = await read.json();
+      } catch {
+        throw new DiscordError('STARTER_UNVERIFIED', true);
+      }
+      if (
+        verified.id !== messageId ||
+        verified.channel_id !== target.channelId ||
+        verified.author?.bot !== true ||
+        verified.author?.id !== posted.author?.id ||
+        verified.content !== title ||
+        !Number.isInteger(verified.flags) ||
+        (verified.flags & 4100) !== 4100 ||
+        verified.mention_everyone !== false ||
+        !Array.isArray(verified.mentions) ||
+        verified.mentions.length ||
+        !Array.isArray(verified.mention_roles) ||
+        verified.mention_roles.length
+      )
+        throw new DiscordError('STARTER_UNVERIFIED', true);
+    }
     let response: Response;
     try {
       response = await fetcher(url.toString(), {
@@ -54,6 +152,7 @@ export function threadInvoker(
             accountId: target.accountId,
             channelId: target.channelId,
             threadName: title,
+            ...(messageId ? { messageId } : {}),
           },
         }),
       });
@@ -75,7 +174,11 @@ export function threadInvoker(
       const failed =
         body.ok !== true || body.result?.isError || result?.ok !== true || result?.isError;
       // Preserve a known identity even when the tool reports a partial/failed write.
-      if (typeof result?.thread?.id === 'string' && snowflake.test(result.thread.id))
+      if (
+        typeof result?.thread?.id === 'string' &&
+        snowflake.test(result.thread.id) &&
+        (!messageId || result.thread.id === messageId)
+      )
         return { thread: { id: result.thread.id }, partial: Boolean(failed || result.partial) };
       throw new Error();
     } catch {

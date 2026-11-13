@@ -332,7 +332,12 @@ describe('batched allowlist discovery', () => {
       ).toMatchObject({ status: 'queued', channel_id: other });
       await service.drain();
       expect(invokeThread).toHaveBeenCalledTimes(1);
-      expect(invokeThread).toHaveBeenCalledWith(target, 'Task', 'reader-ask-test-001');
+      expect(invokeThread).toHaveBeenCalledWith(
+        target,
+        'Task',
+        'reader-ask-test-001',
+        expect.any(Function)
+      );
       expect(agent.ready).toHaveBeenCalledTimes(1);
       expect(agent.ready.mock.invocationCallOrder[0]).toBeLessThan(
         invokeThread.mock.invocationCallOrder[0]

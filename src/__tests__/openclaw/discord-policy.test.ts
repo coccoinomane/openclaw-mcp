@@ -435,7 +435,11 @@ describe('policy interactions', () => {
     const fetcher = vi.fn(async () => new Response('', { status: 403 }));
     const t = dynamicTarget(scope, channel);
     await expect(
-      threadInvoker(gatewayConfig, config, fetcher)!(t, 'Task', 'policy-operation-002')
+      threadInvoker(gatewayConfig, { ...config, threadCreationMode: 'classic' }, fetcher)!(
+        t,
+        'Task',
+        'policy-operation-002'
+      )
     ).rejects.toThrow('GATEWAY_HTTP_403');
     await expect(
       threadMemberAdder(config, { DISCORD_BOT_TOKEN: 'mock' }, fetcher)!(t, thread)
