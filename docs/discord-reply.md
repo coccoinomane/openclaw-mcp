@@ -4,6 +4,8 @@ The shared MCP tool openclaw_discord_reply accepts target, channel_id, prompt an
 
 Existing-thread replies share the [single-Gateway Discord setup](discord-skills.md#one-gateway-connection-per-mcp-service). They do not create a thread. Agent execution always uses the [Gateway SDK](discord-sdk.md); destination, permission and exact-message reads use the Gateway HTTP adapter. No OpenClaw CLI is invoked.
 
+Forwarded requests in both new and existing threads suppress embeds and push/desktop notifications (flags 4 | 4096), including requests sent as attachments. Unread indicators may remain. Agent-response notification behavior is unchanged.
+
 ## Routing
 
 Like new-thread handoffs, replies use operator-configured normalRouting and acknowledgeInboundRouting, with the canonical session agent:<configuredAgent>:discord:channel:<threadId>. The SDK agent request supplies that sessionKey; Gateway owns admission and queueing. Runtime thread rebindings are unsupported.

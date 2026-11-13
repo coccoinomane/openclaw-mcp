@@ -51,7 +51,7 @@ export function requestPublisher(
     const payload = {
       content,
       allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
-      flags: 4,
+      flags: 4 | 4096, // Suppress embeds and push/desktop notifications for forwarded requests.
       nonce: createHash('sha256').update(operation).digest('hex').slice(0, 25),
       enforce_nonce: true,
       ...(attachment ? { attachments: [{ id: 0, filename: 'richiesta.txt' }] } : {}),

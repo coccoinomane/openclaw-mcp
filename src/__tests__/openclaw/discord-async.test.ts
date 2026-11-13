@@ -281,6 +281,7 @@ describe('closed request publication', () => {
           roles: [],
           replied_user: false,
         });
+        expect(body.flags).toBe(4 | 4096);
         posted = {
           id: message,
           channel_id: thread,

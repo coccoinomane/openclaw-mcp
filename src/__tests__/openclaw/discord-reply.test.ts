@@ -520,6 +520,7 @@ describe('existing public thread replies', () => {
             roles: [],
             replied_user: false,
           });
+          expect(posted.flags).toBe(4 | 4096);
           expect(posted.enforce_nonce).toBe(true);
         } else if (address !== base + '/400000000000000004' || init?.method !== 'GET') {
           throw new Error('Unexpected network effect: ' + address);
