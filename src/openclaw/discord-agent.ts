@@ -1,3 +1,4 @@
+import { selectSessionModel } from './models.js';
 import {
   GatewayClient,
   GatewayClientRequestError,
@@ -23,6 +24,7 @@ export type DiscordAgentRequest = {
 };
 export interface DiscordAgentTransport {
   ready(): Promise<void>;
+  selectModel?(key: string, model: string): Promise<void>;
   run(
     request: DiscordAgentRequest,
     accepted: (receipt: AgentReceipt) => Promise<void>
@@ -194,6 +196,9 @@ export function discordAgentTransport(
     await client.stopAndWait({ timeoutMs: 1_000 }).catch(() => undefined);
   }
   return {
+    async selectModel(key, model) {
+      await selectSessionModel(gateway, key, model);
+    },
     async ready() {
       const client = await connect();
       await close(client);

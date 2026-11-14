@@ -15,3 +15,5 @@ export {
 } from './tasks.js';
 
 export { openclawAgentsTool, handleOpenclawAgents } from './agents.js';
+
+export { openclawModelsTool, handleOpenclawModels } from './models.js';

@@ -157,3 +157,9 @@ Generated conversation keys use the configured issuer hostname (`MCP_ISSUER_URL`
 ## Agent selection
 
 See [multiagent configuration](multiagent.md) for Gateway SDK roster discovery, explicit catalogs, `agent_id` selectors, Discord mapping precedence and the shared trust model. Every authenticated client can select every configured agent; generic chat requires no Discord mapping.
+
+### Session model selection
+
+`openclaw_models` lists selectable models for `agent_id` (the configured default when omitted). `openclaw_chat` accepts `model` only when starting a new session; `openclaw_discord_ask` applies it to the newly created thread session. Follow-ups keep the selection. Discord reply and async chat do not expose an override. A failed selection stops the turn; preserve the returned conversation/thread and operation identifiers rather than retrying blindly.
+
+The Gateway performs model-policy validation. Listing availability is not a credential or inference test. Model calls reuse the MCP-owned discovery identity/state: `MCP_MODEL_AUTH=device` (default) requires a paired device with `operator.read` for listing and `operator.write` for selection. `local-shared-token` is restricted to literal loopback with the configured Gateway token; it does not require an admin scope.

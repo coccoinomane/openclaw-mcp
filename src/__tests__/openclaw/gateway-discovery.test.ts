@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayClientOptions } from '@openclaw/gateway-client';
 import {
   discoverGatewayAgents,
+  gatewayModelRequest,
   type DiscoveryClientFactory,
 } from '../../openclaw/gateway-discovery.js';
 import { gatewayDiscoveryAuth } from '../../openclaw/gateway-discovery-auth.js';
@@ -318,4 +319,50 @@ describe('discovery device credentials', () => {
       expect(() => gatewayDiscoveryAuth('wss://a.example/', env)).toThrow();
     }
   );
+});
+
+describe('model RPC grants', () => {
+  it('negotiates model selection policy and agent scope with read access', async () => {
+    const transport = fake(undefined, { models: [] });
+    await gatewayModelRequest(
+      local,
+      { method: 'models.list', params: { agentId: 'writer', view: 'configured' } },
+      env,
+      transport.create
+    );
+    expect(transport.options[0]).toMatchObject({
+      caps: ['model-selection-policy'],
+      scopes: ['operator.read'],
+    });
+    expect(transport.clients[0].request).toHaveBeenCalledWith(
+      'models.list',
+      { agentId: 'writer', view: 'configured' },
+      { timeoutMs: 30000 }
+    );
+  });
+  it('requests write for session selection and permits shared tokens only on literal loopback', async () => {
+    const transport = fake(undefined, { ok: true });
+    const request = {
+      method: 'sessions.patch' as const,
+      params: { key: 'agent:main:mcp:new', model: 'p/m' },
+    };
+    await gatewayModelRequest(
+      local,
+      request,
+      { ...env, MCP_MODEL_AUTH: 'local-shared-token' },
+      transport.create
+    );
+    expect(transport.options[0]).toMatchObject({
+      token: local.token,
+      scopes: ['operator.read', 'operator.write'],
+    });
+    await expect(
+      gatewayModelRequest(
+        { ...local, url: 'https://remote.example' },
+        request,
+        { ...env, MCP_MODEL_AUTH: 'local-shared-token' },
+        transport.create
+      )
+    ).rejects.toThrow('literal loopback');
+  });
 });

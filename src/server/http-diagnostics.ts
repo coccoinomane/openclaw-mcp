@@ -12,6 +12,7 @@ const toolNames = new Set([
   tools.openclawTaskListTool.name,
   tools.openclawTaskCancelTool.name,
   tools.openclawAgentsTool.name,
+  tools.openclawModelsTool.name,
   ...discordTools.map((tool) => tool.name),
 ]);
 const methods = new Set([

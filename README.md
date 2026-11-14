@@ -17,9 +17,11 @@ The first bot message contains your unchanged request. Operators can set `MCP_DI
 
 Discord is **off by default**, so its tools are hidden unless `MCP_DISCORD_ENABLED=true`. Configure explicit guild/account/agent discovery scopes: an empty channel whitelist includes all supported channels in those scopes, while the blacklist always wins. Legacy target allowlists still work. Credentials and verified normal channel routing are required. Provision the [SDK service identity](docs/discord-sdk.md#service-authentication). See the [Discord setup guide](docs/discord-skills.md). Upgrading from a CLI-based release requires [removing obsolete settings](docs/discord-sdk.md#upgrade-from-cli-based-releases); there are no compatibility aliases. The packaged coordinator skill is available through the modern MCP Skills extension or legacy resources.
 
-`openclaw_discord_reply` adds existing-public-thread handoff to the shared tool set (13 tools with Discord enabled, 7 without). It reuses configured normal routing and Gateway-backed dispatch for active or archived unlocked public threads. See [existing-thread requirements](docs/discord-reply.md).
+`openclaw_discord_reply` adds existing-public-thread handoff to the shared tool set (14 tools with Discord enabled, 8 without). It reuses configured normal routing and Gateway-backed dispatch for active or archived unlocked public threads. See [existing-thread requirements](docs/discord-reply.md).
 
 All six Discord tools advertise MCP `outputSchema` and validate `structuredContent`, while retaining JSON text responses. Thread names and archive timestamps/cursors are optional strings; `archived` is an optional boolean. Malformed values return a tool error rather than a success payload. These schemas do not change OpenClaw CodeMode type generation; clients decide how to consume them.
+
+Call `openclaw_models` for the target agent before choosing a model. `openclaw_chat` (new sessions only) and `openclaw_discord_ask` accept an optional `model` that stays with the new session. Omission keeps the current defaults; Discord replies and async chat cannot change the model. OpenClaw validates the selection, without an extra inference probe.
 
 ## Install this fork
 

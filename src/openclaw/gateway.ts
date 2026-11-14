@@ -1,3 +1,4 @@
+import { listModels, selectSessionModel } from './models.js';
 import { OpenClawClient } from './client.js';
 import type { GatewayConfig } from './types.js';
 
@@ -42,6 +43,15 @@ export class OpenClawGateway {
       timeoutMs: this.config.timeout,
       model: this.model,
     });
+  }
+
+  async models(selector?: string) {
+    const { agentId } = this.resolve(selector);
+    if (!agentId) throw new Error('Select an agent_id from openclaw_agents');
+    return listModels(this.config, agentId);
+  }
+  async selectModel(key: string, model: string) {
+    return selectSessionModel(this.config, key, model);
   }
 
   getDefault(): OpenClawClient {

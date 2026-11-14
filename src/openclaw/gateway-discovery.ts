@@ -1,4 +1,8 @@
-import { GatewayClient, type GatewayClientOptions } from '@openclaw/gateway-client';
+import {
+  GatewayClient,
+  GatewayClientRequestError,
+  type GatewayClientOptions,
+} from '@openclaw/gateway-client';
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from '@openclaw/gateway-protocol/client-info';
 import { readConnectErrorDetailCode } from '@openclaw/gateway-protocol/connect-error-details';
 import { SERVER_VERSION } from '../config/constants.js';
@@ -14,13 +18,38 @@ export type GatewayRosterLoader = (
 const READY_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 
-/** Only agents.list is exposed here; this is not a general RPC adapter. */
+type ModelRequest =
+  | { method: 'models.list'; params: { agentId: string; view: 'configured' } }
+  | { method: 'sessions.patch'; params: { key: string; model: string } };
+
+export async function gatewayModelRequest(
+  config: GatewayConfig,
+  request: ModelRequest,
+  env = process.env,
+  createClient?: DiscoveryClientFactory
+): Promise<any> {
+  return requestGateway(config, env, createClient, request);
+}
+
 export async function discoverGatewayAgents(
   config: GatewayConfig,
   env: NodeJS.ProcessEnv = process.env,
-  createClient: DiscoveryClientFactory = (options) => new GatewayClient(options)
+  createClient?: DiscoveryClientFactory
 ): Promise<unknown> {
-  const fail = (reason: string) => new Error('Gateway agent discovery: ' + reason);
+  return requestGateway(config, env, createClient);
+}
+
+/** Closed roster/model operations; never accepts client-supplied RPC methods. */
+async function requestGateway(
+  config: GatewayConfig,
+  env: NodeJS.ProcessEnv = process.env,
+  createClient: DiscoveryClientFactory = (options) => new GatewayClient(options),
+  modelRequest?: ModelRequest
+): Promise<unknown> {
+  const fail = (reason: string) =>
+    new Error((modelRequest ? 'Gateway models: ' : 'Gateway agent discovery: ') + reason);
+  if (modelRequest && !['device', 'local-shared-token'].includes(env.MCP_MODEL_AUTH ?? 'device'))
+    throw fail('invalid MCP_MODEL_AUTH');
   let url: URL;
   try {
     url = new URL(config.url);
@@ -37,9 +66,16 @@ export async function discoverGatewayAgents(
   } catch {
     throw fail('use HTTPS (or loopback HTTP) without URL credentials, query or fragment');
   }
+  const localShared = modelRequest && env.MCP_MODEL_AUTH === 'local-shared-token';
+  if (localShared && (!['127.0.0.1', '[::1]'].includes(url.hostname) || !config.token))
+    throw fail('local-shared-token model access requires literal loopback and a Gateway token');
+  const scopes =
+    modelRequest?.method === 'sessions.patch'
+      ? ['operator.read', 'operator.write']
+      : ['operator.read'];
   let auth: ReturnType<typeof gatewayDiscoveryAuth>;
   try {
-    auth = gatewayDiscoveryAuth(url.toString(), env);
+    auth = gatewayDiscoveryAuth(url.toString(), env, { identityOnly: !!localShared });
   } catch {
     throw fail(
       'cannot load private device state; check the discovery state directory and permissions'
@@ -50,7 +86,7 @@ export async function discoverGatewayAgents(
 
   let client: DiscoveryClient | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let reason = 'connection or agents.list request failed';
+  let reason = 'connection or ' + (modelRequest?.method ?? 'agents.list') + ' request failed';
   let connecting = true;
   let result: unknown;
   let failure: Error | undefined;
@@ -72,7 +108,7 @@ export async function discoverGatewayAgents(
           auth.identity.deviceId +
           '; review and approve its current request with openclaw devices list/approve on this Gateway, then retry';
       } else if (code === 'AUTH_SCOPE_MISMATCH') {
-        reason = 'device token lacks operator.read; review the device pairing grant';
+        reason = 'device token lacks ' + scopes.join('/') + '; review the device pairing grant';
       } else if (code?.startsWith('AUTH_')) {
         reason = 'Gateway authentication failed; check the configured token or device grant';
       }
@@ -84,7 +120,7 @@ export async function discoverGatewayAgents(
     }, READY_TIMEOUT_MS);
     client = createClient({
       url: url.toString(),
-      token: auth.hasToken ? undefined : config.token,
+      token: localShared ? config.token : auth.hasToken ? undefined : config.token,
       deviceIdentity: auth.identity,
       hostDeps: auth.hostDeps,
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
@@ -92,8 +128,8 @@ export async function discoverGatewayAgents(
       clientVersion: SERVER_VERSION,
       mode: GATEWAY_CLIENT_MODES.BACKEND,
       role: 'operator',
-      scopes: ['operator.read'],
-      caps: [],
+      scopes,
+      caps: modelRequest ? ['model-selection-policy'] : [],
       minProtocol: 4,
       maxProtocol: 4,
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
@@ -113,9 +149,16 @@ export async function discoverGatewayAgents(
     }
     await started;
     clearTimeout(timer);
-    result = await client.request('agents.list', {}, { timeoutMs: REQUEST_TIMEOUT_MS });
-  } catch {
-    failure = fail(reason);
+    result = await client.request(
+      modelRequest?.method ?? 'agents.list',
+      modelRequest?.params ?? {},
+      { timeoutMs: REQUEST_TIMEOUT_MS }
+    );
+  } catch (error) {
+    failure =
+      modelRequest && error instanceof GatewayClientRequestError
+        ? new Error('Gateway model selection: ' + error.message)
+        : fail(reason);
   } finally {
     connecting = false;
     clearTimeout(timer);

@@ -1,3 +1,4 @@
+import { checkModel } from './models.js';
 import {
   assertChannelAllowed,
   assertTargetAllowed,
@@ -235,6 +236,8 @@ interface Operation {
   generation_status?: string;
   thread_create_transport?: 'gateway';
   starter_message_id?: string;
+  model?: string;
+  model_error?: string;
   member_status?: 'disabled' | 'pending' | 'adding' | 'verified' | 'failed' | 'unknown';
   member_verified?: boolean;
   member_error_code?: string;
@@ -810,8 +813,18 @@ export class DiscordService {
       )
         throw new Error('Invalid thread title or channel_id');
     }
+    checkModel(input.model);
     const fingerprint = createHash('sha256')
-      .update(JSON.stringify([t, input.mode, input.title, input.channel_id, input.prompt]))
+      .update(
+        JSON.stringify([
+          t,
+          input.mode,
+          input.title,
+          input.channel_id,
+          input.prompt,
+          ...(input.model !== undefined ? [input.model] : []),
+        ])
+      )
       .digest('hex');
     await mkdir(this.config.stateDir, { recursive: true, mode: 0o700 });
     const state = await lstat(this.config.stateDir);
@@ -846,6 +859,7 @@ export class DiscordService {
     }
     const op: Operation = {
       fingerprint,
+      ...(input.model !== undefined ? { model: input.model } : {}),
       agent_id: t.agentId,
       agent_transport: 'sdk',
       agent_idempotency_key:
@@ -939,6 +953,16 @@ export class DiscordService {
       op.channel_id = id;
       op.discord_url = 'https://discord.com/channels/' + t.guildId + '/' + id;
       op.session_key = await this.ordinaryRoute(t, id);
+      if (!replying && input.model !== undefined) {
+        if (!this.agent?.selectModel) throw new DiscordError('MODEL_SELECTION_UNSUPPORTED');
+        try {
+          await this.agent.selectModel(op.session_key, input.model);
+        } catch (error) {
+          op.model_error = error instanceof Error ? error.message : 'Model selection failed';
+          throw new DiscordError('MODEL_SELECTION_FAILED');
+        }
+        await save();
+      }
       if (!replying && this.config.threadMember) {
         op.member_status = 'adding';
         await save();

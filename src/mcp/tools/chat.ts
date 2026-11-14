@@ -1,3 +1,4 @@
+import { modelParameter, checkModel } from '../../openclaw/models.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { OpenClawGateway } from '../../openclaw/gateway.js';
 import {
@@ -21,6 +22,7 @@ export const openclawChatTool: Tool = {
     type: 'object',
     additionalProperties: false,
     properties: {
+      model: modelParameter,
       message: {
         type: 'string',
         description: 'The message to send to OpenClaw',
@@ -69,11 +71,17 @@ export async function handleOpenclawChat(
   let resolvedConversation = false;
   let agentId: string | undefined;
   try {
+    checkModel(input.model);
+    if (input.model !== undefined && sessionId !== undefined)
+      throw new Error('model can only be selected when starting a new session; omit session_id');
     const resolved = resolveConversation(gateway, input.agent_id, sessionId);
     const { client } = resolved;
     agentId = resolved.agentId;
+    if (input.model !== undefined && !agentId)
+      throw new Error('Select an agent_id from openclaw_agents before choosing a model');
     resolvedConversation = true;
     sessionId ??= createConversationKey(context, agentId);
+    if (input.model !== undefined) await gateway.selectModel(sessionId, input.model);
     const response = await client.chat(msgResult.value, sessionId);
     return withConversation(successResponse(response.response), sessionId, agentId);
   } catch (error) {

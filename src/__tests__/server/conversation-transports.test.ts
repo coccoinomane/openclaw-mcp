@@ -229,7 +229,7 @@ describe('conversation metadata across real MCP transports', () => {
       }
       cleanups.push(() => client.close());
       const listing = await client.listTools();
-      expect(listing.tools).toHaveLength(13);
+      expect(listing.tools).toHaveLength(14);
       for (const tool of discordTools) {
         expect(listing.tools.find((t) => t.name === tool.name)?.outputSchema).toEqual(
           tool.outputSchema
@@ -325,6 +325,7 @@ describe('conversation metadata across real MCP transports', () => {
         'openclaw_agents',
         'openclaw_chat',
         'openclaw_chat_async',
+        'openclaw_models',
         'openclaw_status',
         'openclaw_task_cancel',
         'openclaw_task_list',

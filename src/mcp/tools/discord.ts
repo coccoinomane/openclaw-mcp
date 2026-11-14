@@ -1,3 +1,4 @@
+import { modelParameter } from '../../openclaw/models.js';
 import {
   discordChannelsOutput,
   discordThreadsOutput,
@@ -69,6 +70,7 @@ export const discordTools: Tool[] = [
         target,
         operation_id: operation,
         mode: { type: 'string', enum: ['new_thread'] },
+        model: modelParameter,
         title: { type: 'string', minLength: 1, maxLength: 100 },
         prompt: {
           type: 'string',

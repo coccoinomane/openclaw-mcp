@@ -106,6 +106,7 @@ function toolSet(
     ['openclaw_task_status', (input) => tools.handleOpenclawTaskStatus(gateway, input, ownerId)],
     ['openclaw_task_list', (input) => tools.handleOpenclawTaskList(gateway, input, ownerId)],
     ['openclaw_task_cancel', (input) => tools.handleOpenclawTaskCancel(gateway, input, ownerId)],
+    ['openclaw_models', (input) => tools.handleOpenclawModels(gateway, input)],
     ['openclaw_agents', (input) => tools.handleOpenclawAgents(gateway, input)],
   ]);
 
@@ -117,6 +118,7 @@ function toolSet(
     tools.openclawTaskListTool,
     tools.openclawTaskCancelTool,
     tools.openclawAgentsTool,
+    tools.openclawModelsTool,
   ];
 
   if (deps.discord) {

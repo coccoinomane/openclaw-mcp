@@ -128,6 +128,7 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
       : new Response(JSON.stringify({ id: thread, user_id: owner }));
   });
   const agent = {
+    selectModel: vi.fn(async (_key: string, _model: string) => {}),
     ready: vi.fn(async () => {}),
     run: vi.fn(async (_request: DiscordAgentRequest) => {
       events.push('agent');
@@ -569,8 +570,50 @@ describe('operator configuration and closed inputs', () => {
       'target',
       'operation_id',
       'mode',
+      'model',
       'title',
       'prompt',
     ]);
+  });
+});
+
+describe('new-thread model selection', () => {
+  it('pins before publishing or running and includes model in replay identity', async () => {
+    const f = await fixture();
+    const select = vi.fn(async () => {
+      expect(f.events).not.toContain('publish');
+      expect(f.agent.run).not.toHaveBeenCalled();
+    });
+    f.agent.selectModel = select;
+    const args = { ...input, model: 'p/m' };
+    const result = await finished(f.service, args);
+    expect(result).toMatchObject({ status: 'completed', model: 'p/m' });
+    expect(select).toHaveBeenCalledWith('agent:main:discord:channel:' + thread, 'p/m');
+    await f.service.ask(args);
+    expect(select).toHaveBeenCalledTimes(1);
+    await expect(f.service.ask({ ...args, model: 'p/other' })).rejects.toThrow(
+      'different arguments'
+    );
+  });
+  it('reports model rejection without a request or run, and reply cannot set model', async () => {
+    const f = await fixture();
+    f.agent.selectModel = vi.fn().mockRejectedValue(new Error('model not allowed'));
+    const result = await finished(f.service, { ...input, model: 'p/denied' });
+    expect(result).toMatchObject({
+      status: 'run_failed',
+      error_code: 'MODEL_SELECTION_FAILED',
+      model_error: 'model not allowed',
+    });
+    expect(f.events).not.toContain('publish');
+    expect(f.agent.run).not.toHaveBeenCalled();
+    await expect(
+      f.service.reply({
+        target: 'work',
+        channel_id: thread,
+        operation_id: 'reply-model-denied',
+        prompt: 'hi',
+        model: 'p/m',
+      })
+    ).rejects.toThrow('REPLY_ARGUMENTS_INVALID');
   });
 });
