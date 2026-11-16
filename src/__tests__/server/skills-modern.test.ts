@@ -25,17 +25,17 @@ async function deps() {
   };
 }
 describe('Skills and modern MCP', () => {
-  it('packages one coordinator source with a concise description and valid reference links', async () => {
+  it('packages only the generic MCP skill with a concise description and valid references', async () => {
     const root = new URL('../../../', import.meta.url);
-    const manifest = JSON.parse(readFileSync(new URL('plugin.json', root), 'utf8'));
+    expect(existsSync(new URL('plugin.json', root))).toBe(false);
     const pkg = JSON.parse(readFileSync(new URL('package.json', root), 'utf8'));
-    expect(manifest.name).toBe('openclaw-coordinator');
-    expect(manifest.version).toBe(pkg.version);
-    expect(pkg.files).toEqual(expect.arrayContaining(['plugin.json', 'skills']));
+    expect(pkg.files).toContain('skills');
+    expect(pkg.files).not.toContain('plugin.json');
+    expect(existsSync(new URL('skills/discord-thread-coordination', root))).toBe(false);
     const catalog = await loadPackagedSkills();
     expect(catalog.entries).toHaveLength(1);
     const entry = catalog.entries[0];
-    expect(entry.frontmatter.name).toBe(manifest.name);
+    expect(entry.frontmatter.name).toBe('openclaw-coordinator');
     expect(Buffer.byteLength(entry.frontmatter.description, 'utf8')).toBeLessThanOrEqual(500);
     const skillUrl = new URL('skills/openclaw-coordinator/SKILL.md', root);
     const text = readFileSync(skillUrl, 'utf8');
@@ -49,6 +49,7 @@ describe('Skills and modern MCP', () => {
     );
     expect(discord).toContain('last completed turn');
     expect(discord).toContain('Do not invent source identifiers');
+    expect(discord).toContain('session_id returned by an earlier MCP chat');
   });
   it('serves official extension list/get/read with verified support-file digests', async () => {
     const d = await deps();

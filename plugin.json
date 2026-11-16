@@ -1,5 +1,0 @@
-{
-  "name": "openclaw-coordinator",
-  "description": "Direct OpenClaw requests and Discord thread coordination through OpenClaw MCP.",
-  "version": "2.2.0"
-}

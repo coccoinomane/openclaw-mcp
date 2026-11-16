@@ -1,18 +1,17 @@
 # Coordinator skill distribution
 
-The canonical skill is [openclaw-coordinator](../skills/openclaw-coordinator/SKILL.md). Its two workflows cover direct requests and Discord coordination; references are loaded only when needed.
+This repository exposes [openclaw-coordinator](../skills/openclaw-coordinator/SKILL.md) through MCP Skills and legacy MCP resources. It guides any MCP client through direct requests, asynchronous tasks and Discord destinations. It does not assume that the caller is OpenClaw or has a Discord conversation.
 
-The same directory is available through two paths:
+## Optional Discord coordination plugin
 
-- The MCP server exposes it through MCP Skills and resource reads.
-- The root `plugin.json` makes this repository an Agent Plugins content bundle. OpenClaw versions supporting that format discover the root `skills/` directory when the bundle is installed.
+The OpenClaw-specific workflow lives in a separate repository: [openclaw-discord-coordination](https://github.com/coccoinomane/openclaw-discord-coordination). That plugin installs the local discord-thread-coordination skill. It requires this MCP already configured with Discord tools available; it does not install, start or configure the MCP itself.
 
-For an extracted package or checkout, install the content bundle with `openclaw plugins install /path/to/openclaw-mcp`. This makes the skill available locally; it does not start or configure another MCP server. Keep using the existing MCP connection. Verify bundle detection and skill availability with OpenClaw's plugin and skill inspection tools for the intended agent.
+The Discord skill is not included in this server's skill catalog or package. The generic MCP skill is not installed by the Discord plugin. Clients that only need the MCP do not need the Discord plugin.
 
-There is one source directory, with no synchronization process, symlink or runtime plugin code. The older Claude Code integration under `plugins/claude/openclaw` is a separate package and is unchanged here. Do not install both packages merely to obtain this skill.
+See the separate repository for installation instructions. The older Claude Code integration under plugins/claude/openclaw is unchanged.
 
 ## Review scope
 
-The skill covers forwarding, contextual handoffs and same-agent native forks. `openclaw_discord_ask` accepts `fork_from_session`; reply remains unchanged. No skill installation, deployment or live inbox changes are performed by this PR.
+The new-thread tool supports native same-agent forks through fork_from_session; reply remains unchanged. The source key can come from a prior MCP response, not only OpenClaw runtime context. No local plugin installation, deployment or inbox changes are performed by this PR.
 
-After installation, an inbox can keep only its local routing rule: delegate work using this skill rather than performing it in the inbox, and return silent destination links. Other conversations use the skill when asked to create or resume threads.
+After installing the optional Discord plugin, an inbox can keep its local routing rule and refer to discord-thread-coordination. Other Discord conversations use that skill when opening or resuming threads or splitting work across them.
