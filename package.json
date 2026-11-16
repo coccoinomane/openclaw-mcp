@@ -1,6 +1,6 @@
 {
   "name": "openclaw-mcp",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "mcpName": "io.github.coccoinomane/openclaw-mcp",
   "description": "Model Context Protocol (MCP) server for OpenClaw AI assistant integration",
   "author": "Tomáš Grasl <https://www.tomasgrasl.cz/>",
