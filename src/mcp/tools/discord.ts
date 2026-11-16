@@ -1,4 +1,5 @@
 import { modelParameter } from '../../openclaw/models.js';
+import { forkSessionParameter } from '../../openclaw/session-fork.js';
 import {
   discordChannelsOutput,
   discordThreadsOutput,
@@ -62,7 +63,7 @@ export const discordTools: Tool[] = [
     outputSchema: discordTurnOutput,
     annotations: { title: 'Ask OpenClaw on Discord', readOnlyHint: false, destructiveHint: false },
     description:
-      'Create a NEW ordinary Discord thread, publish the original request as a bot with an optional server-configured forwarding header, and return a queued Continue on Discord link, not answer content. Does not wait for generation. Forward self-contained requests faithfully; for delegated work, include the context needed to carry out the user’s intent without adding unrelated requirements. The submitted prompt is published on Discord; the server adds any configured forwarding header, never the client. On successful handoff, return the destination in the originating conversation using a native thread mention on Discord or the returned link elsewhere; report errors or partial/unknown outcomes instead of implying success. Use openclaw_discord_operation only when eventual status or recovery is needed, not before handing off. Select an allowed channel using openclaw_discord_channels when unspecified; ask if ambiguous. Use openclaw_discord_reply for an existing public thread. Preserve operation ID; inspect partial/unknown outcomes before further action.',
+      'Create a NEW ordinary Discord thread and its OpenClaw session, optionally forking a same-agent source with fork_from_session. The separate prompt is the new assignment; fork history is not republished. Without model, a fork retains inherited model settings; an explicit model overrides them for the child only. Publish the original request as a bot with an optional server-configured forwarding header, and return a queued Continue on Discord link, not answer content. Does not wait for generation. Forward self-contained requests faithfully; for delegated work, include the context needed to carry out the user’s intent without adding unrelated requirements. The submitted prompt is published on Discord; the server adds any configured forwarding header, never the client. On successful handoff, return the destination in the originating conversation using a native thread mention on Discord or the returned link elsewhere; report errors or partial/unknown outcomes instead of implying success. Use openclaw_discord_operation only when eventual status or recovery is needed, not before handing off. Select an allowed channel using openclaw_discord_channels when unspecified; ask if ambiguous. Use openclaw_discord_reply for an existing public thread. Preserve operation ID; inspect partial/unknown outcomes before further action.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -71,6 +72,7 @@ export const discordTools: Tool[] = [
         operation_id: operation,
         mode: { type: 'string', enum: ['new_thread'] },
         model: modelParameter,
+        fork_from_session: forkSessionParameter,
         title: { type: 'string', minLength: 1, maxLength: 100 },
         prompt: {
           type: 'string',
@@ -93,7 +95,7 @@ export const discordTools: Tool[] = [
       destructiveHint: false,
     },
     description:
-      'Publish the exact request as a bot in an EXISTING public Discord thread and queue an ordinary agent turn in the same canonical session. Active and archived unlocked threads are supported; sending auto-unarchives. Uses operator-configured normal routing; Gateway owns run admission and queueing. Runtime rebindings are unsupported. Do not select a destination session key; routing determines it. Forward faithfully or include necessary context for delegated work. Source session references may appear in the prompt. Return a native thread mention on Discord or the returned link elsewhere on queued handoff, without polling for the answer; report denied, partial or unknown outcomes honestly. Reuse the operation ID and identical arguments after a disconnect; use openclaw_discord_operation for recovery. Never retry uncertain writes with a new ID.',
+      'Publish the exact request as a bot in an EXISTING public Discord thread and queue an ordinary agent turn in the same canonical session. Active and archived unlocked threads are supported; sending auto-unarchives. Uses operator-configured normal routing; Gateway owns run admission and queueing. Forking, model overrides and runtime rebindings are unsupported on this existing-thread tool. Do not select a destination session key; routing determines it. Forward faithfully or include necessary context for delegated work. Source session references may appear in the prompt. Return a native thread mention on Discord or the returned link elsewhere on queued handoff, without polling for the answer; report denied, partial or unknown outcomes honestly. Reuse the operation ID and identical arguments after a disconnect; use openclaw_discord_operation for recovery. Never retry uncertain writes with a new ID.',
     inputSchema: {
       type: 'object',
       properties: {

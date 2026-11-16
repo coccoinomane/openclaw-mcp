@@ -47,7 +47,7 @@ describe('Skills and modern MCP', () => {
       new URL('skills/openclaw-coordinator/references/discord.md', root),
       'utf8'
     );
-    expect(discord).toContain('does not yet expose that parameter');
+    expect(discord).toContain('last completed turn');
     expect(discord).toContain('Do not invent source identifiers');
   });
   it('serves official extension list/get/read with verified support-file digests', async () => {

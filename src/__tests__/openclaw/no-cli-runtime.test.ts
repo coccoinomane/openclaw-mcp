@@ -69,7 +69,7 @@ describe('runtime has no OpenClaw CLI capability', () => {
         /child_process|node:cluster|from ['"](?:execa|cross-spawn|shelljs)['"]/
       );
       expect(source, path).not.toMatch(
-        /(?:execFile|execSync|spawnSync|spawn|fork|runCli|CatalogRunner|CliRunner)[ (]/
+        /(?:execFile|execSync|spawnSync|spawn|runCli|CatalogRunner|CliRunner)[ (]/
       );
       expect(source, path).not.toMatch(
         /MCP_DISCORD_(?:AGENT_TRANSPORT|EXECUTABLE|CLI_|GATEWAY_READS_ENABLED|THREAD_CREATE_MODE)|MCP_AGENT_DISCOVERY_(?:EXECUTABLE|INSTANCE)/

@@ -22,7 +22,7 @@ The prompt submitted to the destination must be visible in Discord, as message t
 
 ## Fork availability
 
-Forking is conditional on the live tool schema. This skill's proposed fork workflow requires `fork_from_session` on the new-thread tool; the current MCP implementation does not yet expose that parameter. Do not send it until supported.
+Use `fork_from_session` on the new-thread tool when the advertised schema supports it. The fork inherits history through the last completed turn, so include any relevant decisions from the current, unfinished turn in the new assignment. An explicit model choice applies to the child only; otherwise the fork keeps inherited model settings.
 
 Use only native same-agent forks. Obtain the source key from trusted runtime context or session lookup tools, not by guessing from a Discord ID. An external client may supply a known, accessible OpenClaw source session too. Forking creates a new conversation; it does not replace the history of an existing destination thread.
 

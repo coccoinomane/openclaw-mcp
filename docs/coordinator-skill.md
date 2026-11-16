@@ -13,6 +13,6 @@ There is one source directory, with no synchronization process, symlink or runti
 
 ## Review scope
 
-The skill describes forwarding, contextual handoffs and conditional same-agent forks. The fork backend and `fork_from_session` parameter are not implemented by this change. No skill installation, deployment or live inbox changes are performed by this PR.
+The skill covers forwarding, contextual handoffs and same-agent native forks. `openclaw_discord_ask` accepts `fork_from_session`; reply remains unchanged. No skill installation, deployment or live inbox changes are performed by this PR.
 
 After installation, an inbox can keep only its local routing rule: delegate work using this skill rather than performing it in the inbox, and return silent destination links. Other conversations use the skill when asked to create or resume threads.

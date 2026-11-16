@@ -23,6 +23,8 @@ All six Discord tools advertise MCP `outputSchema` and validate `structuredConte
 
 Call `openclaw_models` for the target agent before choosing a model. `openclaw_chat` (new sessions only) and `openclaw_discord_ask` accept an optional `model` that stays with the new session. Omission keeps the current defaults; Discord replies and async chat cannot change the model. OpenClaw validates the selection, without an extra inference probe.
 
+To branch an existing conversation into a new Discord thread, pass its canonical OpenClaw session key as `fork_from_session` to `openclaw_discord_ask`. Source and destination must belong to the same agent on this Gateway. The native fork copies history through the last completed turn, then the separately supplied prompt is published and executed as the new assignment. Explicit `model` overrides apply only to the child; otherwise inherited model settings remain. Fork failure prevents prompt publication and agent execution; inspect the retained operation/thread rather than creating a replacement. Existing-thread replies cannot fork or replace their session history.
+
 ## Install this fork
 
 Use the archive from [GitHub Releases](https://github.com/coccoinomane/openclaw-mcp/releases). It includes compiled JavaScript and a dependency lockfile; dependencies are installed separately. Node.js 22.19 or newer is required; Node.js 24 is recommended.
