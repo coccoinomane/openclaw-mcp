@@ -5,7 +5,7 @@ export const forkSessionParameter = {
   minLength: 1,
   maxLength: 512,
   description:
-    'Optional canonical OpenClaw source session key for a native fork into this NEW Discord thread. Use a known OpenClaw key, such as session_id returned by an earlier MCP chat, or trusted runtime context when available. This is not the calling client’s own conversation ID; never guess it from a Discord ID. Source and destination must use the same agent on this Gateway. Copies history through the last completed turn; the separate prompt is the new assignment, published on Discord. No existing-thread replacement or cross-agent fork. Omit for a fresh session with a contextual handoff.',
+    'Optional canonical OpenClaw source session key for a native fork into this NEW Discord thread. Use a known canonical agent-qualified OpenClaw key (agent:<agent>:...), such as session_id returned by an earlier MCP chat when it has that form, or trusted runtime context when available. Never invent an agent prefix for an unqualified key; use a contextual handoff if no canonical source is known. This is not the calling client’s own conversation ID; never guess it from a Discord ID. Source and destination must use the same agent on this Gateway. Copies history through the last completed turn; the separate prompt is the new assignment, published on Discord. No existing-thread replacement or cross-agent fork. Omit for a fresh session with a contextual handoff.',
 };
 
 export function checkForkSource(
