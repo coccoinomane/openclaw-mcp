@@ -246,6 +246,43 @@ describe('conversation metadata across real MCP transports', () => {
         required: ['target', 'channel_id', 'operation_id', 'prompt'],
         additionalProperties: false,
       });
+      const askSchema = listing.tools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema;
+      expect(askSchema.properties?.source_message_url).toEqual(
+        discordTools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema.properties
+          ?.source_message_url
+      );
+      expect(askSchema.required).not.toContain('source_message_url');
+      expect(
+        listing.tools.find((t) => t.name === 'openclaw_discord_reply')!.inputSchema.properties
+      ).not.toHaveProperty('source_message_url');
+      expect(askSchema).toEqual(
+        discordTools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema
+      );
+      const validateAsk = new AjvJsonSchemaValidator().getValidator(
+        discordTools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema
+      );
+      const sourceArgs = {
+        target: 'work',
+        mode: 'new_thread',
+        title: 'Task',
+        prompt: 'Help',
+        operation_id: 'origin-schema-test-01',
+        source_message_url:
+          'https://discord.com/channels/400000000000000001/400000000000000002/400000000000000004',
+      };
+      expect(validateAsk(sourceArgs).valid).toBe(true);
+      expect(
+        validateAsk({ ...sourceArgs, source_message_url: sourceArgs.source_message_url + '\n' })
+          .valid
+      ).toBe(false);
+      const invalidSource = await client.callTool({
+        name: 'openclaw_discord_ask',
+        arguments: {
+          ...sourceArgs,
+          source_message_url: 'https://example.com/not-a-source',
+        },
+      });
+      expect(invalidSource.isError).toBe(true);
       const result = await client.callTool({ name: 'openclaw_discord_channels', arguments: {} });
       expect(result.isError).not.toBe(true);
       expect(result.structuredContent).toMatchObject({

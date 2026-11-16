@@ -4,7 +4,7 @@
 
 Every authenticated MCP client may select every configured agent on the connected Gateway. Agent IDs select routing; they provide no per-user ACL or tenant isolation. Configure a separate MCP deployment and narrower Gateway credentials when callers must have different access. stdio trusts the local process owner. HTTP authentication remains controlled by the existing OAuth configuration.
 
-The operator-configured forwarding requester name attributes new Discord requests to the single service owner. It is independent of the selected agent and is not an authenticated caller identity. MCP client names and generated session labels are display metadata.
+The operator-configured forwarding requester name attributes new Discord requests to the single service owner. It is independent of the selected agent and is not an authenticated caller identity. MCP client names and generated session labels are display metadata. The optional `source_message_url` is also display metadata, not proof of identity or authority: the server validates the exact canonical Discord message URL format but does not fetch it or verify its provenance. Clients must supply only known actual originating message links. It grants no access to the source or destination and is never appended to agent input.
 
 ## Capabilities and effects
 

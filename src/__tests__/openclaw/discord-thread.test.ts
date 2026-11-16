@@ -561,7 +561,7 @@ describe('operator configuration and closed inputs', () => {
     expect(f.gateway).not.toHaveBeenCalled();
     expect(f.member).not.toHaveBeenCalled();
   });
-  it('describes handoff and expected absence of answer text without changing input schema', () => {
+  it('describes handoff and expected absence of answer text with the closed ask schema', () => {
     const tool = discordTools.find((t) => t.name === 'openclaw_discord_ask')!;
     expect(tool.description).toContain('not answer content');
     expect(tool.description).toContain('Does not wait for generation');
@@ -578,6 +578,7 @@ describe('operator configuration and closed inputs', () => {
       'mode',
       'model',
       'fork_from_session',
+      'source_message_url',
       'title',
       'prompt',
     ]);

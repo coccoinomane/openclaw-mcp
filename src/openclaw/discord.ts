@@ -9,6 +9,7 @@ import {
   type DiscoveryScope,
 } from './discord-policy.js';
 import type { RequestPublisher } from './discord-request.js';
+import { checkSourceMessageUrl } from './discord-source.js';
 import {
   ChannelCreation,
   DiscordError,
@@ -679,6 +680,7 @@ export class DiscordService {
   }
   async ask(input: any) {
     if (input.mode !== 'new_thread') throw new DiscordError('CONTINUE_UNSUPPORTED');
+    checkSourceMessageUrl(input.source_message_url);
     return this.enqueue(input);
   }
   async reply(input: any) {
@@ -831,6 +833,9 @@ export class DiscordService {
           ...(input.model !== undefined ? [input.model] : []),
           ...(input.fork_from_session !== undefined
             ? [{ fork_from_session: input.fork_from_session }]
+            : []),
+          ...(input.source_message_url !== undefined
+            ? [{ source_message_url: input.source_message_url }]
             : []),
         ])
       )
@@ -1028,7 +1033,8 @@ export class DiscordService {
             op.request_status = 'sent';
             await save();
           },
-          input.mode === 'new_thread'
+          input.mode === 'new_thread',
+          input.source_message_url
         );
         if (!op.request_message_ids?.length)
           throw new DiscordError('REQUEST_RESULT_UNVERIFIED', true);
