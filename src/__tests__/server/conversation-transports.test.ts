@@ -247,14 +247,13 @@ describe('conversation metadata across real MCP transports', () => {
         additionalProperties: false,
       });
       const askSchema = listing.tools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema;
-      expect(askSchema.properties?.source_message_url).toEqual(
-        discordTools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema.properties
-          ?.source_message_url
+      expect(askSchema.properties?.source).toEqual(
+        discordTools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema.properties?.source
       );
-      expect(askSchema.required).not.toContain('source_message_url');
+      expect(askSchema.required).not.toContain('source');
       expect(
         listing.tools.find((t) => t.name === 'openclaw_discord_reply')!.inputSchema.properties
-      ).not.toHaveProperty('source_message_url');
+      ).not.toHaveProperty('source');
       expect(askSchema).toEqual(
         discordTools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema
       );
@@ -267,19 +266,21 @@ describe('conversation metadata across real MCP transports', () => {
         title: 'Task',
         prompt: 'Help',
         operation_id: 'origin-schema-test-01',
-        source_message_url:
+        source:
           'https://discord.com/channels/400000000000000001/400000000000000002/400000000000000004',
       };
       expect(validateAsk(sourceArgs).valid).toBe(true);
-      expect(
-        validateAsk({ ...sourceArgs, source_message_url: sourceArgs.source_message_url + '\n' })
-          .valid
-      ).toBe(false);
+      expect(validateAsk({ ...sourceArgs, source: { url: sourceArgs.source } }).valid).toBe(false);
+      expect(validateAsk({ ...sourceArgs, source_message_url: sourceArgs.source }).valid).toBe(
+        false
+      );
+      for (const source of ['https://example.com/chat/123', 'Editor session-123', 'Editor'])
+        expect(validateAsk({ ...sourceArgs, source }).valid).toBe(true);
       const invalidSource = await client.callTool({
         name: 'openclaw_discord_ask',
         arguments: {
           ...sourceArgs,
-          source_message_url: 'https://example.com/not-a-source',
+          source: 'client\ninvalid',
         },
       });
       expect(invalidSource.isError).toBe(true);

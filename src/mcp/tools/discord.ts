@@ -1,6 +1,6 @@
 import { modelParameter } from '../../openclaw/models.js';
 import { forkSessionParameter } from '../../openclaw/session-fork.js';
-import { sourceMessageParameter } from '../../openclaw/discord-source.js';
+import { sourceParameter } from '../../openclaw/discord-source.js';
 import {
   discordChannelsOutput,
   discordThreadsOutput,
@@ -64,7 +64,7 @@ export const discordTools: Tool[] = [
     outputSchema: discordTurnOutput,
     annotations: { title: 'Ask OpenClaw on Discord', readOnlyHint: false, destructiveHint: false },
     description:
-      'Create a NEW ordinary Discord thread and its OpenClaw session, optionally forking a same-agent source with fork_from_session. The separate prompt is the new assignment; fork history is not republished. Without model, a fork retains inherited model settings; an explicit model overrides them for the child only. Publish the original request as a bot with an optional server-configured forwarding header, and return a queued Continue on Discord link, not answer content. Does not wait for generation. Forward self-contained requests faithfully; for delegated work, include the context needed to carry out the user’s intent without adding unrelated requirements. The submitted prompt is published on Discord; the server adds any configured forwarding header, never the client. Supply source_message_url only for a known originating Discord message permalink; it appears in the header, not agent input. On successful handoff, return the destination in the originating conversation using a native thread mention on Discord or the returned link elsewhere; report errors or partial/unknown outcomes instead of implying success. Use openclaw_discord_operation only when eventual status or recovery is needed, not before handing off. Select an allowed channel using openclaw_discord_channels when unspecified; ask if ambiguous. Use openclaw_discord_reply for an existing public thread. Preserve operation ID; inspect partial/unknown outcomes before further action.',
+      'Create a NEW ordinary Discord thread and its OpenClaw session, optionally forking a same-agent source with fork_from_session. The separate prompt is the new assignment; fork history is not republished. Without model, a fork retains inherited model settings; an explicit model overrides them for the child only. Publish the original request as a bot with an optional server-configured forwarding header, and return a queued Continue on Discord link, not answer content. Does not wait for generation. Forward self-contained requests faithfully; for delegated work, include the context needed to carry out the user’s intent without adding unrelated requirements. The submitted prompt is published on Discord; the server adds any configured forwarding header, never the client. Supply source as the full originating client conversation URL, otherwise the declared client name plus session ID, otherwise the declared client name. It appears visibly in the header, not agent input. On successful handoff, return the destination in the originating conversation using a native thread mention on Discord or the returned link elsewhere; report errors or partial/unknown outcomes instead of implying success. Use openclaw_discord_operation only when eventual status or recovery is needed, not before handing off. Select an allowed channel using openclaw_discord_channels when unspecified; ask if ambiguous. Use openclaw_discord_reply for an existing public thread. Preserve operation ID; inspect partial/unknown outcomes before further action.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -74,7 +74,7 @@ export const discordTools: Tool[] = [
         mode: { type: 'string', enum: ['new_thread'] },
         model: modelParameter,
         fork_from_session: forkSessionParameter,
-        source_message_url: sourceMessageParameter,
+        source: sourceParameter,
         title: { type: 'string', minLength: 1, maxLength: 100 },
         prompt: {
           type: 'string',

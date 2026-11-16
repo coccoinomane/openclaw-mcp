@@ -9,7 +9,7 @@ import {
   type DiscoveryScope,
 } from './discord-policy.js';
 import type { RequestPublisher } from './discord-request.js';
-import { checkSourceMessageUrl } from './discord-source.js';
+import { displaySource } from './discord-source.js';
 import {
   ChannelCreation,
   DiscordError,
@@ -679,8 +679,28 @@ export class DiscordService {
     return { ...result, retry_safe: false };
   }
   async ask(input: any) {
-    if (input.mode !== 'new_thread') throw new DiscordError('CONTINUE_UNSUPPORTED');
-    checkSourceMessageUrl(input.source_message_url);
+    if (input?.mode !== 'new_thread') throw new DiscordError('CONTINUE_UNSUPPORTED');
+    if (
+      !input ||
+      typeof input !== 'object' ||
+      Array.isArray(input) ||
+      Object.keys(input).some(
+        (key) =>
+          ![
+            'target',
+            'operation_id',
+            'mode',
+            'title',
+            'prompt',
+            'agent_id',
+            'model',
+            'fork_from_session',
+            'source',
+          ].includes(key)
+      )
+    )
+      throw new DiscordError('ASK_ARGUMENTS_INVALID');
+    displaySource(input.source);
     return this.enqueue(input);
   }
   async reply(input: any) {
@@ -834,9 +854,7 @@ export class DiscordService {
           ...(input.fork_from_session !== undefined
             ? [{ fork_from_session: input.fork_from_session }]
             : []),
-          ...(input.source_message_url !== undefined
-            ? [{ source_message_url: input.source_message_url }]
-            : []),
+          ...(input.source !== undefined ? [{ source: input.source }] : []),
         ])
       )
       .digest('hex');
@@ -1034,7 +1052,7 @@ export class DiscordService {
             await save();
           },
           input.mode === 'new_thread',
-          input.source_message_url
+          input.source
         );
         if (!op.request_message_ids?.length)
           throw new DiscordError('REQUEST_RESULT_UNVERIFIED', true);

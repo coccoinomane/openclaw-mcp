@@ -8,7 +8,7 @@ import { DiscordError } from '../../openclaw/discord-channels.js';
 import { requestPublisher } from '../../openclaw/discord-request.js';
 import { createHash } from 'node:crypto';
 import { discordTools, handleDiscord } from '../../mcp/tools/discord.js';
-import { sourceMessageParameter } from '../../openclaw/discord-source.js';
+import { displaySource, sourceParameter } from '../../openclaw/discord-source.js';
 
 const guild = '400000000000000001',
   parent = '400000000000000002',
@@ -29,7 +29,7 @@ const input = {
   title: 'Task',
   prompt: '  exact @everyone <@400000000000000006> 😀\ntrailing  ',
 };
-const sourceMessageUrl =
+const source =
   'https://discord.com/channels/500000000000000001/500000000000000002/500000000000000003';
 const fixtures: Array<{
   generation: ReturnType<typeof deferred<any>>;
@@ -365,26 +365,15 @@ describe('closed request publication', () => {
     }
     expect(f.http).toHaveBeenCalledTimes(2);
   });
-  const sourceHeader =
-    '**Forwarding sample\\-owner’s request from [original message](' + sourceMessageUrl + ')**';
+  const sourceHeader = '**Forwarding sample\\-owner’s request** from ' + source;
   it.each([undefined, 'sample-owner'])(
     'renders and verifies source captions with name %s',
     async (name) => {
-      const caption = name
-        ? sourceHeader
-        : '**Forwarding request from [original message](' + sourceMessageUrl + ')**';
+      const caption = name ? sourceHeader : '**Forwarding request** from ' + source;
       for (const length of [2000, 2001]) {
         const prompt = 'x'.repeat(length - caption.length - 2);
         const f = await publisherFixture(prompt, name);
-        await f.send(
-          target,
-          thread,
-          prompt,
-          input.operation_id,
-          async () => {},
-          true,
-          sourceMessageUrl
-        );
+        await f.send(target, thread, prompt, input.operation_id, async () => {}, true, source);
         const body = f.http.mock.calls[0][1].body;
         if (length === 2000) expect(JSON.parse(body).content).toBe(caption + '\n\n' + prompt);
         else {
@@ -399,6 +388,80 @@ describe('closed request publication', () => {
       }
     }
   );
+  it.each([
+    [
+      'https://client.example/chat/session-42?view=full&mode=read',
+      'https://client.example/chat/session-42?view=full&mode=read',
+    ],
+    ['Editor session: abc-123', 'Editor session: abc-123'],
+    ['My Client', 'My Client'],
+    ['<#' + thread + '> ' + source, '<#' + thread + '> ' + source],
+    ['<' + source + '>', source],
+    ['<b>My Client</b>', 'My Client'],
+    ["<a title='quoted > attribute' href='hidden'>Client</a>", 'Client'],
+    [
+      '<b>**[label](https://visible.example)**</b>',
+      '\\*\\*\\[label\\]\\(https://visible.example\\)\\*\\*',
+    ],
+    ['Client <!-- secret -->https://visible.example', 'Client https://visible.example'],
+    ['😀漢字 Client', '😀漢字 Client'],
+    ['<ftp://files.example/path>', 'ftp://files.example/path'],
+    ['x'.repeat(1024), 'x'.repeat(1024)],
+    ['*'.repeat(800), '\\*'.repeat(800)],
+    ['<svg:a href="hidden">Client</svg:a>', 'Client'],
+    ['<svg/onload=alert(1)>Client', 'Client'],
+    [
+      'https://example.com/a%3Cb%3E?q=x&mode=raw#fragment',
+      'https://example.com/a%3Cb%3E?q=x&mode=raw#fragment',
+    ],
+    ['<a href="https://hidden.example" title="quoted > value">My Client</a>', 'My Client'],
+    ['<script>alert(1)</script> Client', 'alert\\(1\\) Client'],
+    ['[label](https://hidden.example)', '\\[label\\]\\(https://hidden.example\\)'],
+    ['||`**https://visible.example**`||', '\\|\\|\\`\\*\\*https://visible.example\\*\\*\\`\\|\\|'],
+    [
+      '<@12345678901234567> <@&12345678901234567> @everyone @here',
+      '\\<@\u200b12345678901234567\\> \\<@\u200b&12345678901234567\\> @\u200beveryone @\u200bhere',
+    ],
+  ])('publishes visible generic source %s without changing the prompt', async (raw, expected) => {
+    expect(displaySource(raw)).toBe(expected);
+    for (const length of [2000, 2001]) {
+      const caption = '**Forwarding request** from ' + expected;
+      const prompt = 'x'.repeat(length - caption.length - 2);
+      const f = await publisherFixture(prompt);
+      await f.send(target, thread, prompt, input.operation_id, async () => {}, true, raw);
+      const body = f.http.mock.calls[0][1].body;
+      const payload =
+        body instanceof FormData
+          ? JSON.parse(body.get('payload_json') as string)
+          : JSON.parse(body);
+      expect(caption.length).toBeLessThan(2000);
+      expect(payload.content).toBe(length === 2000 ? caption + '\n\n' + prompt : caption);
+      if (body instanceof FormData)
+        expect(await (body.get('files[0]') as Blob).text()).toBe(prompt);
+      expect(payload.allowed_mentions).toEqual({
+        parse: [],
+        users: [],
+        roles: [],
+        replied_user: false,
+      });
+      expect(payload.flags).toBe(4 | 4096);
+      expect(f.http).toHaveBeenCalledTimes(2);
+    }
+  });
+  it('rejects the removed parameter without effects', async () => {
+    const f = await publisherFixture();
+    const args = { ...input, source_message_url: source };
+    expect(await handleDiscord(f.service, 'openclaw_discord_ask', args)).toHaveProperty(
+      'isError',
+      true
+    );
+    await expect(f.service.ask(args)).rejects.toThrow('ASK_ARGUMENTS_INVALID');
+    expect(await readdir(f.dir)).toEqual([]);
+    expect(f.reader).not.toHaveBeenCalled();
+    expect(f.http).not.toHaveBeenCalled();
+    expect(f.create).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
+  });
   it.each([false, true])(
     'rejects changed source in exact readback (attachment=%s)',
     async (attachment) => {
@@ -409,19 +472,26 @@ describe('closed request publication', () => {
         const response = await original(url, opts);
         if (opts.method !== 'GET') return response;
         const body: any = await response.json();
-        body.content = body.content.replace(sourceMessageUrl, sourceMessageUrl.slice(0, -1) + '4');
+        body.content = body.content.replace(source, source.slice(0, -1) + '4');
         return Response.json(body);
       });
       const sent = vi.fn(async () => {});
       await expect(
-        f.send(target, thread, prompt, input.operation_id, sent, true, sourceMessageUrl)
+        f.send(target, thread, prompt, input.operation_id, sent, true, source)
       ).rejects.toThrow('REQUEST_READBACK_UNVERIFIED');
       expect(sent).toHaveBeenCalledWith(message);
     }
   );
-  it.each([undefined, 'agent:main:main'])(
-    'keeps origin out of agent input and binds durable replay for fork %s',
-    async (fork) => {
+  it.each([
+    [undefined, source],
+    ['agent:main:main', source],
+    [undefined, 'https://client.example/conversations/abc'],
+    ['agent:main:main', 'Editor session-123'],
+    [undefined, 'Editor'],
+    ['agent:main:main', '<#' + thread + '> ' + source],
+  ])(
+    'keeps origin out of agent input and binds durable replay for fork %s and source %s',
+    async (fork, source) => {
       const f = await publisherFixture(input.prompt, 'sample-owner');
       const service = () =>
         new DiscordService(
@@ -437,7 +507,7 @@ describe('closed request publication', () => {
       const current = service();
       const args = {
         ...input,
-        source_message_url: sourceMessageUrl,
+        source: source,
         ...(fork ? { fork_from_session: fork } : {}),
       };
       try {
@@ -447,9 +517,9 @@ describe('closed request publication', () => {
         );
         await f.started.promise;
         expect(f.agent.run.mock.calls[0][0].message).toBe(input.prompt);
-        expect(JSON.stringify(f.agent.run.mock.calls)).not.toContain(sourceMessageUrl);
+        expect(JSON.stringify(f.agent.run.mock.calls)).not.toContain(source);
         expect(JSON.parse(f.http.mock.calls[0][1].body).content).toBe(
-          sourceHeader + '\n\n' + input.prompt
+          '**Forwarding sample\\-owner’s request** from ' + source + '\n\n' + input.prompt
         );
         if (fork)
           expect(f.agent.forkSession).toHaveBeenCalledWith(
@@ -464,8 +534,8 @@ describe('closed request publication', () => {
         await current.drain();
         const restarted = service();
         expect(await restarted.ask(args)).toMatchObject({ status: 'completed' });
-        for (const source of [undefined, sourceMessageUrl.slice(0, -1) + '4'])
-          await expect(restarted.ask({ ...args, source_message_url: source })).rejects.toThrow(
+        for (const changedSource of [undefined, source.slice(0, -1) + '4', '<b>' + source + '</b>'])
+          await expect(restarted.ask({ ...args, source: changedSource })).rejects.toThrow(
             'different arguments'
           );
         expect(f.http).toHaveBeenCalledTimes(2);
@@ -473,7 +543,7 @@ describe('closed request publication', () => {
         expect(f.agent.run).toHaveBeenCalledTimes(1);
         // Persist only the fingerprint, not an additional copy of the source URL.
         expect(await readFile(join(f.dir, input.operation_id + '.json'), 'utf8')).not.toContain(
-          sourceMessageUrl
+          source
         );
       } finally {
         f.generation.resolve({ status: 'ok' });
@@ -493,50 +563,52 @@ describe('closed request publication', () => {
         .digest('hex')
     );
     expect(await f.make().ask(input)).toMatchObject({ status: 'completed' });
-    await expect(f.make().ask({ ...input, source_message_url: sourceMessageUrl })).rejects.toThrow(
-      'different arguments'
-    );
+    await expect(f.make().ask({ ...input, source: source })).rejects.toThrow('different arguments');
     expect(f.create).toHaveBeenCalledTimes(1);
     expect(f.publish).toHaveBeenCalledTimes(1);
   });
 
   it.each([
     '',
+    '   ',
     null,
     123,
     {},
-    sourceMessageUrl.replace('https:', 'http:'),
-    sourceMessageUrl.replace('discord.com', 'discord.com.evil.test'),
-    sourceMessageUrl.replace('discord.com', 'discordXcom'),
-    sourceMessageUrl.replace('discord.com', 'www.discord.com'),
-    sourceMessageUrl.replace('discord.com', 'discordapp.com'),
-    sourceMessageUrl.replace('discord.com', 'user@discord.com'),
-    sourceMessageUrl.replace('discord.com', 'discord.com:443'),
-    sourceMessageUrl.replace('discord.com', 'DISCORD.COM'),
-    sourceMessageUrl.replace('/channels/', '/channels/../channels/'),
-    sourceMessageUrl.replace('500000000000000001', '@me'),
-    sourceMessageUrl.replace('500000000000000001', '050000000000000001'),
-    sourceMessageUrl.replace('500000000000000001', '5'),
-    sourceMessageUrl.replace('500000000000000001', '500000000000000001000'),
-    sourceMessageUrl.replace('500000000000000001', '%35' + '00000000000000001'),
-    sourceMessageUrl.slice(0, sourceMessageUrl.lastIndexOf('/')),
-    'agent:main:discord:channel:500000000000000002',
-    sourceMessageUrl + '/',
-    sourceMessageUrl + '?x=1',
-    sourceMessageUrl + '#fragment',
-    sourceMessageUrl + '\n',
-    sourceMessageUrl + '\r\n',
-    sourceMessageUrl + '\u2028',
-    sourceMessageUrl + '\0',
-    ' ' + sourceMessageUrl,
-    sourceMessageUrl + ')** @everyone',
+    [],
+    true,
+    '<b></b>',
+    '<!-- hidden -->',
+    '<a title="quoted > value"></a>',
+    '&lt;b&gt;client&lt;/b&gt;',
+    '&lt b&gt client',
+    '&#60b>client',
+    '<!DOCTYPE html>',
+    '&#60;b&#62;client',
+    '&#x3c;b&#x3e;client',
+    '&amp;lt;b&amp;gt;client',
+    'client&NewLine;hidden',
+    'x'.repeat(1025),
+    '*'.repeat(801),
+    'client\nsecond',
+    'client\r\nsecond',
+    'client\tsecond',
+    'client\0',
+    'client\u007f',
+    'client\u0085',
+    'client\u2028',
+    'client\u2029',
+    'client\u202e',
+    'client\u2066',
+    'client\u200b',
+    'client\ud800',
+    'client\udfff',
   ])('rejects invalid source before effects: %j', async (source) => {
     const f = await publisherFixture();
-    const args = { ...input, source_message_url: source };
-    await expect(f.service.ask(args)).rejects.toThrow('SOURCE_MESSAGE_URL_INVALID');
+    const args = { ...input, source: source };
+    await expect(f.service.ask(args)).rejects.toThrow('SOURCE_INVALID');
     expect(await handleDiscord(f.service, 'openclaw_discord_ask', args)).toMatchObject({
       isError: true,
-      structuredContent: { error_code: 'SOURCE_MESSAGE_URL_INVALID' },
+      structuredContent: { error_code: 'SOURCE_INVALID' },
     });
     await expect(
       f.send(
@@ -548,9 +620,7 @@ describe('closed request publication', () => {
         true,
         source as string
       )
-    ).rejects.toThrow('SOURCE_MESSAGE_URL_INVALID');
-    if (typeof source === 'string')
-      expect(new RegExp(sourceMessageParameter.pattern).test(source)).toBe(false);
+    ).rejects.toThrow('SOURCE_INVALID');
     expect(await readdir(f.dir)).toEqual([]);
     expect(f.reader).not.toHaveBeenCalled();
     expect(f.create).not.toHaveBeenCalled();
@@ -563,18 +633,18 @@ describe('closed request publication', () => {
   });
   it('exposes an optional source only on ask and rejects it on reply', async () => {
     const ask = discordTools.find((tool) => tool.name === 'openclaw_discord_ask')!;
-    expect(ask.inputSchema.properties?.source_message_url).toEqual(sourceMessageParameter);
-    expect(ask.inputSchema.required).not.toContain('source_message_url');
-    expect(new RegExp(sourceMessageParameter.pattern).test(sourceMessageUrl)).toBe(true);
+    expect(ask.inputSchema.properties?.source).toEqual(sourceParameter);
+    expect(ask.inputSchema.required).not.toContain('source');
+    expect(sourceParameter).toMatchObject({ type: 'string', minLength: 1, maxLength: 1024 });
     for (const tool of discordTools.filter((tool) => tool.name !== ask.name))
-      expect(tool.inputSchema.properties).not.toHaveProperty('source_message_url');
+      expect(tool.inputSchema.properties).not.toHaveProperty('source');
     const f = await publisherFixture();
     const reply = {
       target: input.target,
       channel_id: thread,
       operation_id: input.operation_id,
       prompt: input.prompt,
-      source_message_url: sourceMessageUrl,
+      source: source,
     };
     expect(await handleDiscord(f.service, 'openclaw_discord_reply', reply)).toHaveProperty(
       'isError',
@@ -582,16 +652,8 @@ describe('closed request publication', () => {
     );
     await expect(f.service.reply(reply)).rejects.toThrow('REPLY_ARGUMENTS_INVALID');
     await expect(
-      f.send(
-        target,
-        thread,
-        input.prompt,
-        input.operation_id,
-        async () => {},
-        false,
-        sourceMessageUrl
-      )
-    ).rejects.toThrow('SOURCE_MESSAGE_NEW_THREAD_REQUIRED');
+      f.send(target, thread, input.prompt, input.operation_id, async () => {}, false, source)
+    ).rejects.toThrow('SOURCE_NEW_THREAD_REQUIRED');
     expect(f.http).not.toHaveBeenCalled();
     expect(await readdir(f.dir)).toEqual([]);
   });
@@ -678,7 +740,10 @@ describe('closed request publication', () => {
       );
     const service = make();
     try {
-      expect(await service.ask({ ...input, username: 'untrusted' })).toMatchObject({
+      await expect(service.ask({ ...input, username: 'untrusted' })).rejects.toThrow(
+        'ASK_ARGUMENTS_INVALID'
+      );
+      expect(await service.ask(input)).toMatchObject({
         request_verified: true,
       });
       await f.started.promise;

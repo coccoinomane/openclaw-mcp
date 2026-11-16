@@ -578,7 +578,7 @@ describe('operator configuration and closed inputs', () => {
       'mode',
       'model',
       'fork_from_session',
-      'source_message_url',
+      'source',
       'title',
       'prompt',
     ]);

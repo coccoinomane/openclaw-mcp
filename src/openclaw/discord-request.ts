@@ -2,7 +2,7 @@ import { assertTargetAllowed } from './discord-policy.js';
 import { createHash } from 'node:crypto';
 import { assertServiceProvenance, DiscordError, type AdmittedTarget } from './discord-channels.js';
 import type { DiscordConfig } from './discord.js';
-import { checkSourceMessageUrl } from './discord-source.js';
+import { displaySource } from './discord-source.js';
 
 const snowflake = /^[1-9][0-9]{16,19}$/;
 export type RequestPublisher = (
@@ -12,7 +12,7 @@ export type RequestPublisher = (
   operation: string,
   sent: (messageId: string) => Promise<void>,
   newThread?: boolean,
-  sourceMessageUrl?: string
+  source?: string
 ) => Promise<void>;
 
 /** Fixed bot POST + exact-ID GET. Native message/send has no public allowed-mentions field. */
@@ -32,10 +32,9 @@ export function requestPublisher(
     ?.replace(/([\\`*_{}[\]()#+.!|~<>-])/g, '\\$1')
     .replace(/@/g, '@\u200b');
   const attribution = name ? 'Forwarding ' + name + '’s request' : '';
-  return async (target, threadId, prompt, operation, sent, newThread = false, sourceMessageUrl) => {
-    checkSourceMessageUrl(sourceMessageUrl);
-    if (sourceMessageUrl !== undefined && !newThread)
-      throw new DiscordError('SOURCE_MESSAGE_NEW_THREAD_REQUIRED');
+  return async (target, threadId, prompt, operation, sent, newThread = false, source) => {
+    const displayedSource = displaySource(source);
+    if (source !== undefined && !newThread) throw new DiscordError('SOURCE_NEW_THREAD_REQUIRED');
     assertServiceProvenance();
     assertTargetAllowed(config, target, threadId, 'REQUEST_SCOPE_DENIED');
     if (target.accountId !== account || !snowflake.test(threadId) || threadId === target.channelId)
@@ -49,15 +48,12 @@ export function requestPublisher(
       !/^[a-zA-Z0-9_-]{16,100}$/.test(operation)
     )
       throw new DiscordError('REQUEST_ARGUMENTS_INVALID');
-    const header = sourceMessageUrl
-      ? '**' +
-        (attribution || 'Forwarding request') +
-        ' from [original message](' +
-        sourceMessageUrl +
-        ')**'
+    const header = displayedSource
+      ? '**' + (attribution || 'Forwarding request') + '** from ' + displayedSource
       : attribution
         ? '**' + attribution + '**'
         : '';
+    if (header.length >= 2000) throw new DiscordError('SOURCE_INVALID');
     const caption = newThread ? header : '';
     const inline = caption ? caption + '\n\n' + prompt : prompt;
     const attachment = inline.length > 2000;
