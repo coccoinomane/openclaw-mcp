@@ -393,6 +393,63 @@ describe('closed request publication', () => {
       'https://client.example/chat/session-42?view=full&mode=read',
       'https://client.example/chat/session-42?view=full&mode=read',
     ],
+    ...[
+      'https://claude.ai/code/session_01DYYGU3fM451ZDF1puRCt84',
+      'http://client.example/a_b?q=one_two&mode=raw#part_1',
+      'https://client.example/a_(b)/[c]/{d}/*~|?q=%2f%5F+one_two&x=1#frag',
+      'HTTPS://client.example/session_42',
+      "https://client.example/a_!$&'()+,;=:@user?x=y#z",
+    ].flatMap((url) => [
+      [url, url],
+      ['<' + url + '>', url],
+      [
+        '<b>Client</b> ' + url + ' **text** @here',
+        'Client ' + url + ' \\*\\*text\\*\\* @\u200bhere',
+      ],
+    ]),
+    [
+      'https://one.example/session_1 https://two.example/session_2',
+      'https://one.example/session_1 https://two.example/session_2',
+    ],
+    [
+      '[label](https://hidden.example/session_42)',
+      '\\[label\\]\\(https://hidden.example/session_42\\)',
+    ],
+    [
+      '[https://visible.example/session_42](https://hidden.example/session_42)',
+      '\\[https://visible.example/session_42\\]\\(https://hidden.example/session_42\\)',
+    ],
+    [
+      'https://visible.example/session_42[label](https://hidden.example)',
+      'https://visible.example/session_42\\[label\\]\\(https://hidden.example\\)',
+    ],
+    [
+      'https://visible.example/session_42<@12345678901234567>',
+      'https://visible.example/session_42\\<@\u200b12345678901234567\\>',
+    ],
+    [
+      'https://visible.example/session_42/@everyone',
+      'https://visible.example/session_42/@\u200beveryone',
+    ],
+    [
+      '<https://visible.example/session_42/@here>',
+      'https://visible.example/session_42/@\u200bhere',
+    ],
+    ...['*', '**', '_', '__', '~~', '||'].map((wrapper) => [
+      wrapper + 'https://client.example/session_42' + wrapper,
+      [...wrapper].map((char) => '\\' + char).join('') +
+        'https://client.example/session_42' +
+        [...wrapper].map((char) => '\\' + char).join(''),
+    ]),
+    ['[label](https://client.example/a_(b))', '\\[label\\]\\(https://client.example/a_(b)\\)'],
+    [
+      '<https://client.example/a_[label](https://hidden.example)>',
+      'https://client.example/a_\\[label\\]\\(https://hidden.example\\)',
+    ],
+    [
+      'https://client.example/session_42\\[label](https://hidden.example)',
+      'https://client.example/session_42\\\\\\[label\\]\\(https://hidden.example\\)',
+    ],
     ['Editor session: abc-123', 'Editor session: abc-123'],
     ['My Client', 'My Client'],
     ['<#' + thread + '> ' + source, '<#' + thread + '> ' + source],
