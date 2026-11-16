@@ -1,10 +1,10 @@
 # Piano: routing agent-first e configurazione MCP semplificata
 
-Approvato da Guido il 16 novembre 2026. Implementazione senza compatibilità retroattiva.
+Approvato da Guido il 16 novembre 2026, aggiornato il 17 novembre con il perimetro Discord semplificato. Implementazione senza compatibilità retroattiva.
 
 ## Obiettivo
 
-OpenClaw è la fonte degli agenti e dei bindings Discord. Il client sceglie prima l’agente, poi una destinazione assegnata a quell’agente. Ogni scrittura verifica nuovamente l’assegnazione; la lista dei canali non costituisce da sola un’autorizzazione.
+OpenClaw è la fonte degli agenti e dei bindings Discord. Il client sceglie prima l’agente, poi una destinazione compresa nei suoi binding. I binding definiscono il perimetro di accesso MCP, non il routing delle risposte di OpenClaw. Ogni scrittura verifica nuovamente il perimetro; la lista dei canali non costituisce da sola un’autorizzazione.
 
 ## Configurazione
 
@@ -16,7 +16,7 @@ Costruire internamente il campo HTTP model richiesto dal protocollo. Conservare 
 
 ## Fasi
 
-1. Verificare SDK/API del Gateway per agenti, bindings e routing aggiornati, permessi necessari e uso remoto. Preferire il risolutore nativo. Se manca un’interfaccia adeguata, fermare le modifiche dipendenti e riportare il requisito, senza inventare endpoint o introdurre copie statiche.
+1. Leggere agenti e configurazione aggiornata tramite agents.list e config.get del Gateway. Usare solo i binding Discord dell’agente selezionato, limitati a server e canali. Non serve un’estensione Gateway né un risolutore del routing effettivo.
 2. Implementare un risolutore comune dell’agente. openclaw_agents deve interrogare il Gateway a ogni chiamata; anche la validazione degli agent_id deve usare dati aggiornati.
 3. Implementare discovery Discord per agente e controlli condivisi prima delle scritture: creazione canali, messaggi nei canali, creazione thread e messaggi nei thread. Adeguare schemi/tool con identificativi concreti al posto delle policy.
 4. Rimuovere configurazioni e codice superati; aggiornare documentazione, esempi e skill companion in modo conciso.
@@ -25,10 +25,12 @@ Costruire internamente il campo HTTP model richiesto dal protocollo. Conservare 
 
 ## Regole Discord
 
-- Il binding specifico del canale prevale su quello del server; rispettare precedenze, account e ereditarietà dei thread del Gateway.
+- Unire i canali autorizzati dai soli binding dell’agente selezionato: un binding al server include tutti i suoi canali; un binding a un canale include solo quel canale. Ignorare i binding degli altri agenti, senza precedenze o sottrazioni. Rispettare account Discord e vincoli del server quando presenti.
+- I thread ereditano l’accesso dal canale padre; non considerare binding specifici ai thread. Binding generici senza server/canale e condizioni fuori dal perimetro supportato non concedono accesso.
+- A legato al server può scrivere anche in un canale legato a B. Non replicare routing runtime, ruoli, broadcast o ACP.
 - Nessun binding applicabile significa nessuna scrittura, anche se esiste un agente predefinito.
 - Un binding a un singolo canale non autorizza a crearne altri nel server. Nuovi canali richiedono un binding applicabile al server e channelCreateEnabled. Nessun elenco aggiuntivo di categorie.
-- Verificare destinazione, appartenenza al server e permessi Discord; se routing o autorizzazione non sono verificabili, negare l’operazione. Non cambiare trasporto per aggirare un diniego.
+- Verificare destinazione, appartenenza al server e permessi Discord; se il perimetro o i permessi non sono verificabili, negare l’operazione. Non cambiare trasporto per aggirare un diniego.
 - Definire nella verifica tecnica i limiti di concorrenza tra lettura bindings e scrittura; non promettere atomicità che il Gateway non offre.
 - Conservare idempotenza, protezioni contro duplicazioni, gestione degli esiti incerti, fork same-agent e attribuzione source.
 
@@ -36,7 +38,7 @@ Costruire internamente il campo HTTP model richiesto dal protocollo. Conservare 
 
 - Mandatory/default/agente mancante o inesistente, su tutti i tool interessati e trasporti.
 - Agenti e bindings modificati senza riavvio MCP.
-- Server di A con canale specifico di B: solo B autorizzato sul canale; controllo anche con ID passato direttamente.
+- Server di A con canale specifico di B: entrambi autorizzati su quel canale; B non autorizzato sugli altri. Controllo anche con ID passato direttamente e sui thread tramite il padre.
 - Creazione canali consentita e negata, pubblicazione nei canali, thread, risposte e fork.
 - Gateway indisponibile, bindings non supportati o ambigui, permessi insufficienti: errore prima degli effetti ove verificabile.
 - Nessuna regressione di stato persistente, idempotenza e gestione delle operazioni incerte.
@@ -51,6 +53,6 @@ Senza catalogo statico e filtri locali, il servizio espone tutti gli agenti rest
 - Piano scritto prima delle modifiche funzionali.
 - Verifica statica API completata: agents.list e config.get sono disponibili via SDK remoto; config.get richiede operator.read nella build ispezionata. Grant live non ancora verificato.
 - Non trovata una RPC generale che esponga la decisione di routing effettiva e il binding vincente per canali/thread arbitrari e nuovi canali. I bindings di configurazione non includono tutte le assegnazioni runtime; roles, broadcast e ACP richiedono trattamento distinto.
-- Prima delle modifiche Discord serve scegliere tra un’estensione Gateway per la risoluzione nativa e un perimetro MCP esplicitamente limitato, con diniego dei casi non verificabili. Nessun resolver parziale introdotto come equivalente al routing nativo.
+- Guido ha scelto il perimetro limitato ai binding server/canale del solo agente selezionato. Il precedente blocco sul routing nativo è superato: implementare questo perimetro senza estensione Gateway.
 - Report tecnico locale: /Users/openclaw/.openclaw/workspace/out/agent-first-routing-feasibility.md. Verifica su sorgenti e schemi, senza chiamate live.
 - Nessuna modifica al servizio attivo o al codice funzionale.
