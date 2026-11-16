@@ -1,21 +1,13 @@
 import { listModels, selectSessionModel } from './models.js';
 import { OpenClawClient } from './client.js';
+import { discoverGatewayAgents, discoverGatewayConfig } from './gateway-discovery.js';
 import type { GatewayConfig } from './types.js';
 
 const AGENT_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
-/** One endpoint and credential, with explicit selection among its configured agents. */
 export class OpenClawGateway {
-  private readonly client: OpenClawClient;
-  private readonly config: GatewayConfig;
   private readonly agentClients = new Map<string, OpenClawClient>();
-  private readonly agentIds: Set<string>;
-
-  constructor(
-    config: GatewayConfig,
-    private readonly model?: string
-  ) {
-    this.config = { ...config };
+  constructor(private readonly config: GatewayConfig) {
     let url: URL;
     try {
       url = new URL(config.url);
@@ -24,58 +16,81 @@ export class OpenClawGateway {
     }
     if (!['http:', 'https:'].includes(url.protocol))
       throw new Error('OpenClaw Gateway URL must use http or https');
-    this.client = this.createClient(config.agentId);
-    this.agentIds = new Set();
-    for (const agent of config.agents ?? []) {
-      if (!agent || !AGENT_ID_RE.test(agent.id)) throw new Error('Invalid catalog agent ID');
-      const id = agent.id.toLowerCase();
-      if (this.agentIds.has(id)) throw new Error('Duplicate catalog agent ID');
-      this.agentIds.add(id);
+    if (config.defaultAgentId !== undefined && !AGENT_ID_RE.test(config.defaultAgentId))
+      throw new Error('Invalid default agent ID');
+  }
+  get agentIsMandatory() {
+    return this.config.agentIsMandatory === true;
+  }
+  async resolve(selector?: string): Promise<{ client: OpenClawClient; agentId: string }> {
+    if (selector === undefined && this.agentIsMandatory) throw new Error('agent_id is required');
+    const selected = selector ?? this.config.defaultAgentId;
+    if (selected === undefined)
+      throw new Error('Select agent_id or configure OPENCLAW_DEFAULT_AGENT_ID');
+    if (typeof selected !== 'string' || !AGENT_ID_RE.test(selected))
+      throw new Error('Invalid agent ID');
+    const agentId = selected.toLowerCase();
+    if (!(await this.listAgents()).some((a) => a.agentId === agentId))
+      throw new Error('Unknown agent "' + agentId + '"');
+    let client = this.agentClients.get(agentId);
+    if (!client) {
+      client = new OpenClawClient(this.config.url, {
+        gatewayToken: this.config.token,
+        agentId,
+        timeoutMs: this.config.timeout,
+      });
+      this.agentClients.set(agentId, client);
     }
-    const defaultAgent = this.client.getConversationAgentId();
-    if (defaultAgent) this.agentIds.add(defaultAgent);
+    return { client, agentId };
   }
-
-  private createClient(agentId?: string): OpenClawClient {
-    return new OpenClawClient(this.config.url, {
-      gatewayToken: this.config.token,
+  async listAgents(): Promise<Array<{ agentId: string; isDefault: boolean }>> {
+    const roster: any = await discoverGatewayAgents(this.config);
+    if (!roster || !Array.isArray(roster.agents))
+      throw new Error('Gateway returned an invalid agent roster');
+    const ids = new Set<string>();
+    for (const a of roster.agents) {
+      if (
+        !a ||
+        typeof a.id !== 'string' ||
+        !AGENT_ID_RE.test(a.id) ||
+        (a.kind !== undefined && !['agent', 'system'].includes(a.kind))
+      )
+        throw new Error('Gateway returned an invalid agent roster');
+      if (a.kind === 'system') continue;
+      const id = a.id.toLowerCase();
+      if (ids.has(id)) throw new Error('Gateway returned duplicate agents');
+      ids.add(id);
+    }
+    return [...ids].map((agentId) => ({
       agentId,
-      timeoutMs: this.config.timeout,
-      model: this.model,
-    });
+      isDefault: !this.agentIsMandatory && this.config.defaultAgentId?.toLowerCase() === agentId,
+    }));
   }
-
+  async bindingsConfig(): Promise<Record<string, any>> {
+    const snapshot: any = await discoverGatewayConfig(this.config);
+    if (
+      snapshot?.valid !== true ||
+      typeof snapshot.configRevisionHash !== 'string' ||
+      !snapshot.configRevisionHash ||
+      snapshot.configRevisionHash === '__OPENCLAW_REDACTED__' ||
+      snapshot.configRevisionHash !== snapshot.appliedConfigHash
+    )
+      throw new Error('Gateway configuration is not verified as applied');
+    const config = snapshot.runtimeConfig ?? snapshot.config;
+    if (
+      !config ||
+      typeof config !== 'object' ||
+      Array.isArray(config) ||
+      (config.bindings !== undefined && !Array.isArray(config.bindings))
+    )
+      throw new Error('Gateway bindings are unavailable');
+    return { bindings: config.bindings ?? [], channels: { discord: config.channels?.discord } };
+  }
   async models(selector?: string) {
-    const { agentId } = this.resolve(selector);
-    if (!agentId) throw new Error('Select an agent_id from openclaw_agents');
+    const { agentId } = await this.resolve(selector);
     return listModels(this.config, agentId);
   }
   async selectModel(key: string, model: string) {
     return selectSessionModel(this.config, key, model);
-  }
-
-  getDefault(): OpenClawClient {
-    return this.client;
-  }
-
-  resolve(agentId?: string): { client: OpenClawClient; agentId?: string } {
-    if (agentId === undefined)
-      return { client: this.client, agentId: this.client.getConversationAgentId() };
-    if (!AGENT_ID_RE.test(agentId)) throw new Error('Invalid agent ID');
-    const id = agentId.toLowerCase();
-    if (!this.agentIds.has(id)) throw new Error('Unknown agent "' + id + '"');
-    let client = this.agentClients.get(id);
-    if (!client) {
-      client = this.createClient(id);
-      this.agentClients.set(id, client);
-    }
-    return { client, agentId: id };
-  }
-
-  listAgents(): Array<{ agentId: string; isDefault: boolean }> {
-    return [...this.agentIds].map((agentId) => ({
-      agentId,
-      isDefault: this.client.getConversationAgentId() === agentId,
-    }));
   }
 }

@@ -17,13 +17,17 @@ const selectors = {
     type: 'string',
     pattern: '^[a-z0-9][a-z0-9_-]{0,63}$',
     description:
-      'Agent filter for discovery; route assertion for targets, policies and operations.',
+      'Selected Gateway agent. Access is the union of this agent’s Discord server/channel bindings.',
   },
+};
+const destination = {
+  guild_id: { type: 'string', pattern: '^[1-9][0-9]{16,19}$' },
+  account_id: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' },
 };
 const target = {
   type: 'string',
-  description:
-    'Stable target identifier returned by openclaw_discord_channels; not a display name.',
+  pattern: '^[1-9][0-9]{16,19}$',
+  description: 'Concrete parent channel ID; verified even when supplied without discovery.',
 };
 const operation = {
   type: 'string',
@@ -38,7 +42,7 @@ export const discordTools: Tool[] = [
     name: 'openclaw_discord_channels',
     outputSchema: discordChannelsOutput,
     description:
-      "List verified operator-allowed Discord channels. Use their names, topics and categories to choose the most suitable channel for a new thread about the user's request; ask for clarification only when the destination is ambiguous. Requires service opt-in.",
+      "List verified Discord channels bound to the selected agent. Use their names, topics and categories to choose the most suitable channel for a new thread about the user's request; ask for clarification only when the destination is ambiguous. Requires service opt-in.",
     inputSchema: { type: 'object', properties: { ...selectors }, additionalProperties: false },
   },
   {
@@ -51,11 +55,12 @@ export const discordTools: Tool[] = [
       properties: {
         ...selectors,
         target,
+        ...destination,
         archived: { type: 'boolean' },
         before: { type: 'string', description: 'Archive timestamp cursor, not a snowflake.' },
         limit: { type: 'integer', minimum: 1, maximum: 100 },
       },
-      required: ['target'],
+      required: ['guild_id', 'account_id', 'target'],
       additionalProperties: false,
     },
   },
@@ -70,6 +75,7 @@ export const discordTools: Tool[] = [
       properties: {
         ...selectors,
         target,
+        ...destination,
         operation_id: operation,
         mode: { type: 'string', enum: ['new_thread'] },
         model: modelParameter,
@@ -84,7 +90,7 @@ export const discordTools: Tool[] = [
             'The request or self-contained delegated assignment to publish and execute. Preserve the user’s intent; include necessary context and available source session/link references for handoffs. Omit instructions addressed only to the client about choosing a destination. The server adds any configured forwarding header.',
         },
       },
-      required: ['target', 'operation_id', 'mode', 'title', 'prompt'],
+      required: ['guild_id', 'account_id', 'target', 'operation_id', 'mode', 'title', 'prompt'],
       additionalProperties: false,
     },
   },
@@ -97,12 +103,13 @@ export const discordTools: Tool[] = [
       destructiveHint: false,
     },
     description:
-      'Publish the exact request as a bot in an EXISTING public Discord thread and queue an ordinary agent turn in the same canonical session. Active and archived unlocked threads are supported; sending auto-unarchives. Uses operator-configured normal routing; Gateway owns run admission and queueing. Forking, model overrides and runtime rebindings are unsupported on this existing-thread tool. Do not select a destination session key; routing determines it. Forward faithfully or include necessary context for delegated work. Source session references may appear in the prompt. Return a native thread mention on Discord or the returned link elsewhere on queued handoff, without polling for the answer; report denied, partial or unknown outcomes honestly. Reuse the operation ID and identical arguments after a disconnect; use openclaw_discord_operation for recovery. Never retry uncertain writes with a new ID.',
+      'Publish the exact request as a bot in an EXISTING public Discord thread and queue an ordinary agent turn in the same canonical session. Active and archived unlocked threads are supported; sending auto-unarchives. Uses the selected agent’s canonical session; Gateway owns run admission and queueing. Forking, model overrides and runtime rebindings are unsupported on this existing-thread tool. Do not supply a destination session key; it is constructed from the selected agent and verified thread. Forward faithfully or include necessary context for delegated work. Source session references may appear in the prompt. Return a native thread mention on Discord or the returned link elsewhere on queued handoff, without polling for the answer; report denied, partial or unknown outcomes honestly. Reuse the operation ID and identical arguments after a disconnect; use openclaw_discord_operation for recovery. Never retry uncertain writes with a new ID.',
     inputSchema: {
       type: 'object',
       properties: {
         ...selectors,
         target,
+        ...destination,
         channel_id: {
           type: 'string',
           pattern: '^[1-9][0-9]{16,19}$',
@@ -117,9 +124,28 @@ export const discordTools: Tool[] = [
             'Request or contextual handoff to publish and execute in this thread, preserving the user’s intent and including source references when available.',
         },
       },
-      required: ['target', 'channel_id', 'operation_id', 'prompt'],
+      required: ['guild_id', 'account_id', 'target', 'channel_id', 'operation_id', 'prompt'],
       additionalProperties: false,
     },
+  },
+  {
+    name: 'openclaw_discord_send',
+    outputSchema: discordTurnOutput,
+    description:
+      'Publish a request in a bound text channel and queue the selected agent. Use a stable operation ID; never replay uncertain effects with a new ID.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...selectors,
+        ...destination,
+        target,
+        operation_id: operation,
+        prompt: { type: 'string', minLength: 1, maxLength: 1048576 },
+      },
+      required: ['guild_id', 'account_id', 'target', 'operation_id', 'prompt'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
   },
   {
     name: 'openclaw_discord_operation',
@@ -137,22 +163,19 @@ export const discordTools: Tool[] = [
     name: 'openclaw_discord_create_channel',
     outputSchema: discordCreationOutput,
     description:
-      'Create a normal text channel under an operator-approved guild/category using the configured Gateway API, then persistently admit it for Discord coordination. Requires explicit user authorization for creation AND admission. No arbitrary tool proxy. Keep operation ID on uncertainty.',
+      'Create a text channel in a server bound to the selected agent, optionally under a category. Requires channel creation opt-in, verified bot ManageChannels and explicit authorization. Keep operation ID on uncertainty.',
     inputSchema: {
       type: 'object',
       properties: {
         ...selectors,
-        policy: {
-          type: 'string',
-          description: 'Creation policy returned by openclaw_discord_channels.',
-        },
+        ...destination,
+        category_id: { type: 'string', pattern: '^[1-9][0-9]{16,19}$' },
         operation_id: operation,
         name: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,99}$' },
         topic: { type: 'string', maxLength: 1024 },
         authorize_create: { type: 'boolean', const: true },
-        authorize_admission: { type: 'boolean', const: true },
       },
-      required: ['policy', 'operation_id', 'name', 'authorize_create', 'authorize_admission'],
+      required: ['guild_id', 'account_id', 'operation_id', 'name', 'authorize_create'],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
@@ -177,6 +200,7 @@ export async function handleDiscord(service: DiscordService, name: string, input
       (typeof input.agent_id !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(input.agent_id))
     )
       return errorResponse('Invalid Discord route selectors');
+    if (name === 'openclaw_discord_send') return structuredJsonResponse(await service.send(input));
     if (name === 'openclaw_discord_create_channel')
       return structuredJsonResponse(await service.createChannel(input));
     const result =
@@ -201,7 +225,7 @@ export async function handleDiscord(service: DiscordService, name: string, input
         },
       };
     return errorResponse(
-      'Discord request rejected or could not be verified. Check arguments, allowlist and operation status; do not blindly retry writes.'
+      'Discord request rejected or could not be verified. Check arguments, agent bindings and operation status; do not blindly retry writes.'
     );
   }
 }

@@ -11,14 +11,11 @@ import type { GatewayConfig } from './types.js';
 
 export type DiscoveryClient = Pick<GatewayClient, 'start' | 'request' | 'stopAndWait'>;
 export type DiscoveryClientFactory = (options: GatewayClientOptions) => DiscoveryClient;
-export type GatewayRosterLoader = (
-  config: GatewayConfig,
-  env: NodeJS.ProcessEnv
-) => Promise<unknown>;
 const READY_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 
 type ModelRequest =
+  | { method: 'config.get'; params: Record<string, never> }
   | { method: 'models.list'; params: { agentId: string; view: 'configured' } }
   | { method: 'sessions.patch'; params: { key: string; model: string } };
 
@@ -39,7 +36,15 @@ export async function discoverGatewayAgents(
   return requestGateway(config, env, createClient);
 }
 
-/** Closed roster/model operations; never accepts client-supplied RPC methods. */
+export async function discoverGatewayConfig(
+  config: GatewayConfig,
+  env = process.env,
+  createClient?: DiscoveryClientFactory
+): Promise<unknown> {
+  return requestGateway(config, env, createClient, { method: 'config.get', params: {} });
+}
+
+/** Closed roster/config/model operations; never accepts client-supplied RPC methods. */
 async function requestGateway(
   config: GatewayConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -47,8 +52,18 @@ async function requestGateway(
   modelRequest?: ModelRequest
 ): Promise<unknown> {
   const fail = (reason: string) =>
-    new Error((modelRequest ? 'Gateway models: ' : 'Gateway agent discovery: ') + reason);
-  if (modelRequest && !['device', 'local-shared-token'].includes(env.MCP_MODEL_AUTH ?? 'device'))
+    new Error(
+      (modelRequest?.method === 'config.get'
+        ? 'Gateway bindings: '
+        : modelRequest
+          ? 'Gateway models: '
+          : 'Gateway agent discovery: ') + reason
+    );
+  if (
+    modelRequest &&
+    modelRequest.method !== 'config.get' &&
+    !['device', 'local-shared-token'].includes(env.MCP_MODEL_AUTH ?? 'device')
+  )
     throw fail('invalid MCP_MODEL_AUTH');
   let url: URL;
   try {
@@ -66,7 +81,10 @@ async function requestGateway(
   } catch {
     throw fail('use HTTPS (or loopback HTTP) without URL credentials, query or fragment');
   }
-  const localShared = modelRequest && env.MCP_MODEL_AUTH === 'local-shared-token';
+  const localShared =
+    modelRequest &&
+    modelRequest.method !== 'config.get' &&
+    env.MCP_MODEL_AUTH === 'local-shared-token';
   if (localShared && (!['127.0.0.1', '[::1]'].includes(url.hostname) || !config.token))
     throw fail('local-shared-token model access requires literal loopback and a Gateway token');
   const scopes =
@@ -129,7 +147,7 @@ async function requestGateway(
       mode: GATEWAY_CLIENT_MODES.BACKEND,
       role: 'operator',
       scopes,
-      caps: modelRequest ? ['model-selection-policy'] : [],
+      caps: modelRequest && modelRequest.method !== 'config.get' ? ['model-selection-policy'] : [],
       minProtocol: 4,
       maxProtocol: 4,
       requestTimeoutMs: REQUEST_TIMEOUT_MS,

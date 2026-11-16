@@ -40,7 +40,7 @@ export async function handleOpenclawStatus(
     agentId = checked.value;
   }
   try {
-    const resolved = gateway.resolve(agentId);
+    const resolved = await gateway.resolve(agentId);
     const response = await resolved.client.health();
     return jsonResponse({
       ...response,

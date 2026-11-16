@@ -36,8 +36,8 @@ export function requestPublisher(
     const displayedSource = displaySource(source);
     if (source !== undefined && !newThread) throw new DiscordError('SOURCE_NEW_THREAD_REQUIRED');
     assertServiceProvenance();
-    assertTargetAllowed(config, target, threadId, 'REQUEST_SCOPE_DENIED');
-    if (target.accountId !== account || !snowflake.test(threadId) || threadId === target.channelId)
+    await assertTargetAllowed(config, target, threadId, 'REQUEST_SCOPE_DENIED');
+    if (target.accountId !== account || !snowflake.test(threadId))
       throw new DiscordError('REQUEST_SCOPE_DENIED');
     if (
       typeof prompt !== 'string' ||

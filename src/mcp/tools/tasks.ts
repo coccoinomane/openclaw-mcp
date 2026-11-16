@@ -128,7 +128,7 @@ async function processTask(task: Task, gateway: OpenClawGateway): Promise<void> 
 
   let client;
   try {
-    client = gateway.resolve(task.routingAgentId).client;
+    client = (await gateway.resolve(task.routingAgentId)).client;
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Gateway not available';
     taskManager.updateStatus(task.id, 'failed', undefined, errorMsg);
@@ -219,7 +219,7 @@ export async function handleOpenclawChatAsync(
   let agentId: string | undefined;
   let routingAgentId: string | undefined;
   try {
-    const resolved = resolveConversation(gateway, input.agent_id, sessionId);
+    const resolved = await resolveConversation(gateway, input.agent_id, sessionId);
     agentId = resolved.agentId;
     routingAgentId = resolved.routingAgentId;
     sessionId ??= createConversationKey(context, agentId);
@@ -251,7 +251,7 @@ export async function handleOpenclawChatAsync(
 }
 
 export async function handleOpenclawTaskStatus(
-  _gateway: OpenClawGateway,
+  gateway: OpenClawGateway,
   input: unknown,
   ownerId: string
 ): Promise<ToolResponse> {
@@ -280,7 +280,7 @@ export async function handleOpenclawTaskStatus(
     return errorResponse(`Task not found: ${task_id}`);
   }
 
-  const conflict = taskSelectorConflict(input, task);
+  const conflict = await taskSelectorConflict(gateway, input, task);
   if (conflict) return errorResponse(conflict);
 
   const response: Record<string, unknown> = {
@@ -317,7 +317,7 @@ const VALID_TASK_STATUSES: readonly TaskStatus[] = [
 ];
 
 export async function handleOpenclawTaskList(
-  _gateway: OpenClawGateway,
+  gateway: OpenClawGateway,
   input: unknown,
   ownerId: string
 ): Promise<ToolResponse> {
@@ -353,11 +353,11 @@ export async function handleOpenclawTaskList(
     session_id = sidResult.value;
   }
 
-  let agentFilter: string | undefined;
-  if (input.agent_id !== undefined) {
-    const checked = validateId(input.agent_id, 'agent_id');
-    if (!checked.valid) return errorResponse(checked.error);
-    agentFilter = checked.value.toLowerCase();
+  let agentFilter: string;
+  try {
+    agentFilter = (await gateway.resolve(input.agent_id as string | undefined)).agentId;
+  } catch (error) {
+    return errorResponse(error instanceof Error ? error.message : 'Invalid agent');
   }
 
   const tasks = taskManager.list(ownerId, {
@@ -382,7 +382,7 @@ export async function handleOpenclawTaskList(
 }
 
 export async function handleOpenclawTaskCancel(
-  _gateway: OpenClawGateway,
+  gateway: OpenClawGateway,
   input: unknown,
   ownerId: string
 ): Promise<ToolResponse> {
@@ -411,7 +411,7 @@ export async function handleOpenclawTaskCancel(
     return errorResponse(`Task not found: ${task_id}`);
   }
 
-  const conflict = taskSelectorConflict(input, task);
+  const conflict = await taskSelectorConflict(gateway, input, task);
   if (conflict) return errorResponse(conflict);
 
   if (task.status !== 'pending') {
@@ -436,11 +436,15 @@ export async function handleOpenclawTaskCancel(
   });
 }
 
-function taskSelectorConflict(input: Record<string, unknown>, task: Task): string | undefined {
-  if (input.agent_id === undefined) return undefined;
-  const checked = validateId(input.agent_id, 'agent_id');
-  if (!checked.valid) return checked.error;
-  if (checked.value.toLowerCase() !== task.agentId)
-    return 'agent_id conflicts with the stored task route';
-  return undefined;
+async function taskSelectorConflict(
+  gateway: OpenClawGateway,
+  input: Record<string, unknown>,
+  task: Task
+): Promise<string | undefined> {
+  try {
+    const { agentId } = await gateway.resolve(input.agent_id as string | undefined);
+    if (agentId !== task.agentId) return 'agent_id conflicts with the stored task route';
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Invalid agent';
+  }
 }

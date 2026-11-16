@@ -27,7 +27,7 @@ Send the returned key unchanged on the next turn:
 {"name":"openclaw_chat","arguments":{"message":"The release is Aurora","session_id":"agent:research:mcp:mcp.example.com:desktop:550e8400-e29b-41d4-a716-446655440000","agent_id":"research"}}
 ```
 
-Supplied keys keep the existing validation: they must be nonempty strings, at most 256 characters after trimming, with prohibited control characters rejected. Leading/trailing whitespace is trimmed as before. Validated keys are passed through without adding a prefix, renaming, or generating a replacement. A supplied `agent:<id>:` key that disagrees with explicit `agent_id` fails before submission. Without an explicit selector, existing supplied-key routing remains compatible; metadata records the qualified key's agent when known. Invalid supplied keys fail before Gateway submission.
+Supplied keys keep the existing validation: they must be nonempty strings, at most 256 characters after trimming, with prohibited control characters rejected. Leading/trailing whitespace is trimmed as before. Validated keys are passed through without adding a prefix, renaming, or generating a replacement. A supplied `agent:<id>:` key that disagrees with explicit `agent_id` fails before submission. The configured default is also checked against a qualified supplied key. Invalid supplied keys fail before Gateway submission.
 
 ## Routing and labels
 
@@ -37,11 +37,7 @@ New keys have this form when the target agent is known:
 agent:<agent-id>:mcp:<server-label>:<client-label>:<uuid>
 ```
 
-An explicit `agent_id` selects a catalog agent and takes precedence. Without it, the target is the configured `OPENCLAW_AGENT_ID`. Otherwise, an explicit agent model such as `openclaw/research`, `openclaw:research`, or `agent:research` supplies it. Agent IDs are lowercased and validated, never truncated or rewritten into a different agent. The configured agent header takes precedence over the model target. Existing headers and model values sent to Gateway remain unchanged.
-
-For `openclaw`, `openclaw/default`, and models whose agent cannot be determined locally, keys use `mcp:<server-label>:<client-label>:<uuid>`. The Gateway resolves an unqualified key according to its default/legacy session routing. The bridge cannot discover the Gateway's configured default from a chat-completion response and never guesses `main`. Configure an explicit agent when deterministic routing is required, particularly with multiple Gateway agents or defaults that may change. Reuse the same MCP deployment as well as the key; keys do not move conversation history between Gateways.
-
-This distinction is deliberate: Gateway accepts the explicit session-key header verbatim, and agent execution can derive its agent from that key. A bare key alone therefore cannot preserve an explicitly configured non-default agent. Using only a generated OpenAI `user` value would let Gateway construct its own qualified key, but would not let this bridge return that exact key before submission or reuse it through the existing `session_id` contract. See [Gateway request-context resolution](https://github.com/openclaw/openclaw/blob/main/src/gateway/http-utils.ts), [agent invocation](https://github.com/openclaw/openclaw/blob/main/src/gateway/openai-compatible-agent-run.ts), and [session-key routing](https://github.com/openclaw/openclaw/blob/main/src/routing/session-key.ts). These source links track Gateway main; deployments should verify their installed Gateway's routing behavior.
+Select agent_id explicitly or configure OPENCLAW_DEFAULT_AGENT_ID. Mandatory mode ignores that default. Selection is validated against the current Gateway roster; no model alias or Gateway fallback supplies an agent. Newly generated keys are always agent-qualified. A supplied agent-qualified key must agree with the selected/default agent.
 
 The server label is the hostname of configured `MCP_ISSUER_URL` / `--issuer-url`, if present, including when OAuth is disabled. Otherwise it is the local OS hostname, with `local` as the empty-label fallback. This works deterministically for stdio without new configuration. Host and forwarded HTTP headers never supply this label. A hostname can change after a machine/container rename; already returned keys remain reusable.
 

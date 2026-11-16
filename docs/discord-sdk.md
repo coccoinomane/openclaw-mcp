@@ -2,21 +2,7 @@
 
 All ordinary new-thread and existing-thread workflows use @openclaw/gateway-client 2026.10.9 for agent execution, observation and explicit cancellation. Channel discovery, thread lists, permissions and exact-ID readback use the existing authenticated Gateway HTTP /tools/invoke adapter. Thread creation stays on that HTTP adapter; membership and exact request publication stay on Discord REST.
 
-No OpenClaw CLI is installed or launched by the bridge, and no CLI transport or compatibility alias remains. HTTP/REST adapters are still part of the implementation. MCP OAuth and agent routing are unchanged; all tools use one configured Gateway connection, and roster discovery is either Gateway SDK discovery or a static catalog. Automated tests use fake transports. On 9 November 2026, a live local-shared-token canary created a new thread, continued the same session and recalled a code supplied only in the first turn. Repeating the first operation reused its original run and thread. Gateway delivery reported sent for both turns; independent Discord message readback was unavailable in the test session. Channel/thread discovery and blacklist enforcement passed without CLI invocations. Production reconnect and cancellation remain untested; their protocol behavior is covered by automated tests. Revalidate these gates for each deployment.
-
-## Configure Discord
-
-Keep the existing Discord account, allowed scopes, channel policy, request-publisher credential, membership settings and verified ordinary inbound routing. Add these settings to the trusted service environment (also pass them through any launcher allowlist):
-
-~~~dotenv
-MCP_DISCORD_ENABLED=true
-MCP_DISCORD_SDK_STATE_DIR=/absolute/private/approved-discord-device
-MCP_DISCORD_SDK_AUTH=device
-~~~
-
-Discord uses the same OPENCLAW_URL and OPENCLAW_GATEWAY_TOKEN as direct chat. HTTPS or loopback HTTP is required. The bridge needs no local OpenClaw executable. Configure MCP_AGENT_DISCOVERY=gateway for a live startup roster, or leave it unset for static catalogs and locally known configured agents.
-
-The SDK agent transport and Gateway HTTP read/create adapters are always used together. Missing adapters or inconsistent settings fail closed. There is no CLI fallback, including after a refused connection. HTTP read denials never trigger another transport. No client-selected endpoint, account, scope or destination session key is accepted. The optional fork source is a same-agent session key validated separately.
+No OpenClaw CLI is installed or launched. Agents and bindings are read live through agents.list and config.get. Configure the [agent-first access rules](multiagent-reference.md), credentials and private state in [configuration](configuration.md). No live test is implied by the automated suite.
 
 ## Service authentication
 
@@ -39,7 +25,7 @@ MCP_DISCORD_SDK_AUTH=local-shared-token
 
 Keep the Gateway token in its existing private configuration; do not copy it into a new variable, source file or operation journal. The service does not turn the shared token into a device token or change Gateway configuration. To return to device authentication, explicitly set MCP_DISCORD_SDK_AUTH=device and provide its previously approved device grant. Neither mode switches automatically.
 
-MCP_DISCORD_SDK_STATE_DIR must be private (0700); its identity/token files must be private (0600), regular, owner-controlled files. The default is gateway-sdk inside MCP_DISCORD_STATE_DIR. The gatewayDiscoveryAuth filename prefix is SHA256(JSON.stringify([url])), where url is the normalized WebSocket URL. Convert HTTP to ws and HTTPS to wss with URL parsing, preserve the endpoint path, then serialize with URL.toString(). For example, https://gateway.example.com becomes wss://gateway.example.com/. The identity file is <prefix>.identity.json and the device token, when used, is <prefix>.operator.json. The helper owns key validation, signing and conditional device-token updates. No CLI identity files are opened. Older name-qualified filenames are not read or migrated at runtime; prepare the integration-owned identity and matching device grant before deployment as described in [deployment preparation](configuration.md#deployment-preparation).
+MCP_DISCORD_SDK_STATE_DIR must be private (0700); its identity/token files must be private (0600), regular, owner-controlled files. The default is gateway-sdk inside MCP_DISCORD_STATE_DIR. The gatewayDiscoveryAuth filename prefix is SHA256(JSON.stringify([url])), where url is the normalized WebSocket URL. Convert HTTP to ws and HTTPS to wss with URL parsing, preserve the endpoint path, then serialize with URL.toString(). For example, https://gateway.example.com becomes wss://gateway.example.com/. The identity file is <prefix>.identity.json and the device token, when used, is <prefix>.operator.json. The helper owns key validation, signing and conditional device-token updates. No CLI identity files are opened. Older name-qualified filenames are not read or migrated at runtime; prepare the integration-owned identity and matching device grant before deployment as described in [deployment preparation](configuration.md#breaking-upgrade).
 
 Identity creation and device-token provisioning are separate operator actions, not service startup effects. Both modes load an existing integration-owned identity and never generate a replacement. Device mode requires the supported Gateway approval/token flow; local-shared-token mode requires the operator's explicit authorization to use the configured shared credential locally. Do not edit token scope arrays, copy the CLI's identity, auto-approve pairing, or add admin.
 
@@ -73,18 +59,11 @@ Generation completion does not prove a Discord reply. delivery_verified remains 
 
 Before production use, use the authorized service harness to check readiness and bounded HTTP reads, including one denied target. Then test an approved text-parent new thread, an active MCP-origin thread and an active human-origin thread with existing OpenClaw history. Verify agent/account/session equality, topic context, one prompt, one answer, membership and delivery receipts. Test accepted-run disconnect/observation, duplicate operation IDs and explicit cancellation. Do not use agent-origin tooling to bypass provenance checks for these tests.
 
-Announcement parents are not live-verified, even with the default silent starter. Archiving on Discord 2026.10.9 can delete the OpenClaw session entry, so reopening can lose prior context. Human discussion never processed by OpenClaw is not imported automatically. Bound, subagent, private, locked or incompatible groupScope routes remain outside the supported ordinary workflow. See the [independent audit](gateway-sdk-feasibility.md).
+Announcement parents are not live-verified, even with the default silent starter. Archiving on Discord 2026.10.9 can delete the OpenClaw session entry, so reopening can lose prior context. Human discussion never processed by OpenClaw is not imported automatically. Private and locked threads remain unsupported. Access checks intentionally do not inspect runtime ownership or groupScope routing. See the [independent audit](gateway-sdk-feasibility.md).
 
-## Upgrade from CLI-based releases
+## Breaking upgrade
 
-This release has no CLI compatibility mode or aliases. Update the trusted service environment and any launcher allowlist before restarting the MCP service:
-
-- Configure the single Gateway through `OPENCLAW_URL` and `OPENCLAW_GATEWAY_TOKEN`; remove obsolete connection-list and Gateway-selector variables from service environments and launcher allowlists.
-- Remove `MCP_DISCORD_AGENT_TRANSPORT`, `MCP_DISCORD_EXECUTABLE`, `MCP_DISCORD_CLI_TIMEOUT_MS`, `MCP_DISCORD_GATEWAY_READS_ENABLED` and `MCP_DISCORD_THREAD_CREATE_MODE`.
-- Replace `MCP_AGENT_DISCOVERY=cli` with `MCP_AGENT_DISCOVERY=gateway`, or unset discovery and configure a static roster. Remove obsolete CLI discovery selectors, including `MCP_AGENT_DISCOVERY_EXECUTABLE`. Gateway discovery does not import bindings; keep them explicit.
-- Retain `MCP_DISCORD_SDK_AUTH`, `MCP_DISCORD_SDK_STATE_DIR`, existing private operation state, Gateway credentials, bot credentials and Discord permissions. Provision the SDK identity before enabling writes.
-
-Drain active work before swapping releases. Preserve operation records and session locks. An uncertain operation is never safe to replay merely because the service version changed. Inspect its existing thread/run before separately authorizing another operation. No Gateway configuration edit, pairing change or Gateway restart is part of the transport migration.
+Drain active work and preserve journals, uncertain claims and identity state. Remove static agent catalogs, local destination lists and policy selectors. Set OPENCLAW_DEFAULT_AGENT_ID or require explicit agent_id with OPENCLAW_AGENT_IS_MANDATORY=true. Retain approved SDK authentication, bot credentials and private directories. There are no compatibility aliases or automatic migrations. See [configuration](configuration.md).
 
 ## Remaining HTTP/REST calls and SDK feasibility
 
@@ -96,7 +75,7 @@ This inventory covers outbound calls made by the bridge itself. The MCP HTTP/SSE
 | Gateway reachability | `OpenClawClient.health` posts to the same endpoint with `model: health-check`, empty messages and `max_tokens: 1`; any 2xx–4xx response reports reachability | An SDK readiness/health probe is feasible as a separate change, but would measure a different authentication/protocol path. Preserve the distinction between reachability and agent authorization. |
 | Discord metadata, threads, permissions and answer readback | [channelReader](../src/openclaw/discord-read.ts) posts `message` to `/tools/invoke`; allowed actions are `channel-list`, `channel-info`, `thread-list`, `permissions` and `read`. The last requires the exact message ID and `limit: 1`. | A closed SDK `tools.invoke`/`message.action` adapter is plausible. Verify deployed method/schema support, write-scope requirements for tool RPCs, conversation-read authority and response shape. Do not retry denied SDK reads over HTTP or broaden scopes for parity. |
 | New thread | [threadInvoker](../src/openclaw/discord-thread.ts) posts `message/thread-create` to `/tools/invoke` with configured account, parent, title, operation idempotency key and, by default, a freshly posted silent starter message ID | Feasible through a constrained SDK tool/action call after equivalent policy, ancestry and partial-result tests. Preserve unknown outcomes and no-replay behavior. Announcement parents remain unverified. |
-| Optional normal text channel | [channelInvoker](../src/openclaw/discord-channels.ts) posts `message/channel-create` to `/tools/invoke` with policy guild/category/account, `channelType: 0` and idempotency key | Feasible with the same authorization, readback and durable admission checks. Keep separate user authorization for creation and admission; do not expose arbitrary SDK methods. |
+| Optional normal text channel | [channelInvoker](../src/openclaw/discord-channels.ts) posts `message/channel-create` to `/tools/invoke` with verified guild/category/account, `channelType: 0` and idempotency key | Feasible with the same authorization, readback and durable operation checks. Keep explicit user authorization for creation; do not expose arbitrary SDK methods. |
 | New-thread membership | [threadMemberAdder](../src/openclaw/discord-thread.ts) sends one `PUT`, then one `GET`, to `https://discord.com/api/v10/channels/{thread}/thread-members/{configuredUser}` | Retain REST. The inspected Gateway message surface has no thread-member-add action. An SDK client cannot add a missing server capability; a Gateway feature would be needed first. |
 | Exact prompt publication and verification | [requestPublisher](../src/openclaw/discord-request.ts) sends one `POST` to `https://discord.com/api/v10/channels/{thread}/messages`, then `GET .../messages/{returnedId}`. Long prompts use multipart `richiesta.txt`. Both new-thread and existing-thread requests use it. | Retain REST until a Gateway method preserves exact bytes/whitespace, disables all mentions and reply mentions, suppresses embeds, supports attachments and returns IDs for readback. The inspected message/send path lacks the required public allowed-mentions control and trims trailing whitespace. |
 

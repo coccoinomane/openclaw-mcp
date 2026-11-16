@@ -1,20 +1,14 @@
 import { checkModel } from './models.js';
 import { checkForkSource } from './session-fork.js';
-import {
-  assertChannelAllowed,
-  assertTargetAllowed,
-  channelAllowed,
-  dynamicTarget,
-  scopeKey,
-  type DiscoveryScope,
-} from './discord-policy.js';
+import { assertTargetAllowed } from './discord-policy.js';
+import type { DiscordAccess } from './discord-bindings.js';
 import type { RequestPublisher } from './discord-request.js';
 import { displaySource } from './discord-source.js';
 import {
   ChannelCreation,
   DiscordError,
   assertServiceProvenance,
-  type CreationPolicy,
+  type ChannelDestination,
   type ChannelInvoker,
   type AdmittedTarget,
 } from './discord-channels.js';
@@ -30,44 +24,24 @@ export interface DiscordSelectors {
   agent_id?: string;
 }
 export interface DiscordConfig {
-  /** Imported static bindings only restrict/reassign already admitted routes. */
-  importedRouteAgent?: (target: AdmittedTarget, channelId: string) => string | undefined;
+  access: DiscordAccess;
   stateDir: string;
-  discoveryScopes?: DiscoveryScope[];
-  channelWhitelist?: string[];
-  channelBlacklist?: string[];
-  creationPolicies?: CreationPolicy[];
+  channelCreateEnabled?: boolean;
   maxOperations?: number;
   threadMember?: { userId: string; accountId: string };
   forwardingRequesterName?: string;
   threadCreationMode?: 'silent-starter' | 'classic';
-  acknowledgeInboundRouting?: boolean;
-  targets: Array<{
-    name: string;
-    guildId: string;
-    channelId: string;
-    accountId: string;
-    agentId: string;
-    normalRouting?: boolean;
-  }>;
 }
 const snowflake = /^[1-9][0-9]{16,19}$/;
 const slug = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 function check(value: unknown, pattern: RegExp, label: string): asserts value is string {
   if (typeof value !== 'string' || !pattern.test(value)) throw new Error('Invalid ' + label);
 }
-export function loadDiscordConfig(env = process.env): DiscordConfig | undefined {
+export function loadDiscordConfig(env = process.env): Omit<DiscordConfig, 'access'> | undefined {
   if (env.MCP_DISCORD_ENABLED !== 'true') return undefined;
-  const config: DiscordConfig = {
+  const config: Omit<DiscordConfig, 'access'> = {
     stateDir: env.MCP_DISCORD_STATE_DIR || '',
-    targets: JSON.parse(env.MCP_DISCORD_TARGETS || '[]'),
-    discoveryScopes: JSON.parse(env.MCP_DISCORD_DISCOVERY_SCOPES ?? '[]'),
-    channelWhitelist: JSON.parse(env.MCP_DISCORD_CHANNEL_WHITELIST ?? '[]'),
-    channelBlacklist: JSON.parse(env.MCP_DISCORD_CHANNEL_BLACKLIST ?? '[]'),
-    creationPolicies:
-      env.MCP_DISCORD_CHANNEL_CREATE_ENABLED === 'true'
-        ? JSON.parse(env.MCP_DISCORD_CREATION_POLICIES || '[]')
-        : undefined,
+    channelCreateEnabled: env.MCP_DISCORD_CHANNEL_CREATE_ENABLED === 'true',
     threadMember:
       env.MCP_DISCORD_THREAD_MEMBER_ENABLED === 'true'
         ? {
@@ -79,56 +53,13 @@ export function loadDiscordConfig(env = process.env): DiscordConfig | undefined 
     threadCreationMode: (env.MCP_DISCORD_THREAD_CREATION_MODE ??
       'silent-starter') as DiscordConfig['threadCreationMode'],
     maxOperations: Number(env.MCP_DISCORD_MAX_OPERATIONS ?? 4),
-    acknowledgeInboundRouting: env.MCP_DISCORD_ACKNOWLEDGE_INBOUND_ROUTING === 'true',
   };
   validateConfig(config);
   return config;
 }
-function validateConfig(config: DiscordConfig) {
+function validateConfig(config: Omit<DiscordConfig, 'access'>) {
   if (!['silent-starter', 'classic'].includes(config.threadCreationMode ?? 'silent-starter'))
     throw new DiscordError('THREAD_CREATION_MODE_INVALID');
-  for (const [label, values] of Object.entries({
-    targets: config.targets,
-    discoveryScopes: config.discoveryScopes === undefined ? [] : config.discoveryScopes,
-    creationPolicies: config.creationPolicies === undefined ? [] : config.creationPolicies,
-  })) {
-    if (
-      !Array.isArray(values) ||
-      values.some((v) => !v || typeof v !== 'object' || Array.isArray(v))
-    )
-      throw new Error('Invalid Discord ' + label);
-  }
-  for (const values of [config.channelWhitelist, config.channelBlacklist]) {
-    if (
-      values !== undefined &&
-      (!Array.isArray(values) ||
-        values.some((v) => typeof v !== 'string' || !snowflake.test(v)) ||
-        new Set(values).size !== values.length)
-    )
-      throw new Error('Invalid Discord channel policy IDs');
-  }
-  const scopes = new Set<string>();
-  for (const scope of config.discoveryScopes ?? []) {
-    if (
-      Object.keys(scope).some(
-        (k) => !['guildId', 'accountId', 'agentId', 'normalRouting'].includes(k)
-      )
-    )
-      throw new Error('Invalid discovery scope field');
-    check(scope.guildId, snowflake, 'scope guild ID');
-    check(scope.accountId, slug, 'scope account');
-    check(scope.agentId, /^[a-z0-9][a-z0-9_-]{0,63}$/, 'scope agent');
-    if (scopes.has(scopeKey(scope))) throw new Error('Duplicate discovery scope');
-    scopes.add(scopeKey(scope));
-  }
-  for (const t of [
-    ...config.targets,
-    ...(config.discoveryScopes ?? []),
-    ...(config.creationPolicies ?? []),
-  ]) {
-    if (t.normalRouting !== undefined && typeof t.normalRouting !== 'boolean')
-      throw new Error('Invalid normalRouting');
-  }
   if (
     !Number.isInteger(config.maxOperations ?? 4) ||
     (config.maxOperations ?? 4) < 1 ||
@@ -148,60 +79,16 @@ function validateConfig(config: DiscordConfig) {
   if (config.threadMember) {
     check(config.threadMember.userId, snowflake, 'thread member user ID');
     check(config.threadMember.accountId, slug, 'thread member account');
-    if (
-      [
-        ...config.targets,
-        ...(config.discoveryScopes ?? []),
-        ...(config.creationPolicies ?? []),
-      ].some((t) => t.accountId !== config.threadMember!.accountId)
-    )
-      throw new DiscordError('THREAD_MEMBER_ACCOUNT_MISMATCH');
   }
   if (!isAbsolute(config.stateDir)) throw new Error('MCP_DISCORD_STATE_DIR must be absolute');
-  if (
-    !Array.isArray(config.targets) ||
-    (!config.targets.length && !config.discoveryScopes?.length && !config.creationPolicies?.length)
-  )
-    throw new Error('Discord allowlist is empty');
-  if (config.creationPolicies) {
-    if (!config.creationPolicies.length || config.acknowledgeInboundRouting !== true)
-      throw new DiscordError('CREATION_ROUTING_ACKNOWLEDGEMENT_REQUIRED');
-    const policies = new Set<string>();
-    for (const p of config.creationPolicies) {
-      if (
-        Object.keys(p).some(
-          (key) =>
-            !['name', 'guildId', 'categoryId', 'accountId', 'agentId', 'normalRouting'].includes(
-              key
-            )
-        )
-      )
-        throw new Error('Invalid creation policy field');
-      check(p.name, slug, 'creation policy');
-      check(p.guildId, snowflake, 'guild ID');
-      check(p.categoryId, snowflake, 'category ID');
-      check(p.accountId, slug, 'account');
-      check(p.agentId, /^[a-z0-9][a-z0-9_-]{0,63}$/, 'agent');
-      if (policies.has(p.name)) throw new DiscordError('DUPLICATE_CREATION_POLICY');
-      policies.add(p.name);
-    }
-  }
-  const names = new Set<string>();
-  for (const t of config.targets) {
-    check(t.name, slug, 'target name');
-    check(t.guildId, snowflake, 'guild ID');
-    check(t.channelId, snowflake, 'channel ID');
-    check(t.accountId, slug, 'account');
-    check(t.agentId, /^[a-z0-9][a-z0-9_-]{0,63}$/, 'agent');
-    if (t.name.startsWith('created-')) throw new Error('Reserved target prefix');
-    if (names.has(t.name)) throw new Error('Duplicate target name');
-    names.add(t.name);
-  }
 }
+
 interface Operation {
   agent_id?: string;
+  guild_id?: string;
+  account_id?: string;
   fingerprint: string;
-  kind?: 'thread_reply';
+  kind?: 'thread_reply' | 'channel_message';
   owner?: string;
   request_status?:
     | 'pending'
@@ -250,18 +137,6 @@ interface Operation {
   recovery?: string;
   error_code?: string;
 }
-/** Optional extra route verification. Normal routing is an operator prerequisite. */
-export type DiscordRouteResolver = (
-  target: AdmittedTarget,
-  channelId: string
-) => Promise<{
-  channelId: string;
-  guildId: string;
-  accountId: string;
-  agentId: string;
-  sessionKey: string;
-  kind: 'ordinary' | 'bound' | 'subagent' | 'unknown';
-}>;
 export class DiscordService {
   private readonly creation?: ChannelCreation;
   private readonly owner = randomUUID();
@@ -281,7 +156,6 @@ export class DiscordService {
   constructor(
     readonly config: DiscordConfig,
     invoke?: ChannelInvoker,
-    private readonly resolveRoute?: DiscordRouteResolver,
     private readonly reader?: DiscordReader,
     private readonly invokeThread?: ThreadInvoker,
     private readonly addThreadMember?: ThreadMemberAdder,
@@ -293,123 +167,52 @@ export class DiscordService {
     if (!invokeThread) throw new DiscordError('THREAD_ADAPTER_REQUIRED');
     if (config.threadMember && !addThreadMember)
       throw new DiscordError('THREAD_MEMBER_ADAPTER_REQUIRED');
-    if (config.creationPolicies) {
+    if (config.channelCreateEnabled) {
       if (!invoke) throw new DiscordError('CREATION_ADAPTER_REQUIRED');
       this.creation = new ChannelCreation(
         config.stateDir,
-        config.creationPolicies,
         invoke,
-        async (p, id) => {
-          if (id !== p.categoryId) {
-            assertChannelAllowed(this.config, id);
-            if (
-              this.config.importedRouteAgent &&
-              this.config.importedRouteAgent({ ...p, channelId: id }, id) !== p.agentId
-            )
-              throw new DiscordError('CREATION_ROUTE_CONFLICT');
-          } else if (this.config.channelBlacklist?.includes(id))
-            throw new DiscordError('CHANNEL_POLICY_DENIED');
-          return (await this.readInfo({ ...p, channelId: id }, id)).channel;
+        async (p, id) => (await this.readInfo({ ...p, name: id, channelId: id }, id)).channel,
+        async (p) => {
+          await this.config.access.assertCreate({ ...p, name: '', channelId: '' });
+          // A category's overwrites cannot prove guild-level ManageChannels. The
+          // invoker performs a guild-level bot role check before channel-create.
         }
       );
     }
   }
   private async ordinaryRoute(t: AdmittedTarget, channelId: string) {
-    if (
-      this.config.importedRouteAgent &&
-      this.config.importedRouteAgent(t, channelId) !== t.agentId
-    )
-      throw new DiscordError('ROUTE_MISMATCH');
-    if (!this.resolveRoute) return 'agent:' + t.agentId + ':discord:channel:' + channelId;
-    let route;
-    try {
-      route = await this.resolveRoute(t, channelId);
-    } catch {
-      throw new DiscordError('ROUTE_UNVERIFIED');
-    }
-    if (
-      !route ||
-      route.channelId !== channelId ||
-      route.guildId !== t.guildId ||
-      route.accountId !== t.accountId
-    )
-      throw new DiscordError('ROUTE_UNVERIFIED');
-    if (route.kind !== 'ordinary') throw new DiscordError('NONORDINARY_ROUTE_DENIED');
-    if (
-      route.agentId !== t.agentId ||
-      route.sessionKey !== 'agent:' + t.agentId + ':discord:channel:' + channelId
-    )
-      throw new DiscordError('ROUTE_MISMATCH');
-    return route.sessionKey;
-  }
-  private route(t: AdmittedTarget, channelId = t.channelId): AdmittedTarget {
-    if (!this.config.importedRouteAgent) return t;
-    const agentId = this.config.importedRouteAgent(t, channelId);
-    if (!agentId) throw new DiscordError('IMPORTED_ROUTE_UNMAPPED');
-    return { ...t, permissionAgentId: t.permissionAgentId ?? t.agentId, agentId };
-  }
-  private matches(t: { agentId: string }, input: DiscordSelectors) {
-    return input.agent_id === undefined || input.agent_id === t.agentId;
-  }
-  private assertSelectors(t: { agentId: string }, input: DiscordSelectors) {
-    if (!this.matches(t, input)) throw new DiscordError('ROUTE_SELECTOR_CONFLICT');
-  }
-  private policyRoute(p: CreationPolicy) {
-    // A new channel has no peer binding. Its guild/account route must match the policy.
-    if (
-      this.config.importedRouteAgent &&
-      this.config.importedRouteAgent({ ...p, channelId: '' }, '') !== p.agentId
-    )
-      throw new DiscordError('CREATION_ROUTE_CONFLICT');
-    return p;
+    await this.config.access.assert(t);
+    return 'agent:' + t.agentId + ':discord:channel:' + channelId;
   }
   async createChannel(input: any) {
     if (!this.creation) throw new DiscordError('CHANNEL_CREATION_DISABLED');
-    const policy = this.config.creationPolicies?.find((p) => p.name === input.policy);
-    if (policy) {
-      this.assertSelectors(policy, input);
-      this.policyRoute(policy);
-    }
-    if (policy && this.config.channelBlacklist?.includes(policy.categoryId))
-      throw new DiscordError('CHANNEL_POLICY_DENIED');
-    const result = await this.creation.create(input);
-    return { ...result, agent_id: policy?.agentId };
+    const agentId = await this.config.access.select(input.agent_id);
+    check(input.guild_id, snowflake, 'guild ID');
+    check(input.account_id, slug, 'account ID');
+    if (input.category_id !== undefined) check(input.category_id, snowflake, 'category ID');
+    const destination: ChannelDestination = {
+      agentId,
+      guildId: input.guild_id,
+      accountId: input.account_id,
+      categoryId: input.category_id,
+    };
+    await this.config.access.assertCreate({ ...destination, name: '', channelId: '' });
+    return this.creation.create(input, destination);
   }
-  private async target(name: unknown, channelId?: string) {
-    const targets = [...this.config.targets, ...((await this.creation?.admitted()) ?? [])];
-    let t = targets.find((item) => item.name === name);
-    if (!t && typeof name === 'string') {
-      const match = /^discord-[a-f0-9]{64}-([1-9][0-9]{16,19})$/.exec(name);
-      if (match) {
-        t = this.config.discoveryScopes
-          ?.map((s) => dynamicTarget(s, match[1]))
-          .find((candidate) => candidate.name === name);
-        // A crafted dynamic ID must retain narrower legacy/admission constraints.
-        if (t) {
-          const existing = targets.find(
-            (item) => item.channelId === t!.channelId && scopeKey(item) === scopeKey(t!)
-          );
-          if (existing) t = { ...existing, name: t.name };
-        }
-      }
-    }
-    if (!t) throw new Error('Target is not allowlisted');
-    assertTargetAllowed(this.config, t);
-    return this.route(t, channelId);
+  private async target(input: any) {
+    return this.config.access.target(input);
   }
   private async readInfo(t: AdmittedTarget, id: string) {
     check(id, snowflake, 'channel ID');
     return this.reader!(t, { action: 'channel-info', channelId: id });
   }
   private verifyChannel(t: AdmittedTarget, id: string, c: any, parent = false) {
-    assertTargetAllowed(this.config, t, id);
     if (!c || c.id !== id || c.guild_id !== t.guildId || !Number.isInteger(c.type))
       throw new Error('Channel guild could not be verified');
     if (id === t.channelId && t.categoryId && c.parent_id !== t.categoryId)
       throw new DiscordError('ADMITTED_CHANNEL_MOVED');
     const thread = [10, 11, 12].includes(c.type);
-    if (thread && this.config.channelBlacklist?.includes(c.parent_id))
-      throw new DiscordError('CHANNEL_POLICY_DENIED');
     if (
       parent
         ? id !== t.channelId || ![0, 5, 15, 16].includes(c.type)
@@ -420,120 +223,18 @@ export class DiscordService {
     return c;
   }
   private async info(t: AdmittedTarget, id: string, parent = false) {
-    assertTargetAllowed(this.config, t, id);
+    await assertTargetAllowed(this.config, t, id);
     return this.verifyChannel(t, id, (await this.readInfo(t, id)).channel, parent);
   }
   async channels(input: DiscordSelectors = {}) {
-    const channels = [];
-    const targets = [...this.config.targets, ...((await this.creation?.admitted()) ?? [])].filter(
-      (t) => channelAllowed(this.config, t.channelId)
-    );
-    // One live list per guild/account/agent, scoped to this request only.
-    const lists = new Map<string, Map<string, any>>();
-    for (const t of [
-      ...targets,
-      ...(this.config.discoveryScopes ?? []).map((s) => dynamicTarget(s, s.guildId)),
-    ]) {
-      const key = scopeKey(t);
-      if (lists.has(key)) continue;
-      const data = await this.reader!(t, { action: 'channel-list' });
-      if (
-        !data ||
-        data.ok === false ||
-        data.isError ||
-        data.partial ||
-        !Array.isArray(data.channels)
-      )
-        throw new DiscordError('CHANNEL_LIST_UNVERIFIED');
-      const byId = new Map<string, any>();
-      for (const c of data.channels) {
-        if (
-          !c ||
-          typeof c.id !== 'string' ||
-          !snowflake.test(c.id) ||
-          byId.has(c.id) ||
-          c.guild_id !== t.guildId ||
-          !Number.isInteger(c.type)
-        )
-          throw new DiscordError('CHANNEL_LIST_UNVERIFIED');
-        byId.set(c.id, c);
-      }
-      lists.set(key, byId);
-    }
-    for (const scope of this.config.discoveryScopes ?? []) {
-      for (const c of lists.get(scopeKey(scope))!.values()) {
-        if (![0, 5, 15, 16].includes(c.type) || !channelAllowed(this.config, c.id)) continue;
-        // Keep legacy aliases and category-admission checks when scopes overlap.
-        if (!targets.some((t) => scopeKey(t) === scopeKey(scope) && t.channelId === c.id))
-          targets.push(dynamicTarget(scope, c.id));
-      }
-    }
-    for (const t of targets) {
-      const list = lists.get(scopeKey(t))!;
-      // A complete live list may no longer contain a deleted or inaccessible legacy target.
-      if (!list.has(t.channelId)) continue;
-      const c = this.verifyChannel(t, t.channelId, list.get(t.channelId), true);
-      const category = c.parent_id == null ? undefined : list.get(c.parent_id);
-      if (
-        c.parent_id != null &&
-        (!category ||
-          category.id !== c.parent_id ||
-          category.guild_id !== t.guildId ||
-          category.type !== 4)
-      )
-        throw new DiscordError('CATEGORY_VERIFICATION_FAILED');
-      if (
-        typeof c.name !== 'string' ||
-        (c.topic != null && typeof c.topic !== 'string') ||
-        (category && typeof category.name !== 'string')
-      )
-        throw new DiscordError('CHANNEL_METADATA_UNVERIFIED');
-      let routed;
-      try {
-        routed = this.route(t);
-      } catch (error) {
-        if (error instanceof DiscordError && error.code === 'IMPORTED_ROUTE_UNMAPPED') continue;
-        throw error;
-      }
-      if (!this.matches(routed, input)) continue;
-      channels.push({
-        agent_id: routed.agentId,
-        account_id: routed.accountId,
-        target: t.name,
-        channel_id: c.id,
-        guild_id: t.guildId,
-        name: c.name,
-        topic: c.topic ?? null,
-        category_id: c.parent_id ?? null,
-        category_name: category?.name ?? null,
-        discord_url: 'https://discord.com/channels/' + t.guildId + '/' + c.id,
-      });
-    }
+    const result = await this.config.access.channels(input.agent_id);
     return {
-      channels,
-      creation_policies: (this.config.creationPolicies ?? [])
-        .filter((p) => {
-          if (!this.matches(p, input)) return false;
-          try {
-            this.policyRoute(p);
-            return true;
-          } catch {
-            return false;
-          }
-        })
-        .map((p) => ({
-          agent_id: p.agentId,
-          account_id: p.accountId,
-          policy: p.name,
-          guild_id: p.guildId,
-          category_id: p.categoryId,
-          agent: p.agentId,
-        })),
+      ...result,
+      creation_guilds: this.config.channelCreateEnabled ? result.creation_guilds : [],
     };
   }
   async threads(input: any) {
-    const t = await this.target(input.target);
-    this.assertSelectors(t, input);
+    const t = await this.target(input);
     if (input.archived !== undefined && typeof input.archived !== 'boolean')
       throw new Error('Invalid archived flag');
     if (
@@ -566,7 +267,6 @@ export class DiscordService {
           c &&
           typeof c.id === 'string' &&
           snowflake.test(c.id) &&
-          !this.config.channelBlacklist?.includes(c.id) &&
           c.guild_id === t.guildId &&
           c.parent_id === t.channelId &&
           [10, 11, 12].includes(c.type)
@@ -594,45 +294,12 @@ export class DiscordService {
   }
   async status(id: unknown, input: DiscordSelectors = {}) {
     const result: Operation = JSON.parse(await readFile(this.path(id), 'utf8'));
+    const agentId = await this.config.access.select(input.agent_id);
+    if (result.agent_id !== agentId) throw new DiscordError('ROUTE_SELECTOR_CONFLICT');
     if ((result as any).kind === 'channel_create') {
-      if (
-        !this.creation ||
-        !this.config.creationPolicies?.some((p) => p.name === (result as any).policy)
-      )
-        throw new DiscordError('CREATION_POLICY_DENIED');
-      if (result.channel_id) assertChannelAllowed(this.config, result.channel_id);
-      const policy = this.config.creationPolicies!.find((p) => p.name === (result as any).policy)!;
-      this.assertSelectors(
-        {
-          agentId: result.agent_id ?? policy.agentId,
-        },
-        input
-      );
-      if (result.agent_id && result.agent_id !== policy.agentId)
-        throw new DiscordError('ROUTE_MISMATCH');
-      this.policyRoute(policy);
-      return {
-        ...this.creation.publicResult(result),
-        agent_id: policy.agentId,
-      };
+      return this.creation ? this.creation.publicResult(result) : { ...result, retry_safe: false };
     }
-    const t = await this.target(result.target, result.channel_id);
-    const sessionAgent =
-      typeof result.session_key === 'string'
-        ? /^agent:([a-z0-9][a-z0-9_-]{0,63}):discord:channel:/.exec(result.session_key)?.[1]
-        : undefined;
-    const storedAgent = result.agent_id ?? sessionAgent;
-    if (result.agent_id && sessionAgent && result.agent_id !== sessionAgent)
-      throw new DiscordError('ROUTE_MISMATCH');
-    this.assertSelectors(
-      {
-        agentId: storedAgent ?? t.agentId,
-      },
-      input
-    );
-    if (storedAgent && storedAgent !== t.agentId) throw new DiscordError('ROUTE_MISMATCH');
-    assertTargetAllowed(this.config, t, result.channel_id);
-    return this.publicResult({ ...result, ...(storedAgent ? { agent_id: storedAgent } : {}) });
+    return this.publicResult(result);
   }
   /** Host-only explicit cancellation; MCP request disconnects never call this. */
   async cancel(id: string, input: DiscordSelectors = {}) {
@@ -660,7 +327,9 @@ export class DiscordService {
       (op.owner !== this.owner || !this.active.has(op.operation_id))
     ) {
       result.status =
-        op.channel_id || op.kind === 'thread_reply' ? 'run_unknown' : 'creation_unknown';
+        op.channel_id || op.kind === 'thread_reply' || op.kind === 'channel_message'
+          ? 'run_unknown'
+          : 'creation_unknown';
       result.error_code = 'OPERATION_INTERRUPTED';
       result.recovery =
         'Service ownership ended. Inspect the existing thread; never replay this operation.';
@@ -688,6 +357,8 @@ export class DiscordService {
         (key) =>
           ![
             'target',
+            'guild_id',
+            'account_id',
             'operation_id',
             'mode',
             'title',
@@ -707,12 +378,32 @@ export class DiscordService {
     if (
       !input ||
       Object.keys(input).some(
-        (key) => !['target', 'channel_id', 'operation_id', 'prompt', 'agent_id'].includes(key)
+        (key) =>
+          ![
+            'target',
+            'guild_id',
+            'account_id',
+            'channel_id',
+            'operation_id',
+            'prompt',
+            'agent_id',
+          ].includes(key)
       )
     )
       throw new DiscordError('REPLY_ARGUMENTS_INVALID');
     check(input.channel_id, snowflake, 'thread ID');
     return this.enqueue({ ...input, mode: 'reply' });
+  }
+  async send(input: any) {
+    if (
+      !input ||
+      Object.keys(input).some(
+        (key) =>
+          !['target', 'guild_id', 'account_id', 'operation_id', 'prompt', 'agent_id'].includes(key)
+      )
+    )
+      throw new DiscordError('SEND_ARGUMENTS_INVALID');
+    return this.enqueue({ ...input, mode: 'send', channel_id: input.target });
   }
   private async enqueue(input: any) {
     this.path(input.operation_id);
@@ -745,6 +436,52 @@ export class DiscordService {
         if (!this.background.has(input.operation_id)) this.active.delete(input.operation_id);
       }
     }
+  }
+  private async verifyThreadCreate(t: AdmittedTarget, prompt: string) {
+    const { permissions: p } = await this.reader!(t, {
+      action: 'permissions',
+      channelId: t.channelId,
+    });
+    if (
+      !p ||
+      p.channelId !== t.channelId ||
+      p.guildId !== t.guildId ||
+      p.isDm !== false ||
+      ![0, 5].includes(p.channelType) ||
+      !Array.isArray(p.permissions) ||
+      ![
+        'ViewChannel',
+        'SendMessages',
+        'ReadMessageHistory',
+        'CreatePublicThreads',
+        'SendMessagesInThreads',
+        ...(prompt.length > 2000 ? ['AttachFiles'] : []),
+      ].every((v) => p.permissions.includes(v))
+    )
+      throw new DiscordError('THREAD_PERMISSIONS_DENIED');
+    await this.config.access.assert(t);
+  }
+  private async verifyDestination(t: AdmittedTarget, id: string, prompt: string) {
+    if (id !== t.channelId) return this.verifyReply(t, id, prompt);
+    const c = await this.info(t, id, true);
+    const { permissions: p } = await this.reader!(t, { action: 'permissions', channelId: id });
+    if (
+      ![0, 5].includes(c.type) ||
+      !p ||
+      p.channelId !== id ||
+      p.guildId !== t.guildId ||
+      p.channelType !== c.type ||
+      p.isDm !== false ||
+      !Array.isArray(p.permissions) ||
+      ![
+        'ViewChannel',
+        'SendMessages',
+        'ReadMessageHistory',
+        ...(prompt.length > 2000 ? ['AttachFiles'] : []),
+      ].every((v) => p.permissions.includes(v))
+    )
+      throw new DiscordError('CHANNEL_PERMISSIONS_DENIED');
+    return this.ordinaryRoute(t, id);
   }
   private async verifyReply(t: AdmittedTarget, id: string, prompt: string) {
     await this.info(t, t.channelId, true);
@@ -816,9 +553,9 @@ export class DiscordService {
   }
   private async prepare(input: any) {
     const replying = input.mode === 'reply';
+    const sending = input.mode === 'send';
     assertServiceProvenance();
-    const t = await this.target(input.target, replying ? input.channel_id : undefined);
-    this.assertSelectors(t, input);
+    const t = await this.target(input);
     const path = this.path(input.operation_id);
 
     if (
@@ -886,7 +623,7 @@ export class DiscordService {
       }
       if (previous.fingerprint !== fingerprint)
         throw new Error('Operation ID already used with different arguments');
-      assertTargetAllowed(this.config, t, previous.channel_id);
+      await assertTargetAllowed(this.config, t, previous.channel_id);
       return this.publicResult(previous);
     }
     const op: Operation = {
@@ -896,13 +633,19 @@ export class DiscordService {
         ? { fork_from_session: input.fork_from_session, fork_status: 'pending' as const }
         : {}),
       agent_id: t.agentId,
+      guild_id: t.guildId,
+      account_id: t.accountId,
       agent_transport: 'sdk',
       agent_idempotency_key:
         'discord-run-' +
         createHash('sha256')
           .update(JSON.stringify([input.operation_id]))
           .digest('hex'),
-      ...(replying ? { kind: 'thread_reply' as const } : {}),
+      ...(replying
+        ? { kind: 'thread_reply' as const }
+        : sending
+          ? { kind: 'channel_message' as const }
+          : {}),
       owner: this.owner,
       request_status: 'pending',
       request_verified: false,
@@ -910,7 +653,8 @@ export class DiscordService {
       operation_id: input.operation_id,
       target: t.name,
       status: input.mode === 'new_thread' ? 'creating' : 'created',
-      member_status: !replying && this.config.threadMember ? 'pending' : 'disabled',
+      member_status:
+        input.mode === 'new_thread' && this.config.threadMember ? 'pending' : 'disabled',
       member_verified: false,
     };
     try {
@@ -942,8 +686,6 @@ export class DiscordService {
     let dispatched = false;
     let createDispatched = false;
     try {
-      if (this.config.acknowledgeInboundRouting !== true || t.normalRouting !== true)
-        throw new DiscordError('NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED');
       if (!this.publishRequest) throw new DiscordError('REQUEST_PUBLISHER_REQUIRED');
       if (input.fork_from_session !== undefined && !this.agent?.forkSession)
         throw new DiscordError('FORK_UNSUPPORTED');
@@ -951,14 +693,15 @@ export class DiscordService {
       const parent = await this.info(t, t.channelId, true);
       if ([15, 16].includes(parent.type)) throw new DiscordError('FORUM_MEDIA_WRITES_UNSUPPORTED');
       let id = input.channel_id;
-      if (replying) {
-        op.session_key = await this.verifyReply(t, id, input.prompt);
+      if (replying || sending) {
+        op.session_key = await this.verifyDestination(t, id, input.prompt);
         op.channel_id = id;
         op.discord_url = 'https://discord.com/channels/' + t.guildId + '/' + id;
         releaseSession = await this.claimSession(op.session_key, input.operation_id);
         await save();
       }
       if (input.mode === 'new_thread') {
+        await this.verifyThreadCreate(t, input.prompt);
         await this.ordinaryRoute(t, t.channelId);
         createDispatched = true;
         op.thread_create_transport = 'gateway';
@@ -995,6 +738,7 @@ export class DiscordService {
         op.fork_status = 'forking';
         await save();
         try {
+          await this.config.access.assert(t);
           await this.agent!.forkSession!(
             op.session_key,
             input.fork_from_session,
@@ -1013,6 +757,7 @@ export class DiscordService {
       if (!replying && input.model !== undefined && input.fork_from_session === undefined) {
         if (!this.agent?.selectModel) throw new DiscordError('MODEL_SELECTION_UNSUPPORTED');
         try {
+          await this.config.access.assert(t);
           await this.agent.selectModel(op.session_key, input.model);
         } catch (error) {
           op.model_error = error instanceof Error ? error.message : 'Model selection failed';
@@ -1020,10 +765,11 @@ export class DiscordService {
         }
         await save();
       }
-      if (!replying && this.config.threadMember) {
+      if (input.mode === 'new_thread' && this.config.threadMember) {
         op.member_status = 'adding';
         await save();
         try {
+          await this.verifyDestination(t, id, input.prompt);
           await this.addThreadMember!(t, id);
           op.member_status = 'verified';
           op.member_verified = true;
@@ -1037,7 +783,7 @@ export class DiscordService {
         }
         await save();
       }
-      if (replying) await this.verifyReply(t, id, input.prompt);
+      await this.verifyDestination(t, id, input.prompt);
       op.request_status = 'publishing';
       await save();
       try {
@@ -1078,8 +824,7 @@ export class DiscordService {
           op.status = 'running';
           op.generation_status = 'running';
           await save();
-          assertTargetAllowed(this.config, t, id);
-          if (replying) await this.verifyReply(t, id, input.prompt);
+          await this.verifyDestination(t, id, input.prompt);
           dispatched = true;
           const result: any = await this.agent!.run(
             {

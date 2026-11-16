@@ -23,7 +23,7 @@ OPENCLAW_URL=http://127.0.0.1:18789
 OPENCLAW_GATEWAY_TOKEN=your-gateway-token
 ```
 
-For the fork's Discord integration, configure the SDK service identity for the same Gateway connection; there is no CLI transport selector. See [Discord setup](../../../docs/discord-skills.md) and the [upgrade checklist](../../../docs/discord-sdk.md#upgrade-from-cli-based-releases). Agent discovery accepts `MCP_AGENT_DISCOVERY=gateway` or an unset/static roster only.
+For the fork's Discord integration, configure the SDK service identity for the same Gateway connection; there is no CLI transport selector. See [Discord setup](../../../docs/discord-skills.md) and the [upgrade checklist](../../../docs/discord-sdk.md#breaking-upgrade).
 
 ## Commands
 

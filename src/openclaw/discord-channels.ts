@@ -1,15 +1,13 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, open, readFile, readdir, rename } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { GatewayConfig } from './types.js';
 
-export interface CreationPolicy {
-  name: string;
+export interface ChannelDestination {
   guildId: string;
-  categoryId: string;
+  categoryId?: string;
   accountId: string;
   agentId: string;
-  normalRouting?: boolean;
 }
 export class DiscordError extends Error {
   constructor(
@@ -22,30 +20,44 @@ export class DiscordError extends Error {
 export function assertServiceProvenance(env = process.env) {
   if (
     Object.entries(env).some(
-      ([key, value]) => value && /^OPENCLAW_(SHELL|.*AGENT.*|.*SESSION.*|.*CALLER.*)$/.test(key)
+      ([key, value]) =>
+        !['OPENCLAW_DEFAULT_AGENT_ID', 'OPENCLAW_AGENT_IS_MANDATORY'].includes(key) &&
+        value &&
+        /^OPENCLAW_(SHELL|.*AGENT.*|.*SESSION.*|.*CALLER.*)$/.test(key)
     )
   ) {
     throw new DiscordError('AGENT_PROVENANCE_DENIED');
   }
 }
 export type ChannelInvoker = (
-  policy: CreationPolicy,
+  policy: ChannelDestination,
   name: string,
   topic: string | undefined,
   operation: string
 ) => Promise<any>;
 /** Closed API: callers cannot select a tool, action, URL, headers or arbitrary arguments. */
-export function channelInvoker(gateway: GatewayConfig, fetcher = fetch): ChannelInvoker {
+export function channelInvoker(
+  gateway: GatewayConfig,
+  fetcher = fetch,
+  env = process.env,
+  authorize?: (destination: ChannelDestination) => Promise<void>
+): ChannelInvoker {
   const { url: gatewayUrl, token } = gateway;
   return async (policy, name, topic, operation) => {
     assertServiceProvenance();
     if (!token) throw new DiscordError('GATEWAY_CREDENTIAL_MISSING');
     const url = new URL('/tools/invoke', gatewayUrl);
     if (
-      url.protocol !== 'https:' &&
-      !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+      url.username ||
+      url.password ||
+      (url.protocol !== 'https:' &&
+        !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))
     )
       throw new DiscordError('INSECURE_GATEWAY_URL');
+    // Guild-level role permissions, without channel overwrites. No fallback after denial.
+    await verifyGuildManageChannels(policy, env, fetcher);
+    if (!authorize) throw new DiscordError('CREATION_AUTHORIZER_REQUIRED');
+    await authorize(policy);
     let response: Response;
     try {
       response = await fetcher(url.toString(), {
@@ -91,15 +103,12 @@ export function channelInvoker(gateway: GatewayConfig, fetcher = fetch): Channel
   };
 }
 export type AdmittedTarget = {
-  /** Original MCP permission scope, retained across imported route reassignment. */
-  permissionAgentId?: string;
   name: string;
   guildId: string;
   channelId: string;
   accountId: string;
   agentId: string;
   categoryId?: string;
-  normalRouting?: boolean;
 };
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export async function privateState(dir: string) {
@@ -130,46 +139,13 @@ async function save(path: string, record: any, dir: string) {
 export class ChannelCreation {
   constructor(
     readonly stateDir: string,
-    readonly policies: CreationPolicy[],
     private invoke: ChannelInvoker,
-    private inspect: (p: CreationPolicy, id: string) => Promise<any>
+    private inspect: (p: ChannelDestination, id: string) => Promise<any>,
+    private authorize: (p: ChannelDestination) => Promise<void>
   ) {}
-  async admitted(): Promise<AdmittedTarget[]> {
-    await privateState(this.stateDir);
-    const targets: AdmittedTarget[] = [];
-    for (const file of await readdir(this.stateDir)) {
-      if (!/^[a-zA-Z0-9_-]{16,100}[.]json$/.test(file)) continue;
-      let record: any;
-      try {
-        record = JSON.parse(await readFile(join(this.stateDir, file), 'utf8'));
-      } catch (error) {
-        // An exclusive claim may exist before its first synced record is written.
-        if (error instanceof SyntaxError) continue;
-        throw error;
-      }
-      if (record.kind !== 'channel_create' || record.status !== 'completed') continue;
-      const policy = this.policies.find(
-        (p) => p.name === record.policy && hash(p) === record.policy_digest
-      );
-      if (!policy || !/^[1-9][0-9]{16,19}$/.test(record.channel_id)) continue;
-      targets.push({
-        name: 'created-' + record.channel_id,
-        channelId: record.channel_id,
-        guildId: policy.guildId,
-        accountId: policy.accountId,
-        agentId: policy.agentId,
-        categoryId: policy.categoryId,
-        normalRouting: policy.normalRouting,
-      });
-    }
-    return targets;
-  }
-  async create(input: any) {
+  async create(input: any, p: ChannelDestination) {
     assertServiceProvenance();
-    const p = this.policies.find((p) => p.name === input.policy);
-    if (!p) throw new DiscordError('CREATION_POLICY_DENIED');
-    if (input.authorize_create !== true || input.authorize_admission !== true)
-      throw new DiscordError('EXPLICIT_AUTHORIZATION_REQUIRED');
+    if (input.authorize_create !== true) throw new DiscordError('EXPLICIT_AUTHORIZATION_REQUIRED');
     if (
       typeof input.operation_id !== 'string' ||
       !/^[a-zA-Z0-9_-]{16,100}$/.test(input.operation_id) ||
@@ -202,8 +178,9 @@ export class ChannelCreation {
     const record: any = {
       kind: 'channel_create',
       agent_id: p.agentId,
-      policy: p.name,
-      policy_digest: hash(p),
+      guild_id: p.guildId,
+      account_id: p.accountId,
+      category_id: p.categoryId,
       fingerprint,
       operation_id: input.operation_id,
       status: 'creating',
@@ -218,9 +195,12 @@ export class ChannelCreation {
     await syncDir(this.stateDir);
     let dispatched = false;
     try {
-      const category = await this.inspect(p, p.categoryId);
-      if (category?.id !== p.categoryId || category.guild_id !== p.guildId || category.type !== 4)
-        throw new DiscordError('CATEGORY_VERIFICATION_FAILED');
+      if (p.categoryId) {
+        const category = await this.inspect(p, p.categoryId);
+        if (category?.id !== p.categoryId || category.guild_id !== p.guildId || category.type !== 4)
+          throw new DiscordError('CATEGORY_VERIFICATION_FAILED');
+      }
+      await this.authorize(p);
       dispatched = true;
       const result = await this.invoke(p, input.name, input.topic, input.operation_id);
       const c = result.channel;
@@ -235,13 +215,14 @@ export class ChannelCreation {
         result.partial ||
         verified?.id !== c.id ||
         verified.guild_id !== p.guildId ||
-        verified.parent_id !== p.categoryId ||
+        (verified.parent_id ?? undefined) !== p.categoryId ||
         verified.type !== 0
       )
         throw new DiscordError('CREATED_CHANNEL_VERIFICATION_FAILED');
       record.status = 'completed';
-      record.target = 'created-' + c.id;
-      record.routing = 'operator-configured normal inbound routing; no runtime binding changes';
+      record.target = c.id;
+      record.routing =
+        'Access follows current selected-agent bindings; inbound routing is unchanged';
       await save(path, record, this.stateDir);
     } catch (error) {
       record.error_code = error instanceof DiscordError ? error.code : 'UNVERIFIED_RESULT';
@@ -259,7 +240,53 @@ export class ChannelCreation {
   publicResult(record: any) {
     const result = { ...record };
     delete result.fingerprint;
-    delete result.policy_digest;
     return result;
   }
+}
+
+/** The configured direct bot credential is restricted to its declared account. */
+export async function verifyGuildManageChannels(
+  destination: ChannelDestination,
+  env = process.env,
+  fetcher = fetch
+) {
+  if (
+    destination.accountId !== env.MCP_DISCORD_THREAD_MEMBER_ACCOUNT_ID ||
+    !env.DISCORD_BOT_TOKEN ||
+    /\s/.test(env.DISCORD_BOT_TOKEN)
+  )
+    throw new DiscordError('GUILD_PERMISSION_CREDENTIAL_UNAVAILABLE');
+  const get = async (path: string) => {
+    let response: Response;
+    try {
+      response = await fetcher('https://discord.com/api/v10/' + path, {
+        headers: { Authorization: 'Bot ' + env.DISCORD_BOT_TOKEN },
+        redirect: 'error',
+        signal: AbortSignal.timeout(30000),
+      });
+    } catch {
+      throw new DiscordError('GUILD_PERMISSIONS_UNVERIFIED');
+    }
+    if (!response.ok) throw new DiscordError('GUILD_PERMISSIONS_UNVERIFIED');
+    try {
+      return (await response.json()) as any;
+    } catch {
+      throw new DiscordError('GUILD_PERMISSIONS_UNVERIFIED');
+    }
+  };
+  const me = await get('users/@me');
+  if (!me?.bot || typeof me.id !== 'string' || !/^[1-9][0-9]{16,19}$/.test(me.id))
+    throw new DiscordError('GUILD_PERMISSIONS_UNVERIFIED');
+  const member = await get('guilds/' + destination.guildId + '/members/' + me.id);
+  const roles = await get('guilds/' + destination.guildId + '/roles');
+  if (member?.user?.id !== me.id || !Array.isArray(member.roles) || !Array.isArray(roles))
+    throw new DiscordError('GUILD_PERMISSIONS_UNVERIFIED');
+  let bits = 0n;
+  for (const id of [destination.guildId, ...member.roles]) {
+    const role = roles.find((r: any) => r.id === id);
+    if (!role || typeof role.permissions !== 'string' || !/^[0-9]+$/.test(role.permissions))
+      throw new DiscordError('GUILD_PERMISSIONS_UNVERIFIED');
+    bits |= BigInt(role.permissions);
+  }
+  if (!(bits & (8n | 16n))) throw new DiscordError('GUILD_MANAGE_CHANNELS_DENIED');
 }

@@ -18,7 +18,7 @@ import { readSkillResource, skillResources } from './skills.js';
 import type { DiscordService } from '../openclaw/discord.js';
 import { discordTools, handleDiscord } from '../mcp/tools/discord.js';
 import { randomUUID } from 'node:crypto';
-import { validateId, validateInputIsObject } from '../utils/validation.js';
+import { validateInputIsObject } from '../utils/validation.js';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -125,19 +125,26 @@ function toolSet(
     allTools.push(...discordTools);
     for (const tool of discordTools)
       toolHandlers.set(tool.name, async (input) => {
-        if (validateInputIsObject(input) && input.agent_id !== undefined) {
-          const checked = validateId(input.agent_id, 'agent_id');
-          if (!checked.valid) return errorResponse(checked.error);
-          try {
-            gateway.resolve(checked.value);
-          } catch (error) {
-            return errorResponse(
-              error instanceof Error ? error.message : 'Invalid Discord route selector'
-            );
-          }
-        }
         return handleDiscord(deps.discord!, tool.name, input ?? {});
       });
+  }
+  // Clone schemas per server; mandatory mode must not mutate another transport.
+  for (let i = 0; i < allTools.length; i++) {
+    const tool = structuredClone(allTools[i]);
+    allTools[i] = tool;
+    if (!tool.inputSchema.properties?.agent_id) continue;
+    if (gateway.agentIsMandatory)
+      tool.inputSchema.required = [...new Set([...(tool.inputSchema.required ?? []), 'agent_id'])];
+    const handler = toolHandlers.get(tool.name)!;
+    toolHandlers.set(tool.name, async (input) => {
+      if (!validateInputIsObject(input)) return errorResponse('Invalid input: expected an object');
+      try {
+        const { agentId } = await gateway.resolve(input.agent_id as string | undefined);
+        return await handler({ ...input, agent_id: agentId });
+      } catch (error) {
+        return errorResponse(error instanceof Error ? error.message : 'Agent selection failed');
+      }
+    });
   }
   // Low-level request handlers bypass the SDK's registered-tool output checks.
   // Use the same validators for legacy and modern transports, without rewriting payloads.

@@ -1,3 +1,4 @@
+import { fixtureAccess, fixturePermissions } from '../discord-fixture.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -26,13 +27,17 @@ const target = {
 };
 const input = {
   mode: 'new_thread',
-  target: 'work',
+  target: target.channelId,
+  guild_id: guild,
+  account_id: 'bot',
   title: 'Task',
   operation_id: 'sdk-operation-0001',
   prompt: '  original @everyone 😀\n  ',
 };
 const reply = {
-  target: 'work',
+  target: target.channelId,
+  guild_id: guild,
+  account_id: 'bot',
   channel_id: thread,
   operation_id: input.operation_id,
   prompt: input.prompt,
@@ -66,8 +71,7 @@ async function fixture(archived = false) {
   const dir = await mkdtemp(join(tmpdir(), 'discord-sdk-workflow-'));
   const config: DiscordConfig = {
     stateDir: dir,
-    targets: [target],
-    acknowledgeInboundRouting: true,
+    access: fixtureAccess([target]),
     threadCreationMode: 'classic',
     threadMember: { userId: '400000000000000006', accountId: 'bot' },
   };
@@ -90,18 +94,7 @@ async function fixture(archived = false) {
     if (args.action === 'thread-create') result = { thread: { id: thread } };
     if (args.action === 'permissions')
       result = {
-        permissions: {
-          channelId: thread,
-          guildId: guild,
-          channelType: 11,
-          isDm: false,
-          permissions: [
-            'ViewChannel',
-            'SendMessagesInThreads',
-            'ReadMessageHistory',
-            'AttachFiles',
-          ],
-        },
+        permissions: fixturePermissions(guild, args.channelId, parent),
       };
     if (args.action === 'read')
       result = { channelId: thread, messages: [{ id: message, channel_id: thread }] };
@@ -142,7 +135,6 @@ async function fixture(archived = false) {
     new DiscordService(
       config,
       undefined,
-      undefined,
       channelReader(gatewayConfig, config, fetcher),
       threadInvoker(gatewayConfig, config, fetcher),
       member,
@@ -178,7 +170,9 @@ describe('ordinary Discord workflows without subprocesses', () => {
     async (kind) => {
       const f = await fixture(kind === 'archived');
       expect((await f.service.channels()).channels[0]).toMatchObject({
-        target: 'work',
+        target: target.channelId,
+        guild_id: guild,
+        account_id: 'bot',
         channel_id: parent,
       });
       expect((await f.service.threads({ target: 'work' })).threads[0].channel_id).toBe(thread);
@@ -263,7 +257,14 @@ describe('ordinary Discord workflows without subprocesses', () => {
     '2026-11-01T07:30:00.000-05:00',
   ])('preserves archived thread timestamp cursor %s', async (before) => {
     const f = await fixture();
-    await f.service.threads({ target: 'work', archived: true, before, limit: 10 });
+    await f.service.threads({
+      target: target.channelId,
+      guild_id: guild,
+      account_id: 'bot',
+      archived: true,
+      before,
+      limit: 10,
+    });
     const args = JSON.parse(f.fetcher.mock.calls.at(-1)![1].body).args;
     expect(args).toEqual({
       action: 'thread-list',
@@ -275,7 +276,9 @@ describe('ordinary Discord workflows without subprocesses', () => {
       before,
       limit: 10,
     });
-    await expect(f.service.threads({ target: 'work', before })).rejects.toThrow('Pagination');
+    await expect(
+      f.service.threads({ target: target.channelId, guild_id: guild, account_id: 'bot', before })
+    ).rejects.toThrow('Pagination');
   });
   it('blocks lack of SDK authority before creation, member-add or publication', async () => {
     const f = await fixture();
@@ -315,23 +318,6 @@ describe('ordinary Discord workflows without subprocesses', () => {
       thread_create_transport: 'gateway',
     });
     expect(f.publish).not.toHaveBeenCalled();
-  });
-  it('retains policy denials, route assertions and imported binding checks', async () => {
-    const f = await fixture();
-    f.config.channelBlacklist = [thread];
-    expect(await f.service.reply(reply)).toMatchObject({
-      status: 'run_failed',
-      error_code: 'CHANNEL_POLICY_DENIED',
-    });
-    expect(f.agent.run).not.toHaveBeenCalled();
-    expect(f.publish).not.toHaveBeenCalled();
-    await expect(
-      f.service.reply({ ...reply, agent_id: 'other', operation_id: 'sdk-operation-0002' })
-    ).rejects.toThrow('ROUTE_SELECTOR_CONFLICT');
-    f.config.importedRouteAgent = () => undefined;
-    await expect(f.service.reply({ ...reply, operation_id: 'sdk-operation-0003' })).rejects.toThrow(
-      'IMPORTED_ROUTE_UNMAPPED'
-    );
   });
   it('does not dispatch when a verified thread lacks send permissions', async () => {
     const f = await fixture();

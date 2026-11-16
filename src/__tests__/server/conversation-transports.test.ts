@@ -1,3 +1,7 @@
+import { WebSocketServer } from 'ws';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { discordTools } from '../../mcp/tools/discord.js';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
@@ -41,6 +45,66 @@ async function listen(server: Server): Promise<number> {
   return address.port;
 }
 
+function gatewayRpc(server: Server, bindings: any[] = []) {
+  const ws = new WebSocketServer({ server });
+  ws.on('connection', (socket) => {
+    socket.send(
+      JSON.stringify({
+        type: 'event',
+        event: 'connect.challenge',
+        payload: { nonce: 'fixture', ts: Date.now() },
+      })
+    );
+    socket.on('message', (raw) => {
+      const req = JSON.parse(raw.toString());
+      let payload: any;
+      if (req.method === 'connect')
+        payload = {
+          type: 'hello-ok',
+          protocol: 4,
+          server: { version: 'fixture', connId: 'fixture' },
+          features: { methods: ['agents.list', 'config.get'], events: [] },
+          snapshot: {},
+          policy: { maxPayload: 1048576, maxBufferedBytes: 1048576, tickIntervalMs: 30000 },
+        };
+      else if (req.method === 'agents.list')
+        payload = { agents: [{ id: 'main' }, { id: 'research' }] };
+      else if (req.method === 'config.get')
+        payload = {
+          valid: true,
+          configRevisionHash: 'r',
+          appliedConfigHash: 'r',
+          config: { channels: { discord: { accounts: { bot: {} } } }, bindings },
+        };
+      else {
+        socket.send(
+          JSON.stringify({
+            type: 'res',
+            id: req.id,
+            ok: false,
+            error: { code: 'INVALID_REQUEST', message: 'unsupported' },
+          })
+        );
+        return;
+      }
+      socket.send(JSON.stringify({ type: 'res', id: req.id, ok: true, payload }));
+    });
+  });
+  cleanups.push(async () => {
+    for (const c of ws.clients) c.terminate();
+    ws.close();
+  });
+}
+async function deviceEnv() {
+  const dir = await mkdtemp(join(tmpdir(), 'mcp-transport-device-'));
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+  return {
+    OPENCLAW_GATEWAY_TOKEN: 'fixture',
+    MCP_AGENT_DISCOVERY_STATE_DIR: dir,
+    OPENCLAW_DEFAULT_AGENT_ID: 'research',
+  };
+}
+
 async function gateway() {
   const requests: Array<{ key: string; message: string }> = [];
   const server = createServer(async (req, res) => {
@@ -57,6 +121,7 @@ async function gateway() {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ choices: [{ message: { content: `reply:${message}` } }] }));
   });
+  gatewayRpc(server);
   const port = await listen(server);
   cleanups.push(async () => {
     server.closeAllConnections();
@@ -106,14 +171,17 @@ async function httpBridge(
       String(port),
       '--openclaw-url',
       gatewayUrl,
-      '--agent-id',
+      '--default-agent-id',
       'research',
       '--issuer-url',
       issuer,
       '--trust-proxy',
       'true',
     ]),
-    { env: { ...childEnv, ...extraEnv }, stdio: ['ignore', 'ignore', 'pipe'] }
+    {
+      env: { ...childEnv, ...(await deviceEnv()), ...extraEnv },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    }
   );
   let diagnostics = '';
   child.stderr!.on('data', (chunk) => {
@@ -161,6 +229,65 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
+describe('mandatory agent selection across transports', () => {
+  it.each(['http', 'sse', 'stdio', 'modern'] as const)(
+    '%s requires agent_id on every scoped schema and handler',
+    async (transport) => {
+      const mock = await gateway();
+      const env = {
+        ...(await deviceEnv()),
+        OPENCLAW_AGENT_IS_MANDATORY: 'true',
+        MCP_DISCORD_ENABLED: 'true',
+        MCP_DISCORD_STATE_DIR: '/unused-test-state',
+      };
+      let client: Client | ModernClient;
+      if (transport === 'stdio') {
+        client = new Client({ name: 'mandatory', version: '1' });
+        await client.connect(
+          new StdioClientTransport({
+            command: process.execPath,
+            args: entryArgs(['--openclaw-url', mock.url]),
+            env: { ...childEnv, ...env },
+            stderr: 'pipe',
+          })
+        );
+      } else {
+        const base = await httpBridge(mock.url, false, env);
+        if (transport === 'modern') {
+          client = new ModernClient(
+            { name: 'mandatory', version: '1' },
+            { versionNegotiation: { mode: { pin: '2026-07-28' } } }
+          );
+          await client.connect(new ModernTransport(new URL(base + '/mcp')));
+        } else client = await connectHttp(base, 'mandatory', transport);
+      }
+      cleanups.push(() => client.close());
+      const { tools } = await client.listTools();
+      for (const tool of tools) {
+        if (!tool.inputSchema.properties?.agent_id) continue;
+        expect(tool.inputSchema.required).toContain('agent_id');
+        const missing = await client.callTool({ name: tool.name, arguments: {} });
+        expect(missing.isError).toBe(true);
+        const unknown = await client.callTool({
+          name: tool.name,
+          arguments: { agent_id: 'absent' },
+        });
+        expect(unknown.isError).toBe(true);
+      }
+      expect(mock.requests).toHaveLength(0);
+      const roster = await client.callTool({ name: 'openclaw_agents', arguments: {} });
+      expect(roster.isError).not.toBe(true);
+      const result = await client.callTool({
+        name: 'openclaw_chat',
+        arguments: { agent_id: 'research', message: 'explicit' },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(mock.requests).toHaveLength(1);
+    },
+    20000
+  );
+});
+
 describe('conversation metadata across real MCP transports', () => {
   it.each(['http', 'sse', 'stdio', 'modern'] as const)(
     '%s wires service-owned Discord reads',
@@ -183,6 +310,7 @@ describe('conversation metadata across real MCP transports', () => {
             result: {
               details: {
                 ok: true,
+                channel: { id: channel, guild_id: guild, type: 0, name: 'Allowed' },
                 channels: [
                   { id: channel, guild_id: guild, type: 0, name: 'Allowed' },
                   { id: '400000000000000003', guild_id: guild, type: 0, name: 'Private' },
@@ -192,6 +320,17 @@ describe('conversation metadata across real MCP transports', () => {
           })
         );
       });
+      gatewayRpc(mock, [
+        {
+          agentId: 'research',
+          match: {
+            channel: 'discord',
+            accountId: 'bot',
+            guildId: guild,
+            peer: { kind: 'channel', id: channel },
+          },
+        },
+      ]);
       const port = await listen(mock);
       cleanups.push(async () => {
         mock.closeAllConnections();
@@ -202,9 +341,6 @@ describe('conversation metadata across real MCP transports', () => {
         MCP_DISCORD_ENABLED: 'true',
         MCP_DISCORD_STATE_DIR: '/unused-test-state',
         OPENCLAW_GATEWAY_TOKEN: 'mock-read-token',
-        MCP_DISCORD_TARGETS: JSON.stringify([
-          { name: 'work', guildId: guild, channelId: channel, accountId: 'bot', agentId: 'main' },
-        ]),
       };
       let client: Client | ModernClient;
       if (transport === 'stdio') {
@@ -213,7 +349,7 @@ describe('conversation metadata across real MCP transports', () => {
           new StdioClientTransport({
             command: process.execPath,
             args: entryArgs(['--openclaw-url', url]),
-            env: { ...childEnv, ...env },
+            env: { ...childEnv, ...(await deviceEnv()), ...env },
             stderr: 'pipe',
           })
         );
@@ -229,7 +365,7 @@ describe('conversation metadata across real MCP transports', () => {
       }
       cleanups.push(() => client.close());
       const listing = await client.listTools();
-      expect(listing.tools).toHaveLength(14);
+      expect(listing.tools).toHaveLength(15);
       for (const tool of discordTools) {
         expect(listing.tools.find((t) => t.name === tool.name)?.outputSchema).toEqual(
           tool.outputSchema
@@ -243,7 +379,7 @@ describe('conversation metadata across real MCP transports', () => {
       expect(
         listing.tools.find((t: any) => t.name === 'openclaw_discord_reply')?.inputSchema
       ).toMatchObject({
-        required: ['target', 'channel_id', 'operation_id', 'prompt'],
+        required: ['guild_id', 'account_id', 'target', 'channel_id', 'operation_id', 'prompt'],
         additionalProperties: false,
       });
       const askSchema = listing.tools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema;
@@ -261,7 +397,9 @@ describe('conversation metadata across real MCP transports', () => {
         discordTools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema
       );
       const sourceArgs = {
-        target: 'work',
+        target: channel,
+        guild_id: guild,
+        account_id: 'bot',
         mode: 'new_thread',
         title: 'Task',
         prompt: 'Help',
@@ -287,7 +425,7 @@ describe('conversation metadata across real MCP transports', () => {
       const result = await client.callTool({ name: 'openclaw_discord_channels', arguments: {} });
       expect(result.isError).not.toBe(true);
       expect(result.structuredContent).toMatchObject({
-        channels: [{ target: 'work', channel_id: channel, name: 'Allowed' }],
+        channels: [{ target: channel, channel_id: channel, name: 'Allowed' }],
       });
       expect(JSON.stringify(result)).not.toContain('Private');
       const validate = new AjvJsonSchemaValidator().getValidator(
@@ -300,11 +438,11 @@ describe('conversation metadata across real MCP transports', () => {
       const denied = await client.callTool({
         name: 'openclaw_discord_create_channel',
         arguments: {
-          policy: 'denied',
+          guild_id: guild,
+          account_id: 'bot',
           operation_id: 'denied-operation-01',
           name: 'unused',
           authorize_create: true,
-          authorize_admission: true,
         },
       });
       expect(denied.isError).toBe(true);
@@ -321,8 +459,13 @@ describe('conversation metadata across real MCP transports', () => {
           authorization: 'Bearer ' + env.OPENCLAW_GATEWAY_TOKEN,
           body: {
             tool: 'message',
-            sessionKey: 'agent:main:main',
-            args: { action: 'channel-list', channel: 'discord', accountId: 'bot', guildId: guild },
+            sessionKey: 'agent:research:main',
+            args: {
+              action: 'channel-info',
+              channel: 'discord',
+              accountId: 'bot',
+              channelId: channel,
+            },
           },
         },
       ]);
@@ -376,14 +519,16 @@ describe('conversation metadata across real MCP transports', () => {
       ).toBe(true);
       const discovery = await call(first, 'openclaw_agents', {});
       expect(discovery.structuredContent).toEqual({
-        agents: [{ agent_id: 'research', is_default: true }],
-        total: 1,
+        agents: [
+          { agent_id: 'main', is_default: false },
+          { agent_id: 'research', is_default: true },
+        ],
+        total: 2,
       });
       const validateAgents = new AjvJsonSchemaValidator().getValidator(
         tools.find((tool) => tool.name === 'openclaw_agents')!.outputSchema!
       );
       expect(validateAgents(discovery.structuredContent).valid).toBe(true);
-      expect(tools.find((tool) => tool.name === 'openclaw_chat')!.description).toContain('reuse');
       const invalid = await call(first, 'openclaw_chat', { message: 'hello', session_id: '' });
       expect(invalid.isError).toBe(true);
       expect(invalid.structuredContent).toBeUndefined();
@@ -449,7 +594,9 @@ describe('conversation metadata across real MCP transports', () => {
       command: '/usr/bin/env',
       args: [
         '-i',
-        ...Object.entries(childEnv).map(([key, value]) => `${key}=${value}`),
+        ...Object.entries({ ...childEnv, ...(await deviceEnv()) }).map(
+          ([key, value]) => `${key}=${value}`
+        ),
         process.execPath,
         ...entryArgs(['--openclaw-url', mock.url]),
       ],

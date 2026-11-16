@@ -1,12 +1,12 @@
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
-import { DEFAULT_OPENCLAW_URL, DEFAULT_MODEL } from './config/constants.js';
+import { DEFAULT_OPENCLAW_URL } from './config/constants.js';
 
 export interface CliArgs {
   openclawUrl: string;
   gatewayToken: string | undefined;
-  agentId: string | undefined;
-  model: string;
+  defaultAgentId: string | undefined;
+  agentIsMandatory: boolean;
   transport: 'stdio' | 'http' | 'sse';
   port: number;
   host: string;
@@ -35,16 +35,15 @@ export function parseArguments(version: string): CliArgs {
       description: 'Bearer token for OpenClaw gateway authentication',
       default: process.env.OPENCLAW_GATEWAY_TOKEN || undefined,
     })
-    .option('agent-id', {
+    .option('default-agent-id', {
       type: 'string',
-      description: 'Agent ID for OpenClaw agent routing (e.g. "main")',
-      default: process.env.OPENCLAW_AGENT_ID || undefined,
+      default: process.env.OPENCLAW_DEFAULT_AGENT_ID,
+      description: 'Default agent when agent_id is optional',
     })
-    .option('model', {
-      alias: 'm',
-      type: 'string',
-      description: 'Model name for chat completions',
-      default: process.env.OPENCLAW_MODEL || DEFAULT_MODEL,
+    .option('agent-is-mandatory', {
+      type: 'boolean',
+      default: process.env.OPENCLAW_AGENT_IS_MANDATORY === 'true',
+      description: 'Require agent_id on every agent-scoped tool',
     })
     .option('transport', {
       alias: 't',
@@ -119,8 +118,8 @@ export function parseArguments(version: string): CliArgs {
   return {
     openclawUrl: argv['openclaw-url'] as string,
     gatewayToken: argv['gateway-token'] as string | undefined,
-    agentId: argv['agent-id'] as string | undefined,
-    model: argv.model as string,
+    defaultAgentId: argv['default-agent-id'] as string | undefined,
+    agentIsMandatory: argv['agent-is-mandatory'],
     transport: argv.transport as 'stdio' | 'http' | 'sse',
     port: argv.port,
     host: argv.host,

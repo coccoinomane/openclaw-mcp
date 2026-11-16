@@ -29,6 +29,7 @@ const clients = Object.fromEntries(
 );
 const gateway = {
   resolve: (agentId = 'alpha') => {
+    agentId = agentId.toLowerCase();
     if (!clients[agentId]) throw new Error('Unknown agent');
     return { agentId, client: clients[agentId] };
   },
@@ -70,64 +71,12 @@ describe('generic agent routing without Discord', () => {
     expect(taskManager.list(owner)).toHaveLength(0);
   });
 
-  it('preserves supplied legacy sessions without explicit selection', async () => {
-    const response = await handleOpenclawChat(gateway, {
-      message: 'legacy',
-      session_id: 'agent:legacy:mcp:old',
-    });
-    expect(response.isError).toBeUndefined();
-    expect(response.structuredContent).not.toHaveProperty('agent_id');
-    const followup = await handleOpenclawChat(gateway, {
-      ...response.structuredContent,
-      message: 'followup',
-    });
-    expect(followup.isError).toBeUndefined();
-    expect(calls).toHaveLength(2);
-    expect(calls.every((call) => call.session === 'agent:legacy:mcp:old')).toBe(true);
-    expect(
-      (
-        await handleOpenclawChat(gateway, {
-          message: 'explicit legacy denied',
-          session_id: 'agent:legacy:mcp:old',
-          agent_id: 'legacy',
-        })
-      ).isError
-    ).toBe(true);
+  it('rejects a session owned by an unselected agent before sync or queued inference', async () => {
+    const input = { message: 'hello', session_id: 'agent:legacy:mcp:old' };
+    expect((await handleOpenclawChat(gateway, input)).isError).toBe(true);
+    expect((await handleOpenclawChatAsync(gateway, input, owner)).isError).toBe(true);
+    expect(calls).toHaveLength(0);
   });
-
-  it('reuses legacy async continuation metadata without exporting an unknown selector', async () => {
-    const queued = await handleOpenclawChatAsync(
-      gateway,
-      { message: 'legacy async', session_id: 'agent:legacy:mcp:old' },
-      owner
-    );
-    expect(queued.isError).toBeUndefined();
-    expect(queued.structuredContent).not.toHaveProperty('agent_id');
-    const id = queued.structuredContent!.task_id as string;
-    await vi.waitFor(() => expect(taskManager.get(id, owner)?.status).toBe('completed'));
-    const status = await handleOpenclawTaskStatus(gateway, { task_id: id }, owner);
-    expect(status.structuredContent).not.toHaveProperty('agent_id');
-    const { session_id, agent_id } = status.structuredContent!;
-    const second = await handleOpenclawChatAsync(
-      gateway,
-      { message: 'legacy async followup', session_id, agent_id },
-      owner
-    );
-    expect(second.isError).toBeUndefined();
-    expect(second.structuredContent).not.toHaveProperty('agent_id');
-    await vi.waitFor(() =>
-      expect(taskManager.get(second.structuredContent!.task_id as string, owner)?.status).toBe(
-        'completed'
-      )
-    );
-    expect(calls).toHaveLength(2);
-    expect(calls.every((call) => call.session === session_id)).toBe(true);
-    expect(
-      (await handleOpenclawChatAsync(gateway, { message: 'denied', agent_id: 'legacy' }, owner))
-        .isError
-    ).toBe(true);
-  });
-
   it('normalizes task agent selectors for status, listing and cancellation', async () => {
     const queued = await handleOpenclawChatAsync(
       gateway,

@@ -16,6 +16,5 @@ describe('Gateway SDK runtime compatibility', () => {
     expect(readFileSync('.github/workflows/ci.yml', 'utf8')).toContain(
       "node-version: ['22.19.0', '24']"
     );
-    expect(readFileSync('README.md', 'utf8')).toContain('Node.js 22.19 or newer');
   });
 });

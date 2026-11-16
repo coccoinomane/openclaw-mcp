@@ -1,3 +1,8 @@
+vi.mock('../../../openclaw/gateway-discovery.js', () => ({
+  discoverGatewayAgents: vi.fn(async () => ({
+    agents: [{ id: 'main' }, { id: 'research' }, { id: 'ops' }, { id: 'writer' }],
+  })),
+}));
 /**
  * Handler-level isolation tests.
  *
@@ -42,7 +47,7 @@ describe('async task tools — cross-connection isolation', () => {
       }
     }
 
-    gateway = new OpenClawGateway({ url: 'http://localhost:18789' }, 'openclaw');
+    gateway = new OpenClawGateway({ url: 'http://localhost:18789', defaultAgentId: 'main' });
 
     // The background processor would immediately pick tasks up and try to
     // reach a gateway; keep them pending so the tests stay hermetic.

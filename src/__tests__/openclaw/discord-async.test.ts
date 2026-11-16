@@ -1,3 +1,4 @@
+import { fixtureAccess, fixturePermissions } from '../discord-fixture.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -24,7 +25,9 @@ const target = {
 };
 const input = {
   mode: 'new_thread',
-  target: 'work',
+  target: target.channelId,
+  guild_id: guild,
+  account_id: 'bot',
   operation_id: 'async-operation-0001',
   title: 'Task',
   prompt: '  exact @everyone <@400000000000000006> 😀\ntrailing  ',
@@ -61,8 +64,7 @@ async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'discord-async-'));
   const config: DiscordConfig = {
     stateDir: dir,
-    targets: [target],
-    acknowledgeInboundRouting: true,
+    access: fixtureAccess([target]),
     threadMember: { userId: '400000000000000006', accountId: 'bot' },
     maxOperations: 1,
   };
@@ -82,11 +84,13 @@ async function fixture() {
     cancel: vi.fn(async () => {}),
   } satisfies DiscordAgentTransport;
   const reader = vi.fn(async (_t: any, req: any) => ({
+    permissions: fixturePermissions(guild, req.channelId, parent),
     channel: {
       id: req.channelId,
       guild_id: guild,
       parent_id: req.channelId === parent ? undefined : parent,
       type: req.channelId === parent ? 0 : 11,
+      thread_metadata: { locked: false, archived: false },
     },
   }));
   const create = vi.fn(async () => {
@@ -102,8 +106,7 @@ async function fixture() {
       await sent(message);
     }
   );
-  const make = () =>
-    new DiscordService(config, undefined, undefined, reader, create, member, publish, agent);
+  const make = () => new DiscordService(config, undefined, reader, create, member, publish, agent);
   const service = make();
   const result = {
     dir,
@@ -252,7 +255,6 @@ describe('service-owned asynchronous handoff', () => {
     const f = await fixture();
     const service = new DiscordService(
       f.config,
-      undefined,
       undefined,
       f.reader,
       f.create,
@@ -551,16 +553,7 @@ describe('closed request publication', () => {
     async (fork, source) => {
       const f = await publisherFixture(input.prompt, 'sample-owner');
       const service = () =>
-        new DiscordService(
-          f.config,
-          undefined,
-          undefined,
-          f.reader,
-          f.create,
-          f.member,
-          f.send,
-          f.agent
-        );
+        new DiscordService(f.config, undefined, f.reader, f.create, f.member, f.send, f.agent);
       const current = service();
       const args = {
         ...input,
@@ -748,7 +741,6 @@ describe('closed request publication', () => {
     const service = new DiscordService(
       f.config,
       undefined,
-      undefined,
       f.reader,
       f.create,
       f.member,
@@ -785,16 +777,7 @@ describe('closed request publication', () => {
   it('adds one server header, leaves agent input unchanged and never republishes on restart', async () => {
     const f = await publisherFixture(input.prompt, 'owner');
     const make = () =>
-      new DiscordService(
-        f.config,
-        undefined,
-        undefined,
-        f.reader,
-        f.create,
-        f.member,
-        f.send,
-        f.agent
-      );
+      new DiscordService(f.config, undefined, f.reader, f.create, f.member, f.send, f.agent);
     const service = make();
     try {
       await expect(service.ask({ ...input, username: 'untrusted' })).rejects.toThrow(
@@ -856,7 +839,7 @@ describe('closed request publication', () => {
         input.operation_id,
         async () => {}
       )
-    ).rejects.toThrow('REQUEST_SCOPE_DENIED');
+    ).rejects.toThrow('BINDING_ACCESS_DENIED');
     vi.stubEnv('OPENCLAW_CALLER_ID', 'agent');
     await expect(
       f.send(target, thread, input.prompt, input.operation_id, async () => {})

@@ -6,7 +6,6 @@ type ReadScope = {
   guildId: string;
   accountId: string;
   agentId: string;
-  permissionAgentId?: string;
 };
 export type ReadRequest =
   | { action: 'channel-list' }
@@ -21,20 +20,14 @@ export type ReadRequest =
   | { action: 'read'; channelId: string; messageId: string; limit: 1 };
 export type DiscordReader = (scope: ReadScope, request: ReadRequest) => Promise<any>;
 const snowflake = /^[1-9][0-9]{16,19}$/;
-const scopeKey = (s: ReadScope) => JSON.stringify([s.guildId, s.accountId, s.agentId]);
-
 /** Fixed service reads through the existing authorized HTTP tool surface. */
 export function channelReader(
   gateway: GatewayConfig,
-  config: DiscordConfig,
+  _config: Omit<DiscordConfig, 'access'>,
   fetcher = fetch
 ): DiscordReader {
   const { url: gatewayUrl, token } = gateway;
   if (!token) throw new DiscordError('READ_GATEWAY_CONFIGURATION_INVALID');
-  const policies = config.creationPolicies ?? [];
-  const scopes = new Set(
-    [...config.targets, ...(config.discoveryScopes ?? []), ...policies].map(scopeKey)
-  );
   const url = new URL('/tools/invoke', gatewayUrl);
   if (
     url.username ||
@@ -45,11 +38,11 @@ export function channelReader(
     throw new DiscordError('INSECURE_GATEWAY_URL');
   return async (scope, request) => {
     assertServiceProvenance();
-    const permissionScope =
-      scope && config.importedRouteAgent && scope.permissionAgentId
-        ? { ...scope, agentId: scope.permissionAgentId }
-        : scope;
-    if (!permissionScope || !scopes.has(scopeKey(permissionScope)))
+    if (
+      !scope ||
+      !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(scope.agentId) ||
+      !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(scope.accountId)
+    )
       throw new DiscordError('READ_SCOPE_DENIED');
     const keys: Record<ReadRequest['action'], string[]> = {
       'channel-list': ['action'],
@@ -87,8 +80,6 @@ export function channelReader(
         request.limit !== 1)
     )
       throw new DiscordError('READ_ACTION_DENIED');
-    if (request.action !== 'channel-list' && config.channelBlacklist?.includes(request.channelId))
-      throw new DiscordError('CHANNEL_POLICY_DENIED');
     const args = {
       ...request,
       channel: 'discord',
@@ -130,7 +121,7 @@ export function channelReader(
           typeof result.channel !== 'object' ||
           Array.isArray(result.channel) ||
           result.channel.id !== request.channelId ||
-          result.channel.guild_id !== scope.guildId ||
+          (scope.guildId && result.channel.guild_id !== scope.guildId) ||
           !Number.isInteger(result.channel.type))
       )
         throw new Error();

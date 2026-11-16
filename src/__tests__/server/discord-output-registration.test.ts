@@ -1,3 +1,8 @@
+vi.mock('../../openclaw/gateway-discovery.js', () => ({
+  discoverGatewayAgents: vi.fn(async () => ({
+    agents: [{ id: 'main' }, { id: 'research' }, { id: 'ops' }, { id: 'writer' }],
+  })),
+}));
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
@@ -17,7 +22,7 @@ afterEach(async () => {
 });
 async function connect(modern: boolean, discord: DiscordService) {
   const deps = {
-    gateway: new OpenClawGateway({ url: 'http://127.0.0.1:1' }, 'openclaw'),
+    gateway: new OpenClawGateway({ url: 'http://127.0.0.1:1', defaultAgentId: 'main' }),
     serverName: 'schema-test',
     serverVersion: '1',
     discord,
@@ -60,7 +65,7 @@ async function connect(modern: boolean, discord: DiscordService) {
 }
 describe.each([false, true])('Discord output validation (modern=%s)', (modern) => {
   it('rejects unknown selector agents before dispatch on every transport', async () => {
-    const channels = vi.fn(async () => ({ channels: [], creation_policies: [] }));
+    const channels = vi.fn(async () => ({ channels: [], creation_guilds: [] }));
     const client = await connect(modern, {
       config: {},
       channels,
@@ -82,7 +87,14 @@ describe.each([false, true])('Discord output validation (modern=%s)', (modern) =
     const threads = vi.fn(async (): Promise<any> => sparse);
     const client = await connect(modern, { threads } as unknown as DiscordService);
     await client.listTools();
-    const request = { name: 'openclaw_discord_threads', arguments: { target: 'work' } };
+    const request = {
+      name: 'openclaw_discord_threads',
+      arguments: {
+        target: '500000000000000002',
+        guild_id: '500000000000000001',
+        account_id: 'bot',
+      },
+    };
     expect((await client.callTool(request)).structuredContent).toEqual(sparse);
     const complete = {
       threads: [
@@ -112,7 +124,7 @@ describe.each([false, true])('Discord output validation (modern=%s)', (modern) =
     expect((await client.callTool(request)).isError).toBe(true);
   });
   it('advertises all schemas and rejects invalid success output server-side', async () => {
-    const channels = vi.fn(async (): Promise<any> => ({ channels: [], creation_policies: [] }));
+    const channels = vi.fn(async (): Promise<any> => ({ channels: [], creation_guilds: [] }));
     const client = await connect(modern, { channels } as unknown as DiscordService);
     const listing = await client.listTools();
     for (const tool of discordTools)
@@ -121,11 +133,11 @@ describe.each([false, true])('Discord output validation (modern=%s)', (modern) =
       );
     const request = { name: 'openclaw_discord_channels', arguments: {} };
     const success = await client.callTool(request);
-    expect(success.structuredContent).toEqual({ channels: [], creation_policies: [] });
+    expect(success.structuredContent).toEqual({ channels: [], creation_guilds: [] });
     expect(success.isError).not.toBe(true);
     channels.mockResolvedValue({
       channels: 'malformed',
-      creation_policies: [],
+      creation_guilds: [],
       secret: 'must-not-leak',
     });
     const invalid = await client.callTool(request);

@@ -23,14 +23,13 @@ export class OpenClawClient {
       gatewayToken?: string;
       agentId?: string;
       timeoutMs?: number;
-      model?: string;
     } = {}
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.gatewayToken = options.gatewayToken;
     this.agentId = options.agentId;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.model = options.model ?? 'openclaw';
+    this.model = options.agentId ? 'openclaw:' + options.agentId : 'openclaw';
   }
 
   private buildHeaders(): Record<string, string> {
@@ -57,12 +56,7 @@ export class OpenClawClient {
       }
       return configured.toLowerCase();
     }
-    const modelAgent = this.model
-      .trim()
-      .match(/^(?:openclaw[:/]|agent:)([a-z0-9][a-z0-9_-]{0,63})$/i)?.[1];
-    // openclaw/default is a Gateway alias, not an agent named "default".
-    if (this.model.trim().toLowerCase() === 'openclaw/default') return undefined;
-    return modelAgent?.toLowerCase();
+    return undefined;
   }
 
   private truncateForLog(value: string): string {

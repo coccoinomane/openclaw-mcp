@@ -10,8 +10,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { SERVER_NAME, SERVER_VERSION } from './config/constants.js';
 import { log, logError, setDebugEnabled } from './utils/logger.js';
 import { parseArguments } from './cli.js';
-import { discordBindingResolver } from './openclaw/discord-bindings.js';
-import { includeConfiguredDiscordAgents, loadAgentCatalog } from './openclaw/agent-catalog.js';
+import { DiscordAccess } from './openclaw/discord-bindings.js';
 import { OpenClawGateway } from './openclaw/gateway.js';
 import { createMcpServer, type ToolRegistrationDeps } from './server/tools-registration.js';
 import { createHttpServer, parseTrustProxy, type HttpServerConfig } from './server/http.js';
@@ -22,26 +21,16 @@ const args = parseArguments(SERVER_VERSION);
 // Enable debug logging if requested
 setDebugEnabled(args.debug);
 
-// Validate model name
-const trimmedModel = args.model.trim();
-if (!trimmedModel) {
-  logError('OPENCLAW_MODEL / --model must be a non-empty string. Default is "openclaw".');
-  process.exit(1);
-}
-args.model = trimmedModel;
-
 async function main() {
-  const discordConfig = loadDiscordConfig();
-  const gatewayConfig = includeConfiguredDiscordAgents(
-    await loadAgentCatalog({
-      url: args.openclawUrl,
-      token: args.gatewayToken,
-      agentId: args.agentId,
-      timeout: args.timeout,
-    }),
-    discordConfig
-  );
-  const gateway = new OpenClawGateway(gatewayConfig, args.model);
+  const discordOptions = loadDiscordConfig();
+  const gatewayConfig = {
+    url: args.openclawUrl,
+    token: args.gatewayToken,
+    defaultAgentId: args.defaultAgentId,
+    agentIsMandatory: args.agentIsMandatory,
+    timeout: args.timeout,
+  };
+  const gateway = new OpenClawGateway(gatewayConfig);
   const deps: ToolRegistrationDeps = {
     gateway,
     serverName: SERVER_NAME,
@@ -49,16 +38,15 @@ async function main() {
     issuerUrl: args.issuerUrl,
   };
   deps.skills = await loadPackagedSkills();
-  if (discordConfig) {
-    const bindings = gatewayConfig.bindings;
-    if (bindings !== undefined) discordConfig.importedRouteAgent = discordBindingResolver(bindings);
-    if (discordConfig.creationPolicies?.length && !gatewayConfig.token)
-      throw new Error('Channel creation requires Gateway credentials');
+  if (discordOptions) {
+    const reader = channelReader(gatewayConfig, discordOptions);
+    const discordConfig = { ...discordOptions, access: new DiscordAccess(gateway, reader) };
     deps.discord = new DiscordService(
       discordConfig,
-      channelInvoker(gatewayConfig),
-      undefined,
-      channelReader(gatewayConfig, discordConfig),
+      channelInvoker(gatewayConfig, fetch, process.env, (p) =>
+        discordConfig.access.assertCreate({ ...p, name: '', channelId: '' })
+      ),
+      reader,
       threadInvoker(gatewayConfig, discordConfig),
       threadMemberAdder(discordConfig),
       requestPublisher(discordConfig),
@@ -66,7 +54,6 @@ async function main() {
     );
   }
   log(`Starting ${SERVER_NAME} v${SERVER_VERSION}`);
-  log(`Model: ${args.model}`);
   log(`Transport: ${args.transport}`);
   log(`Request timeout: ${args.timeout}ms`);
   if (args.debug) {

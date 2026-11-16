@@ -31,7 +31,7 @@ export function threadInvoker(
     throw new DiscordError('INSECURE_GATEWAY_URL');
   return async (target, title, operation, starterSaved) => {
     assertServiceProvenance();
-    assertTargetAllowed(config, target, undefined, 'THREAD_SCOPE_DENIED');
+    await assertTargetAllowed(config, target, undefined, 'THREAD_SCOPE_DENIED');
     if (
       !snowflake.test(target.channelId) ||
       typeof title !== 'string' ||
@@ -99,6 +99,7 @@ export function threadInvoker(
           throw new DiscordError('STARTER_OUTCOME_UNKNOWN', true);
         }
       };
+      await assertTargetAllowed(config, target);
       const sent = await request('POST');
       if (!sent.ok) throw new DiscordError('STARTER_HTTP_' + sent.status, true);
       let posted: any;
@@ -135,6 +136,7 @@ export function threadInvoker(
       )
         throw new DiscordError('STARTER_UNVERIFIED', true);
     }
+    await assertTargetAllowed(config, target);
     let response: Response;
     try {
       response = await fetcher(url.toString(), {
@@ -204,7 +206,7 @@ export function threadMemberAdder(
   if (!token || /\s/.test(token)) throw new DiscordError('THREAD_MEMBER_CREDENTIAL_MISSING');
   return async (target, threadId) => {
     assertServiceProvenance();
-    assertTargetAllowed(config, target, threadId, 'THREAD_MEMBER_SCOPE_DENIED');
+    await assertTargetAllowed(config, target, threadId, 'THREAD_MEMBER_SCOPE_DENIED');
     if (
       target.accountId !== accountId ||
       !snowflake.test(threadId) ||

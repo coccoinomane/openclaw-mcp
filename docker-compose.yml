@@ -8,7 +8,7 @@ services:
     environment:
       - OPENCLAW_URL=${OPENCLAW_URL:-http://host.docker.internal:18789}
       - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-}
-      - OPENCLAW_MODEL=${OPENCLAW_MODEL:-openclaw}
+      - OPENCLAW_DEFAULT_AGENT_ID=${OPENCLAW_DEFAULT_AGENT_ID:-main}
       - DEBUG=${DEBUG:-false}
       - AUTH_ENABLED=${AUTH_ENABLED:-true}
       - MCP_CLIENT_ID=${MCP_CLIENT_ID:-openclaw}

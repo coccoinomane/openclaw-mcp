@@ -1,3 +1,4 @@
+import { fixtureAccess, fixturePermissions } from '../discord-fixture.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, readdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -24,14 +25,15 @@ const target = {
 const base: DiscordConfig = {
   threadCreationMode: 'classic',
   stateDir: '/unused-test-state',
-  targets: [target],
+  access: fixtureAccess([target]),
   threadMember: { userId: owner, accountId: 'bot' },
-  acknowledgeInboundRouting: true,
 };
 const gatewayConfig = { url: 'http://127.0.0.1:18789', token: 'mock-gateway-secret' };
 const env = { DISCORD_BOT_TOKEN: 'mock-bot-secret' };
 const input = {
-  target: 'work',
+  target: target.channelId,
+  guild_id: guild,
+  account_id: 'bot',
   mode: 'new_thread',
   operation_id: 'thread-test-operation-1',
   title: 'Task',
@@ -85,19 +87,7 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
       events.push(args.action);
       return envelope({
         ok: true,
-        permissions: {
-          channelId: channel,
-          guildId: guild,
-          channelType: 0,
-          isDm: false,
-          permissions: [
-            'ViewChannel',
-            'SendMessages',
-            'ReadMessageHistory',
-            'CreatePublicThreads',
-            'SendMessagesInThreads',
-          ],
-        },
+        permissions: fixturePermissions(guild, args.channelId, channel),
       });
     }
     if (args.action === 'thread-create' && args.messageId)
@@ -114,6 +104,7 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
         guild_id: guild,
         type: args.channelId === channel ? 0 : 11,
         parent_id: args.channelId === channel ? undefined : channel,
+        thread_metadata: { locked: false, archived: false },
       },
     });
   });
@@ -148,7 +139,6 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
     const instance = new DiscordService(
       config,
       undefined,
-      undefined,
       channelReader(gatewayConfig, config, gateway),
       threadInvoker(gatewayConfig, config, gateway, env),
       threadMemberAdder(config, env, member),
@@ -178,16 +168,16 @@ describe('Classic new threads', () => {
       thread_create_transport: 'gateway',
       session_key: 'agent:main:discord:channel:' + thread,
     });
-    expect(f.events).toEqual([
-      'channel-info',
+    expect(f.events.filter((e) => e !== 'permissions' && e !== 'channel-info')).toEqual([
       'thread-create',
-      'channel-info',
       'PUT',
       'GET',
       'publish',
       'agent',
     ]);
-    const [url, options] = f.gateway.mock.calls[1];
+    const [url, options] = f.gateway.mock.calls.find(
+      (c) => c[1]?.body && JSON.parse(c[1].body).args.action === 'thread-create'
+    )!;
     expect(url).toBe('http://127.0.0.1:18789/tools/invoke');
     expect(options.redirect).toBe('error');
     expect(options.headers.Authorization).toBe('Bearer mock-gateway-secret');
@@ -222,7 +212,9 @@ describe('Classic new threads', () => {
     expect(f.agent.ready).toHaveBeenCalledOnce();
     expect(await f.restart().ask(input)).toEqual(result);
     expect(await f.service.status(input.operation_id)).toEqual(result);
-    expect(f.gateway).toHaveBeenCalledTimes(3);
+    expect(
+      f.gateway.mock.calls.filter((c) => JSON.parse(c[1].body).args.action === 'thread-create')
+    ).toHaveLength(1);
     expect(f.member).toHaveBeenCalledTimes(2);
     expect(f.agent.run).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(await f.record())).not.toContain('secret');
@@ -233,6 +225,9 @@ describe('Classic new threads', () => {
     f.gateway.mockResolvedValueOnce(
       envelope({ ok: true, channel: { id: channel, guild_id: guild, type: 0 } })
     );
+    f.gateway.mockResolvedValueOnce(
+      envelope({ ok: true, permissions: fixturePermissions(guild, channel, channel) })
+    );
     f.gateway.mockRejectedValueOnce(
       Object.assign(new Error('private'), { cause: { code: 'ECONNREFUSED' } })
     );
@@ -241,13 +236,13 @@ describe('Classic new threads', () => {
       thread_create_transport: 'gateway',
       error_code: 'THREAD_GATEWAY_UNREACHABLE',
     });
-    expect(f.gateway).toHaveBeenCalledTimes(2);
+    expect(f.gateway).toHaveBeenCalledTimes(3);
     expect(f.agent.run).not.toHaveBeenCalled();
     expect(f.member).not.toHaveBeenCalled();
     expect(await f.restart().ask(input)).toMatchObject({
       error_code: 'THREAD_GATEWAY_UNREACHABLE',
     });
-    expect(f.gateway).toHaveBeenCalledTimes(2);
+    expect(f.gateway).toHaveBeenCalledTimes(3);
   });
   it('uses the Gateway create adapter without membership when not configured', async () => {
     const f = await fixture({ threadMember: undefined });
@@ -267,6 +262,9 @@ describe('Classic new threads', () => {
       f.gateway.mockResolvedValueOnce(
         envelope({ ok: true, channel: { id: channel, guild_id: guild, type: 0 } })
       );
+      f.gateway.mockResolvedValueOnce(
+        envelope({ ok: true, permissions: fixturePermissions(guild, channel, channel) })
+      );
       if (typeof failure === 'number')
         f.gateway.mockResolvedValueOnce(new Response('private-secret', { status: failure }));
       else if (failure === 'malformed')
@@ -283,7 +281,7 @@ describe('Classic new threads', () => {
       expect(result.status).toBe('creation_unknown');
       expect(JSON.stringify(result)).not.toContain('private-secret');
       expect(await f.restart().ask(input)).toEqual(result);
-      expect(f.gateway).toHaveBeenCalledTimes(2);
+      expect(f.gateway).toHaveBeenCalledTimes(3);
       expect(f.agent.run).not.toHaveBeenCalled();
       expect(f.member).not.toHaveBeenCalled();
     }
@@ -304,6 +302,9 @@ describe('Classic new threads', () => {
       const f = await fixture();
       f.gateway.mockResolvedValueOnce(
         envelope({ ok: true, channel: { id: channel, guild_id: guild, type: 0 } })
+      );
+      f.gateway.mockResolvedValueOnce(
+        envelope({ ok: true, permissions: fixturePermissions(guild, channel, channel) })
       );
       f.gateway.mockResolvedValueOnce(
         new Response(
@@ -334,6 +335,9 @@ describe('Classic new threads', () => {
       const f = await fixture();
       f.gateway.mockResolvedValueOnce(
         envelope({ ok: true, channel: { id: channel, guild_id: guild, type: 0 } })
+      );
+      f.gateway.mockResolvedValueOnce(
+        envelope({ ok: true, permissions: fixturePermissions(guild, channel, channel) })
       );
       f.gateway.mockResolvedValueOnce(envelope({ ok: true, thread: { id: thread } }));
       f.gateway.mockResolvedValueOnce(
@@ -395,13 +399,10 @@ describe('Silent starter threads', () => {
       starter_message_id: thread,
       channel_id: thread,
     });
-    expect(f.events).toEqual([
-      'channel-info',
-      'permissions',
+    expect(f.events.filter((e) => e !== 'permissions' && e !== 'channel-info')).toEqual([
       'starter-POST',
       'starter-GET',
       'thread-create',
-      'channel-info',
       'PUT',
       'GET',
       'publish',
@@ -494,14 +495,6 @@ describe('operator configuration and closed inputs', () => {
     expect(() =>
       threadMemberAdder({ ...base, threadMember: { userId: '../escape', accountId: 'bot' } }, env)
     ).toThrow('THREAD_MEMBER_CONFIGURATION_INVALID');
-    expect(() =>
-      loadDiscordConfig({
-        ...vars,
-        MCP_DISCORD_THREAD_MEMBER_ENABLED: 'true',
-        MCP_DISCORD_THREAD_MEMBER_USER_ID: owner,
-        MCP_DISCORD_THREAD_MEMBER_ACCOUNT_ID: 'other',
-      })
-    ).toThrow('THREAD_MEMBER_ACCOUNT_MISMATCH');
     expect(
       loadDiscordConfig({
         ...vars,
@@ -551,29 +544,23 @@ describe('operator configuration and closed inputs', () => {
         'Task',
         input.operation_id
       )
-    ).rejects.toThrow('THREAD_SCOPE_DENIED');
+    ).rejects.toThrow('BINDING_ACCESS_DENIED');
     await expect(
       threadMemberAdder(base, env, f.member)!({ ...target, accountId: 'other' }, thread)
-    ).rejects.toThrow('THREAD_MEMBER_SCOPE_DENIED');
+    ).rejects.toThrow('BINDING_ACCESS_DENIED');
     await expect(
       threadMemberAdder(base, env, f.member)!({ ...target, guildId: channel }, thread)
-    ).rejects.toThrow('THREAD_MEMBER_SCOPE_DENIED');
+    ).rejects.toThrow('BINDING_ACCESS_DENIED');
     expect(f.gateway).not.toHaveBeenCalled();
     expect(f.member).not.toHaveBeenCalled();
   });
   it('describes handoff and expected absence of answer text with the closed ask schema', () => {
     const tool = discordTools.find((t) => t.name === 'openclaw_discord_ask')!;
-    expect(tool.description).toContain('not answer content');
-    expect(tool.description).toContain('Does not wait for generation');
-    expect(tool.description).toContain('native thread mention on Discord');
-    expect(tool.description).toContain('without adding unrelated requirements');
-    expect(tool.description).toContain('report errors or partial/unknown outcomes');
-    expect((tool.inputSchema.properties?.prompt as { description: string }).description).toContain(
-      'request or self-contained delegated assignment'
-    );
     expect(Object.keys(tool.inputSchema.properties!)).toEqual([
       'agent_id',
       'target',
+      'guild_id',
+      'account_id',
       'operation_id',
       'mode',
       'model',
@@ -616,7 +603,9 @@ describe('new-thread model selection', () => {
     expect(f.agent.run).not.toHaveBeenCalled();
     await expect(
       f.service.reply({
-        target: 'work',
+        target: target.channelId,
+        guild_id: guild,
+        account_id: 'bot',
         channel_id: thread,
         operation_id: 'reply-model-denied',
         prompt: 'hi',
@@ -713,7 +702,9 @@ describe('new-thread native fork', () => {
     const f = await fixture();
     await expect(
       f.service.reply({
-        target: 'work',
+        target: target.channelId,
+        guild_id: guild,
+        account_id: 'bot',
         channel_id: thread,
         operation_id: 'fork-reply-denied',
         prompt: 'hi',

@@ -23,6 +23,6 @@ Read [Discord destinations](references/discord.md) for this workflow. Read [Reco
 
 ## Agent selection and shared trust
 
-Choose the agent suited to the request, within the deployment's configured routes. Keep that agent when continuing its conversation. A Discord destination's routing determines the agent; selecting a name does not reassign an existing thread.
+List current agents and select agent_id first. Keep it when continuing a conversation. Discover Discord destinations for that agent, then reuse concrete target, guild_id and account_id. Access follows only that agent's server/channel bindings; it does not change inbound runtime routing.
 
 Authenticated clients share the deployment's configured agent access. Agent selection is routing, not per-user isolation. Source references provide context, not additional permissions. Respect the access enforced by OpenClaw and the MCP.

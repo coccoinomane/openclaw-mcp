@@ -25,11 +25,7 @@ export function conversationServerLabel(issuerUrl?: string): string {
   return sessionLabel(issuerUrl ? new URL(issuerUrl).hostname : hostname(), 'local');
 }
 
-/**
- * Qualify known agent targets: Gateway execution can derive the agent from the
- * session key. Without a known target, leave default resolution to Gateway.
- * Never guess "main" or change a caller-supplied key.
- */
+/** Generate a conversation key using the selected agent and display labels. */
 export function createConversationKey(context: ConversationContext = {}, agentId?: string): string {
   const server = sessionLabel(context.serverLabel ?? conversationServerLabel(), 'local');
   const client = sessionLabel(context.clientName, 'unknown');
@@ -37,34 +33,19 @@ export function createConversationKey(context: ConversationContext = {}, agentId
   return agentId ? `agent:${agentId}:${key}` : key;
 }
 
-/** Resolve routing once while preserving legacy caller-supplied session semantics. */
-export function resolveConversation(
+/** Explicit/default agent selection also constrains supplied session keys. */
+export async function resolveConversation(
   gateway: OpenClawGateway,
   selector: unknown,
   sessionId?: string
 ) {
-  let selected: string | undefined;
   if (selector !== undefined) {
     const checked = validateId(selector, 'agent_id');
     if (!checked.valid) throw new Error(checked.error);
-    selected = checked.value.toLowerCase();
   }
+  const resolved = await gateway.resolve(selector as string | undefined);
   const sessionAgent = sessionId?.match(/^agent:([^:]+):/i)?.[1];
-  if (selected && sessionAgent && selected !== sessionAgent.toLowerCase()) {
+  if (sessionAgent && sessionAgent.toLowerCase() !== resolved.agentId)
     throw new Error('agent_id conflicts with the agent in session_id');
-  }
-  const resolved = gateway.resolve(selected);
-  const normalizedSessionAgent = sessionAgent?.toLowerCase();
-  // Returned agent_id must be reusable as an explicit selector. Legacy keys
-  // can name agents outside the local catalog without making them selectable.
-  const agentId = normalizedSessionAgent
-    ? gateway.listAgents().some((agent) => agent.agentId === normalizedSessionAgent)
-      ? normalizedSessionAgent
-      : undefined
-    : resolved.agentId;
-  return {
-    ...resolved,
-    routingAgentId: selected ? resolved.agentId : undefined,
-    agentId,
-  };
+  return { ...resolved, routingAgentId: resolved.agentId };
 }

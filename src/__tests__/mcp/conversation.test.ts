@@ -48,23 +48,6 @@ describe('MCP conversation keys', () => {
     expect(validateId(key, 'session_id').value).toBe(key);
   });
 
-  it.each([
-    [undefined, 'openclaw', undefined],
-    [undefined, 'openclaw/default', undefined],
-    [undefined, 'openclaw/research', 'research'],
-    [undefined, 'openclaw:Research', 'research'],
-    [undefined, 'agent:writer', 'writer'],
-    ['ops', 'openclaw/research', 'ops'],
-    ['default', 'openclaw/default', 'default'],
-    [undefined, 'legacy-provider/model', undefined],
-  ])(
-    'resolves configured agent %s and model %s without guessing main',
-    (agentId, model, expected) => {
-      const client = new OpenClawClient('http://127.0.0.1:1', { agentId, model });
-      expect(client.getConversationAgentId()).toBe(expected);
-    }
-  );
-
   it.each(['agent:evil', 'bad/id', 'a'.repeat(65)])(
     'rejects invalid configured agent %s rather than sanitizing into another target',
     (agentId) => {

@@ -3,10 +3,9 @@
 export interface GatewayConfig {
   url: string;
   token?: string;
-  agentId?: string;
+  defaultAgentId?: string;
+  agentIsMandatory?: boolean;
   timeout?: number;
-  agents?: Array<{ id: string }>;
-  bindings?: AgentBinding[];
 }
 
 // OpenAI-compatible API types
@@ -46,10 +45,4 @@ export interface OpenClawChatResponse {
 export interface OpenClawHealthResponse {
   status: 'ok' | 'error';
   message?: string;
-}
-
-/** Static routing fields from the operator-supplied bindings catalog. */
-export interface AgentBinding {
-  agentId: string;
-  match: Record<string, unknown>;
 }

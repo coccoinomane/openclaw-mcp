@@ -137,7 +137,7 @@ describe('OpenClawClient', () => {
       const customClient = new OpenClawClient('https://openclaw.example.com', {
         gatewayToken: 'test-token',
         timeoutMs: 120_000,
-        model: 'openclaw/my-agent',
+        agentId: 'my-agent',
       });
       const openaiResponse = {
         id: 'chatcmpl-custom',
@@ -156,7 +156,7 @@ describe('OpenClawClient', () => {
 
       await customClient.chat('Hi');
       const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
-      expect(body.model).toBe('openclaw/my-agent');
+      expect(body.model).toBe('openclaw:my-agent');
     });
 
     it('returns empty string when no choices in response', async () => {

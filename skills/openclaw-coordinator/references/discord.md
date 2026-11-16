@@ -1,5 +1,7 @@
 # Discord destinations
 
+Select agent_id from openclaw_agents, then discover its current Discord channels. Reuse concrete target, guild_id and account_id; replies also need the thread channel_id. No local policies or target aliases are accepted.
+
 Use the Discord tools when the user wants an OpenClaw conversation to continue in a Discord thread. Choose an allowed channel for new work, or resume the specified existing thread. New threads include their associated OpenClaw session; do not create another session separately.
 
 Forward a self-contained request faithfully. For a contextual handoff, include the decisions, materials and constraints needed to carry out the assignment. Include known source OpenClaw session keys and conversation links when available. Do not invent source identifiers or require the calling client to have a Discord origin.

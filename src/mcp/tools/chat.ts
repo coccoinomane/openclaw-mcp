@@ -74,7 +74,7 @@ export async function handleOpenclawChat(
     checkModel(input.model);
     if (input.model !== undefined && sessionId !== undefined)
       throw new Error('model can only be selected when starting a new session; omit session_id');
-    const resolved = resolveConversation(gateway, input.agent_id, sessionId);
+    const resolved = await resolveConversation(gateway, input.agent_id, sessionId);
     const { client } = resolved;
     agentId = resolved.agentId;
     if (input.model !== undefined && !agentId)

@@ -16,19 +16,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayClientOptions } from '@openclaw/gateway-client';
 import {
   discoverGatewayAgents,
+  discoverGatewayConfig,
   gatewayModelRequest,
   type DiscoveryClientFactory,
 } from '../../openclaw/gateway-discovery.js';
 import { gatewayDiscoveryAuth } from '../../openclaw/gateway-discovery-auth.js';
-import { loadAgentCatalog } from '../../openclaw/agent-catalog.js';
-import { OpenClawGateway } from '../../openclaw/gateway.js';
 
 let directory: string;
 let env: NodeJS.ProcessEnv;
 const local = {
   url: 'http://127.0.0.1:18789',
   token: 'bootstrap-secret',
-  agentId: 'main',
+  defaultAgentId: 'main',
 };
 const roster = {
   defaultId: 'writer',
@@ -70,12 +69,25 @@ function fake(onStart?: (options: GatewayClientOptions) => void, response: unkno
 }
 
 describe('Gateway roster discovery', () => {
+  it('reads config.get with the device read scope, ignoring model shared-token mode', async () => {
+    const transport = fake();
+    await discoverGatewayConfig(
+      local,
+      { ...env, MCP_MODEL_AUTH: 'local-shared-token' },
+      transport.create
+    );
+    expect(transport.options[0].scopes).toEqual(['operator.read']);
+    expect(transport.options[0].caps).toEqual([]);
+    expect(transport.clients[0].request).toHaveBeenCalledWith(
+      'config.get',
+      {},
+      { timeoutMs: 30000 }
+    );
+  });
+
   it('uses a signed backend identity and only agents.list/operator.read, preserving defaults and manual routes', async () => {
     const transport = fake();
-    const bindings = [{ agentId: 'writer', match: { channel: 'discord', guildId: '123' } }];
-    const configs = await loadAgentCatalog({ ...local, bindings }, env, (config, environment) =>
-      discoverGatewayAgents(config, environment, transport.create)
-    );
+    await discoverGatewayAgents(local, env, transport.create);
     expect(transport.options[0]).toMatchObject({
       url: 'ws://127.0.0.1:18789/',
       clientName: 'gateway-client',
@@ -93,17 +105,6 @@ describe('Gateway roster discovery', () => {
       ['agents.list', {}, { timeoutMs: 30000 }],
     ]);
     expect(transport.clients[0].stopAndWait).toHaveBeenCalledWith({ timeoutMs: 1000 });
-    expect(configs.agents).toEqual([{ id: 'main' }, { id: 'writer' }]);
-    expect(configs.bindings).toEqual(bindings);
-    const gateway = new OpenClawGateway(configs);
-    expect(gateway.resolve().agentId).toBe('main');
-    expect(gateway.listAgents()).toEqual([
-      { agentId: 'main', isDefault: true },
-      { agentId: 'writer', isDefault: false },
-    ]);
-    expect(JSON.stringify(gateway.listAgents())).not.toMatch(
-      /private|never-return|bootstrap-secret|selectionRequired/
-    );
   });
 
   it('waits for hello before any RPC and leaves absent bindings absent', async () => {
@@ -112,17 +113,13 @@ describe('Gateway roster discovery', () => {
     expect(transport.clients[0].request).not.toHaveBeenCalled();
     transport.options[0].onHelloOk!({} as never);
     await task;
-    const configs = await loadAgentCatalog(local, env, async () => roster);
-    expect(configs).not.toHaveProperty('bindings');
   });
 
   it('fails startup on a connection error and awaits cleanup', async () => {
     const transport = fake((opts) => opts.onConnectError!(new Error('secret upstream failure')));
-    await expect(
-      loadAgentCatalog(local, env, (config, environment) =>
-        discoverGatewayAgents(config, environment, transport.create)
-      )
-    ).rejects.toThrow('Gateway agent discovery: connection or agents.list request failed');
+    await expect(discoverGatewayAgents(local, env, transport.create)).rejects.toThrow(
+      'Gateway agent discovery: connection or agents.list request failed'
+    );
     expect(transport.clients[0].stopAndWait).toHaveBeenCalledTimes(1);
     expect(transport.clients[0].request).not.toHaveBeenCalled();
     expect(local).not.toHaveProperty('agents');

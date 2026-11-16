@@ -4,52 +4,38 @@ All configuration can be done via environment variables. Copy `.env.example` to 
 
 ## Environment Variables
 
-### OpenClaw Connection
+### Gateway and agents
 
-| Variable                 | Description                             | Default                  |
-| ------------------------ | --------------------------------------- | ------------------------ |
-| `OPENCLAW_URL`           | OpenClaw gateway URL                    | `http://127.0.0.1:18789` |
-| `OPENCLAW_GATEWAY_TOKEN` | Bearer token for gateway authentication | (none)                   |
-| `OPENCLAW_AGENT_ID`      | Named agent to route requests to        | (none)                   |
-| `OPENCLAW_TIMEOUT_MS`    | Request timeout in milliseconds         | `120000` (2 min)         |
-| `OPENCLAW_MODEL`         | Model name for chat completions         | `openclaw`               |
+- OPENCLAW_URL: one Gateway endpoint (default http://127.0.0.1:18789).
+- OPENCLAW_GATEWAY_TOKEN: private Gateway credential.
+- OPENCLAW_TIMEOUT_MS: HTTP timeout, default 120000.
+- OPENCLAW_DEFAULT_AGENT_ID: optional default.
+- OPENCLAW_AGENT_IS_MANDATORY: false by default. True requires agent_id in schemas and validation, ignoring the default.
 
-`OPENCLAW_AGENT_ID` is sent as the `x-openclaw-agent-id` header. When unset, the gateway uses its default agent.
+Select agent_id, then the configured default. Missing both fails, without Gateway fallback. The roster reloads for every discovery/validation. The HTTP model field is built internally; LLM selection remains available through model tools.
 
-> **Note:** An unrecognized `OPENCLAW_AGENT_ID` is rejected by the gateway with `400 Bad Request` (`"Unknown agent '<id>'."`) — it does **not** silently fall back to the default agent. A typo will surface as a loud error, not a silent misroute.
+### Identity and Discord
 
-### One Gateway per MCP deployment
+- MCP_AGENT_DISCOVERY_STATE_DIR: persistent private device identity, default ~/.openclaw-mcp/gateway-discovery. This is authentication state, not a discovery mode.
+- MCP_DISCORD_ENABLED and MCP_DISCORD_CHANNEL_CREATE_ENABLED: separate opt-ins, both false by default.
+- MCP_DISCORD_STATE_DIR: absolute private journal directory.
+- MCP_DISCORD_SDK_AUTH: device (default), or explicitly authorized local-shared-token on literal loopback.
+- MCP_DISCORD_SDK_STATE_DIR: approved integration identity, default gateway-sdk within the journal directory.
+- MCP_DISCORD_THREAD_CREATION_MODE: silent-starter (default) or classic.
+- MCP_DISCORD_THREAD_MEMBER_ENABLED, MCP_DISCORD_THREAD_MEMBER_USER_ID, MCP_DISCORD_THREAD_MEMBER_ACCOUNT_ID: optional membership and direct bot account configuration.
+- DISCORD_BOT_TOKEN: private direct credential for that account. Other accounts fail closed.
+- MCP_DISCORD_FORWARDING_REQUESTER_NAME: optional trusted display attribution.
+- MCP_DISCORD_MAX_OPERATIONS: 1–16, default 4.
 
-One MCP deployment connects to one OpenClaw installation. Configure its URL and credential with `OPENCLAW_URL` and `OPENCLAW_GATEWAY_TOKEN`. Direct chat, agent discovery and Discord all use this connection. Multiple agents on that Gateway remain supported; use `agent_id` to select one.
+The publisher uses the configured thread-member account for asks, replies and channel messages. Enable it for these operations. Discovery needs no direct bot credential; channel creation needs it to verify guild-level permissions.
 
-Use separate MCP deployments for multiple OpenClaw installations. Give each deployment its own connection settings, client endpoint and private state directories. Tool callers cannot choose another Gateway.
+Discord bindings come from valid config.get snapshots with matching configRevisionHash/appliedConfigHash. See [access rules](discord-skills.md).
 
-### Deployment preparation
+### Breaking upgrade
 
-This is a breaking configuration change with no runtime compatibility mode. Before upgrading:
+Remove obsolete agent/model connection selectors, static catalogs, destination lists, discovery scopes, creation policies and channel whitelist/blacklist settings. Their JSON fields and CLI aliases are unsupported; no automatic migration is provided.
 
-- Drain active work and preserve operation records and uncertain session claims. Do not replay an uncertain write after the upgrade.
-- Configure one Gateway URL/token per deployment. Remove obsolete connection-list and Gateway-selector settings from the service environment and launcher allowlists.
-- Change `MCP_AGENT_CATALOG` to one object such as `{"agents":[{"id":"main"},{"id":"research"}],"bindings":[]}`. Keep bindings only when you intend to supply routing; omit `agents` for a bindings-only catalog with Gateway discovery. Arrays of connection catalogs are not supported.
-- Keep `agentId` in Discord creation policies; remove their old connection selector. Update clients to retain `session_id` and optional `agent_id`, with no connection selector in tool calls or response parsing.
-- Prepare SDK identity state for the normalized WebSocket endpoint. The filename prefix is `SHA256(JSON.stringify([url]))`, where `url` is the normalized `ws:` or `wss:` URL. The service does not read old name-qualified identity filenames or migrate them at runtime. An operator must provision or migrate the integration-owned identity and matching approved token before enabling Discord writes. Preserve private permissions and never substitute CLI identity state.
-- Review existing Discord journals and admissions before deployment. Changed policy fingerprints can invalidate old admissions; preserve evidence and reconcile it under operator control rather than deleting records to force retries.
-
-See [SDK authentication](discord-sdk.md#service-authentication) and [CLI release upgrades](discord-sdk.md#upgrade-from-cli-based-releases). No Gateway restart, credential edit or live migration is implied by these instructions.
-
-### Discord and Gateway SDK settings
-
-The bridge never invokes the OpenClaw CLI. Discord uses SDK agent calls plus fixed Gateway HTTP and Discord REST adapters. These settings supplement the existing Gateway URL/token, bot credentials, allowed destinations and private operation state:
-
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `MCP_AGENT_CATALOG` | One object with `agents` and optional `bindings`; a bindings-only object is allowed with Gateway discovery. | Unset |
-| `MCP_AGENT_DISCOVERY` | `gateway` reads the configured Gateway roster at startup; unset uses static catalogs/configured agents. No `cli` mode. | Unset |
-| `MCP_AGENT_DISCOVERY_STATE_DIR` | Private persistent discovery identity/token directory; valid only with Gateway discovery. | `~/.openclaw-mcp/gateway-discovery` |
-| `MCP_DISCORD_SDK_AUTH` | `device`, or explicitly authorized `local-shared-token` on literal loopback only. | `device` |
-| `MCP_DISCORD_SDK_STATE_DIR` | Private pre-provisioned Discord integration identity/device state. | `gateway-sdk` inside `MCP_DISCORD_STATE_DIR` |
-
-See [Discord configuration](discord-skills.md), [SDK authentication](discord-sdk.md#service-authentication) and [multi-agent configuration](multiagent-reference.md). The removed transport/executable/read/create selectors have no compatibility aliases; follow the [upgrade checklist](discord-sdk.md#upgrade-from-cli-based-releases).
+Drain active work first. Preserve private identities, operation journals and uncertain session claims. Do not bypass changed fingerprints with new operation IDs. Reconcile old evidence manually before deployment. This change does not authorize restarts or live Discord tests.
 
 ### Server Settings (HTTP transport)
 
@@ -152,11 +138,7 @@ For production with Claude.ai, keep DCR disabled and use the pre-configured `MCP
 
 ## Conversation labels and routing
 
-Generated conversation keys use the configured issuer hostname (`MCP_ISSUER_URL` / `--issuer-url`), or the OS hostname when no issuer is configured. Client initialize names supply display labels only. An explicit target agent is included in generated keys; if none is known locally, Gateway default routing applies. For deterministic multi-agent routing, configure `OPENCLAW_AGENT_ID` or select `agent_id` explicitly, and reuse the returned `session_id` and optional `agent_id` together through the same MCP deployment. See [conversation continuity](conversation-continuity.md) for the full response contract and limitations.
-
-## Agent selection
-
-See [multiagent configuration](multiagent.md) for Gateway SDK roster discovery, explicit catalogs, `agent_id` selectors, Discord mapping precedence and the shared trust model. Every authenticated client can select every configured agent; generic chat requires no Discord mapping.
+Generated keys contain the selected agent and trusted issuer/host label. Client names are display labels only. Reuse session_id and agent_id together. A supplied agent-qualified session cannot override selection. Every authenticated MCP client can select every Gateway agent; authentication does not isolate tenants.
 
 ### Session model selection
 

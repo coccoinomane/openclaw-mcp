@@ -10,7 +10,7 @@ import { validateInputIsObject } from '../../utils/validation.js';
 export const openclawAgentsTool: Tool = {
   name: 'openclaw_agents',
   description:
-    'List configured agents available to every authenticated client, including agents without Discord mappings. This is an operator catalog snapshot, not a live availability probe.',
+    'List the current Gateway agents available to every authenticated MCP client. Reloaded on every call.',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -45,7 +45,7 @@ export async function handleOpenclawAgents(
   if (!validateInputIsObject(input)) return errorResponse('Invalid input: expected an object');
   if (Object.keys(input).length) return errorResponse('Unknown argument');
   try {
-    const agents = gateway.listAgents().map((entry) => ({
+    const agents = (await gateway.listAgents()).map((entry) => ({
       agent_id: entry.agentId,
       is_default: entry.isDefault,
     }));

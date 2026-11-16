@@ -1,3 +1,8 @@
+vi.mock('../../openclaw/gateway-discovery.js', () => ({
+  discoverGatewayAgents: vi.fn(async () => ({
+    agents: [{ id: 'main' }, { id: 'research' }, { id: 'ops' }, { id: 'writer' }],
+  })),
+}));
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -41,7 +46,11 @@ async function status(taskId: string, ownerId: string, expected: string) {
   let response: ToolResponse;
   await vi.waitFor(
     async () => {
-      response = await handleOpenclawTaskStatus(gateway, { task_id: taskId }, ownerId);
+      response = await handleOpenclawTaskStatus(
+        gateway,
+        { task_id: taskId, agent_id: taskManager.get(taskId, ownerId)?.agentId },
+        ownerId
+      );
       expect(json(response).status).toBe(expected);
     },
     { timeout: 3000, interval: 10 }
@@ -88,9 +97,8 @@ beforeAll(async () => {
   url = `http://127.0.0.1:${(gatewayServer.address() as { port: number }).port}`;
   gateway = new OpenClawGateway({
     url,
-    agentId: 'research',
+    defaultAgentId: 'research',
     timeout: 200,
-    agents: [{ id: 'research' }, { id: 'ops' }],
   });
 });
 
@@ -120,7 +128,7 @@ describe('sync Gateway conversation continuity', () => {
     );
   });
 
-  it.each(['legacy-key', 'agent:writer:mcp:host:client:uuid', 'MixedCase:Key', ' padded '])(
+  it.each(['legacy-key', 'agent:research:mcp:host:client:uuid', 'MixedCase:Key', ' padded '])(
     'reuses supplied %s according to existing trim validation without a prefix',
     async (supplied) => {
       const response = await handleOpenclawChat(
@@ -146,19 +154,10 @@ describe('sync Gateway conversation continuity', () => {
     expect(responses.map((r) => r.content[0].text)).toEqual(['one', 'two', 'three']);
   });
 
-  it('qualifies model targets and leaves unknown Gateway defaults unqualified', async () => {
-    const modelGateway = new OpenClawGateway({ url }, 'openclaw/writer');
-    const modelResult = await handleOpenclawChat(
-      modelGateway,
-      { message: 'model target' },
-      context
-    );
-    expect(metadata(modelResult).session_id).toMatch(/^agent:writer:mcp:/);
-    expect(calls[0]).toMatchObject({ agent: undefined, model: 'openclaw/writer' });
-    const defaultGateway = new OpenClawGateway({ url });
-    const defaultResult = await handleOpenclawChat(defaultGateway, { message: 'gateway default' });
-    expect(metadata(defaultResult).session_id).toMatch(/^mcp:[^:]+:unknown:/);
-    expect(calls[1].agent).toBeUndefined();
+  it('refuses an unspecified Gateway default before inference', async () => {
+    const response = await handleOpenclawChat(new OpenClawGateway({ url }), { message: 'hello' });
+    expect(response.isError).toBe(true);
+    expect(calls).toHaveLength(0);
   });
 
   it.each(['', '   ', null, 4, 'x'.repeat(257), 'bad\u0000key'])(
@@ -175,8 +174,8 @@ describe('sync Gateway conversation continuity', () => {
     for (const input of [null, { message: '' }, { message: 'hello', agent_id: 'missing' }]) {
       expect((await handleOpenclawChat(gateway, input)).isError).toBe(true);
     }
-    expect(() => new OpenClawGateway({ url, agentId: 'cron:attack' })).toThrow(
-      'Configured agent ID must be'
+    expect(() => new OpenClawGateway({ url, defaultAgentId: 'cron:attack' })).toThrow(
+      'Invalid default agent ID'
     );
     expect(calls).toHaveLength(0);
   });
@@ -218,7 +217,11 @@ describe('async conversation metadata and ownership', () => {
       result: 'async first',
     });
     expect(completed.structuredContent).toEqual(json(completed));
-    const listed = await handleOpenclawTaskList(gateway, { session_id: data.session_id }, id);
+    const listed = await handleOpenclawTaskList(
+      gateway,
+      { session_id: data.session_id, agent_id: 'ops' },
+      id
+    );
     expect(json(listed).tasks).toHaveLength(1);
     expect(json(listed).tasks[0].session_id).toBe(data.session_id);
     expect(listed.structuredContent).toEqual(json(listed));

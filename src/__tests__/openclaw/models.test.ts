@@ -1,17 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-vi.mock('../../openclaw/gateway-discovery.js', () => ({ gatewayModelRequest: vi.fn() }));
+vi.mock('../../openclaw/gateway-discovery.js', () => ({
+  gatewayModelRequest: vi.fn(),
+  discoverGatewayAgents: vi.fn(async () => ({ agents: [{ id: 'main' }, { id: 'writer' }] })),
+}));
 vi.mock('../../openclaw/discord-channels.js', () => ({ assertServiceProvenance: vi.fn() }));
-import { gatewayModelRequest } from '../../openclaw/gateway-discovery.js';
+import { gatewayModelRequest, discoverGatewayAgents } from '../../openclaw/gateway-discovery.js';
 import { listModels, selectSessionModel } from '../../openclaw/models.js';
 import { OpenClawGateway } from '../../openclaw/gateway.js';
 import { handleOpenclawChat } from '../../mcp/tools/chat.js';
 import { handleOpenclawModels } from '../../mcp/tools/models.js';
 const config = {
   url: 'http://127.0.0.1:18789',
-  agentId: 'main',
-  agents: [{ id: 'main' }, { id: 'writer' }],
+  defaultAgentId: 'main',
 };
-beforeEach(() => vi.resetAllMocks());
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.mocked(discoverGatewayAgents).mockResolvedValue({
+    agents: [{ id: 'main' }, { id: 'writer' }],
+  });
+});
 describe('agent-scoped session models', () => {
   it('returns only selectable rows with canonical refs and public metadata', async () => {
     vi.mocked(gatewayModelRequest).mockResolvedValue({
@@ -55,7 +62,7 @@ describe('agent-scoped session models', () => {
     const gateway = new OpenClawGateway(config);
     const select = vi.spyOn(gateway, 'selectModel').mockResolvedValue();
     const chat = vi
-      .spyOn(gateway.resolve('writer').client, 'chat')
+      .spyOn((await gateway.resolve('writer')).client, 'chat')
       .mockImplementation(async (_message, key) => {
         expect(select).toHaveBeenCalledWith(key, 'p/m');
         return { response: 'ok' };
@@ -84,7 +91,7 @@ describe('agent-scoped session models', () => {
   it('returns Gateway rejection and never starts inference', async () => {
     const gateway = new OpenClawGateway(config);
     vi.spyOn(gateway, 'selectModel').mockRejectedValue(new Error('model not allowed'));
-    const chat = vi.spyOn(gateway.getDefault(), 'chat');
+    const chat = vi.spyOn((await gateway.resolve()).client, 'chat');
     const result = await handleOpenclawChat(gateway, { message: 'hello', model: 'p/denied' });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result)).toContain('model not allowed');

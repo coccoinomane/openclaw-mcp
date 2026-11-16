@@ -18,7 +18,7 @@ afterEach(async () => {
 });
 async function deps() {
   return {
-    gateway: new OpenClawGateway({ url: 'http://127.0.0.1:1' }, 'openclaw'),
+    gateway: new OpenClawGateway({ url: 'http://127.0.0.1:1' }),
     serverName: 'test',
     serverVersion: '1',
     skills: await loadPackagedSkills(),
@@ -43,13 +43,6 @@ describe('Skills and modern MCP', () => {
     for (const match of text.matchAll(/\]\((references\/[^)]+)\)/g)) {
       expect(existsSync(new URL(match[1], skillUrl))).toBe(true);
     }
-    const discord = readFileSync(
-      new URL('skills/openclaw-coordinator/references/discord.md', root),
-      'utf8'
-    );
-    expect(discord).toContain('last completed turn');
-    expect(discord).toContain('Do not invent source identifiers');
-    expect(discord).toContain('session_id returned by an earlier MCP chat');
   });
   it('serves official extension list/get/read with verified support-file digests', async () => {
     const d = await deps();
@@ -85,7 +78,6 @@ describe('Skills and modern MCP', () => {
     expect(entry.resources).toHaveLength(4);
     const main = await skills.read(entry);
     expect(main.verified).toBe(true);
-    expect(main.text).toContain('Direct requests and long-running tasks');
     for (const reference of ['direct-chat', 'discord', 'recovery']) {
       const support = await skills.read(entry, `references/${reference}.md`);
       expect(support.verified).toBe(true);

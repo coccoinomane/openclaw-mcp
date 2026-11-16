@@ -48,22 +48,20 @@ export const discordChannelsOutput = output({
         ],
       },
     },
-    creation_policies: {
+    creation_guilds: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
           ...route,
-          policy: string,
           guild_id: string,
           category_id: string,
-          agent: string,
         },
-        required: ['policy', 'guild_id', 'category_id', 'agent'],
+        required: ['agent_id', 'account_id', 'guild_id'],
       },
     },
   },
-  required: ['channels', 'creation_policies'],
+  required: ['channels', 'creation_guilds'],
 });
 
 // Metadata may be absent; malformed values are rejected by output validation.
@@ -96,7 +94,7 @@ const turn: OutputSchema = {
   type: 'object',
   properties: {
     ...route,
-    kind: { type: 'string', const: 'thread_reply' },
+    kind: { type: 'string', enum: ['thread_reply', 'channel_message'] },
     operation_id: string,
     target: string,
     status: {
@@ -155,7 +153,8 @@ const creation: OutputSchema = {
   properties: {
     ...route,
     kind: { type: 'string', const: 'channel_create' },
-    policy: string,
+    guild_id: string,
+    category_id: string,
     operation_id: string,
     status: {
       type: 'string',
@@ -175,7 +174,7 @@ const creation: OutputSchema = {
     error_code: string,
     recovery: string,
   },
-  required: ['kind', 'policy', 'operation_id', 'status', 'retry_safe'],
+  required: ['kind', 'guild_id', 'operation_id', 'status', 'retry_safe'],
 };
 
 // Early failures and interrupted records may lack URLs, session keys or run IDs.

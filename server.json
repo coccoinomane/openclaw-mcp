@@ -32,15 +32,20 @@
           "isSecret": true
         },
         {
-          "name": "OPENCLAW_MODEL",
-          "description": "Model name for chat completions (e.g. 'openclaw' or 'openclaw/<agentId>')",
-          "default": "openclaw",
-          "isRequired": false
-        },
-        {
           "name": "OPENCLAW_TIMEOUT_MS",
           "description": "Request timeout in milliseconds",
           "default": "120000",
+          "isRequired": false
+        },
+        {
+          "name": "OPENCLAW_DEFAULT_AGENT_ID",
+          "description": "Default Gateway agent when agent_id is omitted",
+          "isRequired": false
+        },
+        {
+          "name": "OPENCLAW_AGENT_IS_MANDATORY",
+          "description": "Require agent_id, ignoring the default",
+          "default": "false",
           "isRequired": false
         }
       ]
@@ -65,9 +70,14 @@
           "isSecret": true
         },
         {
-          "name": "OPENCLAW_MODEL",
-          "description": "Model name for chat completions",
-          "default": "openclaw",
+          "name": "OPENCLAW_DEFAULT_AGENT_ID",
+          "description": "Default Gateway agent when agent_id is omitted",
+          "isRequired": false
+        },
+        {
+          "name": "OPENCLAW_AGENT_IS_MANDATORY",
+          "description": "Require agent_id, ignoring the default",
+          "default": "false",
           "isRequired": false
         }
       ]

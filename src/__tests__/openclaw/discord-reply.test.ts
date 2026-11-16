@@ -1,3 +1,4 @@
+import { fixtureAccess } from '../discord-fixture.js';
 import { threadMemberAdder } from '../../openclaw/discord-thread.js';
 import { requestPublisher } from '../../openclaw/discord-request.js';
 import { channelReader } from '../../openclaw/discord-read.js';
@@ -5,11 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import {
-  DiscordService,
-  type DiscordConfig,
-  type DiscordRouteResolver,
-} from '../../openclaw/discord.js';
+import { DiscordService, type DiscordConfig } from '../../openclaw/discord.js';
 import type { DiscordAgentRequest, DiscordAgentTransport } from '../../openclaw/discord-agent.js';
 import { DiscordError } from '../../openclaw/discord-channels.js';
 import { discordTools, handleDiscord } from '../../mcp/tools/discord.js';
@@ -18,7 +15,9 @@ const guild = '400000000000000001',
   parent = '400000000000000002',
   thread = '400000000000000003';
 const input = {
-  target: 'work',
+  target: parent,
+  guild_id: guild,
+  account_id: 'bot',
   channel_id: thread,
   operation_id: 'reply-operation-0001',
   prompt: '  exact @everyone 😀\ntrailing  ',
@@ -36,17 +35,9 @@ async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'discord-reply-'));
   const config: DiscordConfig = {
     stateDir: dir,
-    targets: [
-      {
-        name: 'work',
-        guildId: guild,
-        channelId: parent,
-        accountId: 'bot',
-        agentId: 'main',
-        normalRouting: true,
-      },
-    ],
-    acknowledgeInboundRouting: true,
+    access: fixtureAccess([
+      { name: 'work', guildId: guild, channelId: parent, accountId: 'bot', agentId: 'main' },
+    ]),
   };
   const metadata: any = {
     id: thread,
@@ -94,7 +85,6 @@ async function fixture() {
       ? { permissions }
       : { channel: req.channelId === parent ? { id: parent, guild_id: guild, type: 0 } : metadata }
   );
-  const resolver = vi.fn<DiscordRouteResolver>(async () => route);
   const publish = vi.fn(
     async (
       _t: any,
@@ -106,8 +96,8 @@ async function fixture() {
       await sent('400000000000000004');
     }
   );
-  const make = (resolve: DiscordRouteResolver | undefined = resolver) =>
-    new DiscordService(config, undefined, resolve, reader, createThread, undefined, publish, agent);
+  const make = () =>
+    new DiscordService(config, undefined, reader, createThread, undefined, publish, agent);
   const service = make();
   const others: DiscordService[] = [];
   cleanups.push(async () => {
@@ -124,7 +114,6 @@ async function fixture() {
     agent,
     createThread,
     reader,
-    resolver,
     publish,
     service,
     running,
@@ -136,16 +125,7 @@ async function fixture() {
       return s;
     },
     withoutResolver: () =>
-      new DiscordService(
-        config,
-        undefined,
-        undefined,
-        reader,
-        createThread,
-        undefined,
-        publish,
-        agent
-      ),
+      new DiscordService(config, undefined, reader, createThread, undefined, publish, agent),
   };
 }
 describe('existing public thread replies', () => {
@@ -237,51 +217,19 @@ describe('existing public thread replies', () => {
       },
     ],
     [
-      'bound',
-      (f: any) => {
-        f.route.kind = 'bound';
-      },
-    ],
-    [
-      'subagent',
-      (f: any) => {
-        f.route.kind = 'subagent';
-      },
-    ],
-    [
-      'unknown route',
-      (f: any) => {
-        f.route.kind = 'unknown';
-      },
-    ],
-    [
-      'wrong session',
-      (f: any) => {
-        f.route.sessionKey += ':thread:' + thread;
-      },
-    ],
-    [
-      'wrong agent',
-      (f: any) => {
-        f.route.agentId = 'other';
-      },
-    ],
-    [
-      'wrong account',
-      (f: any) => {
-        f.route.accountId = 'other';
-      },
-    ],
-    [
       'routing exception',
       (f: any) => {
-        f.resolver.mockRejectedValue(new Error('secret'));
+        f.config.access.assert = async () => {
+          throw new DiscordError('BINDING_ACCESS_DENIED');
+        };
       },
     ],
     [
       'routing acknowledgement',
       (f: any) => {
-        f.config.acknowledgeInboundRouting = false;
+        f.config.access.assert = async () => {
+          throw new DiscordError('BINDING_ACCESS_DENIED');
+        };
       },
     ],
   ])('rejects %s before publication', async (_label, mutate) => {
@@ -295,21 +243,6 @@ describe('existing public thread replies', () => {
     expect(f.agent.run).not.toHaveBeenCalled();
     expect(f.createThread).not.toHaveBeenCalled();
   });
-  it.each(['parent blacklist', 'thread blacklist', 'whitelist', 'guild scope'])(
-    'rejects forbidden %s',
-    async (kind) => {
-      const f = await fixture();
-      if (kind === 'parent blacklist') f.config.channelBlacklist = [parent];
-      if (kind === 'thread blacklist') f.config.channelBlacklist = [thread];
-      if (kind === 'whitelist') f.config.channelWhitelist = [guild];
-      if (kind === 'guild scope') f.config.targets = [];
-      const result = await handleDiscord(f.service, 'openclaw_discord_reply', input);
-      expect(
-        result.isError || (result.structuredContent as any)?.status === 'run_failed'
-      ).toBeTruthy();
-      expect(f.publish).not.toHaveBeenCalled();
-    }
-  );
   it('uses configured canonical routing without an optional resolver', async () => {
     const f = await fixture();
     const service = f.withoutResolver();
@@ -415,13 +348,15 @@ describe('existing public thread replies', () => {
     const f = await fixture();
     f.publish.mockImplementationOnce(async (_t, _id, _p, _op, sent) => {
       await sent('400000000000000004');
-      f.route.kind = 'bound';
+      f.config.access.assert = async () => {
+        throw new DiscordError('BINDING_ACCESS_DENIED');
+      };
     });
     expect(await f.service.reply(input)).toMatchObject({ status: 'queued' });
     await f.service.drain();
     expect(await f.service.status(input.operation_id)).toMatchObject({
       status: 'run_failed',
-      error_code: 'NONORDINARY_ROUTE_DENIED',
+      error_code: 'BINDING_ACCESS_DENIED',
       request_verified: true,
     });
     expect(f.agent.run).not.toHaveBeenCalled();
@@ -435,7 +370,10 @@ describe('existing public thread replies', () => {
         await sent('400000000000000004');
         if (kind === 'locked') f.metadata.thread_metadata.locked = true;
         if (kind === 'permissions') f.permissions.permissions = [];
-        if (kind === 'policy') f.config.channelBlacklist = [thread];
+        if (kind === 'policy')
+          f.config.access.assert = async () => {
+            throw new DiscordError('BINDING_ACCESS_DENIED');
+          };
       });
       expect(await f.service.reply(input)).toMatchObject({ status: 'queued' });
       await f.service.drain();
@@ -537,7 +475,6 @@ describe('existing public thread replies', () => {
       });
       const service = new DiscordService(
         f.config,
-        undefined,
         undefined,
         channelReader({ url: 'http://127.0.0.1:18789', token: 'test-only' }, f.config, network),
         f.createThread,
