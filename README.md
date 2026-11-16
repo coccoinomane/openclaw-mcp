@@ -15,7 +15,7 @@ The optional Discord integration lets your MCP client act as a chief of staff: c
 
 The first bot message contains the submitted request or contextual assignment. Operators can set `MCP_DISCORD_FORWARDING_REQUESTER_NAME` to add `**Forwarding <name>’s request**` above new-thread requests; the server adds it, not the calling client. Existing-thread replies and agent input stay unchanged. Clients preserve the work request or prepare a contextual handoff, then return the destination link (a native thread mention on Discord). Discord always uses the Gateway SDK for agent turns, Gateway HTTP for reads and creation, and Discord REST for membership and exact request publication. The bridge does not require or launch the OpenClaw CLI. Direct Ask OpenClaw remains available.
 
-Discord is **off by default**, so its tools are hidden unless `MCP_DISCORD_ENABLED=true`. Configure explicit guild/account/agent discovery scopes: an empty channel whitelist includes all supported channels in those scopes, while the blacklist always wins. Legacy target allowlists still work. Credentials and verified normal channel routing are required. Provision the [SDK service identity](docs/discord-sdk.md#service-authentication). See the [Discord setup guide](docs/discord-skills.md). Upgrading from a CLI-based release requires [removing obsolete settings](docs/discord-sdk.md#upgrade-from-cli-based-releases); there are no compatibility aliases. The client-agnostic [coordinator skill](skills/openclaw-coordinator/SKILL.md) is available through MCP Skills and legacy resources. Local Discord workflow guidance is an optional, separate [Discord Coordination plugin](https://github.com/coccoinomane/openclaw-discord-coordination). See [skill distribution](docs/coordinator-skill.md).
+Discord is **off by default**, so its tools are hidden unless `MCP_DISCORD_ENABLED=true`. Configure explicit guild/account/agent discovery scopes: an empty channel whitelist includes all supported channels in those scopes, while the blacklist always wins. Legacy target allowlists still work. Credentials and verified normal channel routing are required. Provision the [SDK service identity](docs/discord-sdk.md#service-authentication). See the [Discord setup guide](docs/discord-skills.md). Upgrading from a CLI-based release requires [removing obsolete settings](docs/discord-sdk.md#upgrade-from-cli-based-releases); there are no compatibility aliases. The client-agnostic [coordinator skill](skills/openclaw-coordinator/SKILL.md) is available through MCP Skills and legacy resources. Local Discord workflow guidance is a separate [Discord Coordination companion plugin](https://github.com/coccoinomane/openclaw-discord-coordination). See [skill distribution](docs/coordinator-skill.md).
 
 `openclaw_discord_reply` adds existing-public-thread handoff to the shared tool set (14 tools with Discord enabled, 8 without). It reuses configured normal routing and Gateway-backed dispatch for active or archived unlocked public threads. See [existing-thread requirements](docs/discord-reply.md).
 
@@ -31,7 +31,7 @@ Use the archive from [GitHub Releases](https://github.com/coccoinomane/openclaw-
 
 ```sh
 mkdir openclaw-mcp && cd openclaw-mcp
-tar -xzf /path/to/openclaw-mcp-2.2.0.tar.gz
+tar -xzf /path/to/openclaw-mcp-2.3.0.tar.gz
 npm ci --omit=dev --ignore-scripts
 # Set Gateway credentials and HTTP authentication environment variables first.
 node dist/index.js --transport http
