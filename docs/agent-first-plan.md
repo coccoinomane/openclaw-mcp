@@ -55,4 +55,5 @@ Senza catalogo statico e filtri locali, il servizio espone tutti gli agenti rest
 - Non trovata una RPC generale che esponga la decisione di routing effettiva e il binding vincente per canali/thread arbitrari e nuovi canali. I bindings di configurazione non includono tutte le assegnazioni runtime; roles, broadcast e ACP richiedono trattamento distinto.
 - Guido ha scelto il perimetro limitato ai binding server/canale del solo agente selezionato. Il precedente blocco sul routing nativo è superato: implementare questo perimetro senza estensione Gateway.
 - Report tecnico locale: /Users/openclaw/.openclaw/workspace/out/agent-first-routing-feasibility.md. Verifica su sorgenti e schemi, senza chiamate live.
-- Nessuna modifica al servizio attivo o al codice funzionale.
+- Implementazione completata; revisione indipendente e tre correzioni concluse. Passano 685 test in 31 file, typecheck, lint, format:check e build.
+- Servizio attivo invariato. Prima del deploy locale occorre autorizzare un binding esplicito di main al server Discord: i suoi attuali binding generici non concedono accesso nel nuovo perimetro. Restano le verifiche live in sola lettura su grant e configurazione del Gateway.
