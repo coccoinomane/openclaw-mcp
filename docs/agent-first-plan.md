@@ -49,5 +49,8 @@ Senza catalogo statico e filtri locali, il servizio espone tutti gli agenti rest
 ## Stato
 
 - Piano scritto prima delle modifiche funzionali.
-- Verifica delle API da eseguire.
-- Nessuna modifica al servizio attivo.
+- Verifica statica API completata: agents.list e config.get sono disponibili via SDK remoto; config.get richiede operator.read nella build ispezionata. Grant live non ancora verificato.
+- Non trovata una RPC generale che esponga la decisione di routing effettiva e il binding vincente per canali/thread arbitrari e nuovi canali. I bindings di configurazione non includono tutte le assegnazioni runtime; roles, broadcast e ACP richiedono trattamento distinto.
+- Prima delle modifiche Discord serve scegliere tra un’estensione Gateway per la risoluzione nativa e un perimetro MCP esplicitamente limitato, con diniego dei casi non verificabili. Nessun resolver parziale introdotto come equivalente al routing nativo.
+- Report tecnico locale: /Users/openclaw/.openclaw/workspace/out/agent-first-routing-feasibility.md. Verifica su sorgenti e schemi, senza chiamate live.
+- Nessuna modifica al servizio attivo o al codice funzionale.
