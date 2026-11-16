@@ -1,5 +1,6 @@
 import { modelParameter } from '../../openclaw/models.js';
 import { forkSessionParameter } from '../../openclaw/session-fork.js';
+import { sourceParameter } from '../../openclaw/discord-source.js';
 import {
   discordChannelsOutput,
   discordThreadsOutput,
@@ -73,6 +74,7 @@ export const discordTools: Tool[] = [
         mode: { type: 'string', enum: ['new_thread'] },
         model: modelParameter,
         fork_from_session: forkSessionParameter,
+        source: sourceParameter,
         title: { type: 'string', minLength: 1, maxLength: 100 },
         prompt: {
           type: 'string',

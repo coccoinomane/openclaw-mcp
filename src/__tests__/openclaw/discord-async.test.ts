@@ -6,6 +6,9 @@ import { DiscordService, loadDiscordConfig, type DiscordConfig } from '../../ope
 import type { DiscordAgentRequest, DiscordAgentTransport } from '../../openclaw/discord-agent.js';
 import { DiscordError } from '../../openclaw/discord-channels.js';
 import { requestPublisher } from '../../openclaw/discord-request.js';
+import { createHash } from 'node:crypto';
+import { discordTools, handleDiscord } from '../../mcp/tools/discord.js';
+import { displaySource, sourceParameter } from '../../openclaw/discord-source.js';
 
 const guild = '400000000000000001',
   parent = '400000000000000002',
@@ -26,6 +29,8 @@ const input = {
   title: 'Task',
   prompt: '  exact @everyone <@400000000000000006> 😀\ntrailing  ',
 };
+const source =
+  'https://discord.com/channels/500000000000000001/500000000000000002/500000000000000003';
 const fixtures: Array<{
   generation: ReturnType<typeof deferred<any>>;
   service: DiscordService;
@@ -65,6 +70,9 @@ async function fixture() {
   const generation = deferred<any>();
   const started = deferred<void>();
   const agent = {
+    forkSession: vi.fn(
+      async (_key: string, _source: string, _agent: string, _model?: string) => {}
+    ),
     ready: vi.fn(async () => {}),
     run: vi.fn(async (_request: DiscordAgentRequest) => {
       events.push('agent');
@@ -357,6 +365,298 @@ describe('closed request publication', () => {
     }
     expect(f.http).toHaveBeenCalledTimes(2);
   });
+  const sourceHeader = '**Forwarding sample\\-owner’s request** from ' + source;
+  it.each([undefined, 'sample-owner'])(
+    'renders and verifies source captions with name %s',
+    async (name) => {
+      const caption = name ? sourceHeader : '**Forwarding request** from ' + source;
+      for (const length of [2000, 2001]) {
+        const prompt = 'x'.repeat(length - caption.length - 2);
+        const f = await publisherFixture(prompt, name);
+        await f.send(target, thread, prompt, input.operation_id, async () => {}, true, source);
+        const body = f.http.mock.calls[0][1].body;
+        if (length === 2000) expect(JSON.parse(body).content).toBe(caption + '\n\n' + prompt);
+        else {
+          expect(body).toBeInstanceOf(FormData);
+          expect(JSON.parse(body.get('payload_json')).content).toBe(caption);
+          expect(await body.get('files[0]').text()).toBe(prompt);
+        }
+        expect(f.http.mock.calls.map(([url]) => url)).toEqual([
+          'https://discord.com/api/v10/channels/' + thread + '/messages',
+          'https://discord.com/api/v10/channels/' + thread + '/messages/' + message,
+        ]);
+      }
+    }
+  );
+  it.each([
+    [
+      'https://client.example/chat/session-42?view=full&mode=read',
+      'https://client.example/chat/session-42?view=full&mode=read',
+    ],
+    ['Editor session: abc-123', 'Editor session: abc-123'],
+    ['My Client', 'My Client'],
+    ['<#' + thread + '> ' + source, '<#' + thread + '> ' + source],
+    ['<' + source + '>', source],
+    ['<b>My Client</b>', 'My Client'],
+    ["<a title='quoted > attribute' href='hidden'>Client</a>", 'Client'],
+    [
+      '<b>**[label](https://visible.example)**</b>',
+      '\\*\\*\\[label\\]\\(https://visible.example\\)\\*\\*',
+    ],
+    ['Client <!-- secret -->https://visible.example', 'Client https://visible.example'],
+    ['😀漢字 Client', '😀漢字 Client'],
+    ['<ftp://files.example/path>', 'ftp://files.example/path'],
+    ['x'.repeat(1024), 'x'.repeat(1024)],
+    ['*'.repeat(800), '\\*'.repeat(800)],
+    ['<svg:a href="hidden">Client</svg:a>', 'Client'],
+    ['<svg/onload=alert(1)>Client', 'Client'],
+    [
+      'https://example.com/a%3Cb%3E?q=x&mode=raw#fragment',
+      'https://example.com/a%3Cb%3E?q=x&mode=raw#fragment',
+    ],
+    ['<a href="https://hidden.example" title="quoted > value">My Client</a>', 'My Client'],
+    ['<script>alert(1)</script> Client', 'alert\\(1\\) Client'],
+    ['[label](https://hidden.example)', '\\[label\\]\\(https://hidden.example\\)'],
+    ['||`**https://visible.example**`||', '\\|\\|\\`\\*\\*https://visible.example\\*\\*\\`\\|\\|'],
+    [
+      '<@12345678901234567> <@&12345678901234567> @everyone @here',
+      '\\<@\u200b12345678901234567\\> \\<@\u200b&12345678901234567\\> @\u200beveryone @\u200bhere',
+    ],
+  ])('publishes visible generic source %s without changing the prompt', async (raw, expected) => {
+    expect(displaySource(raw)).toBe(expected);
+    for (const length of [2000, 2001]) {
+      const caption = '**Forwarding request** from ' + expected;
+      const prompt = 'x'.repeat(length - caption.length - 2);
+      const f = await publisherFixture(prompt);
+      await f.send(target, thread, prompt, input.operation_id, async () => {}, true, raw);
+      const body = f.http.mock.calls[0][1].body;
+      const payload =
+        body instanceof FormData
+          ? JSON.parse(body.get('payload_json') as string)
+          : JSON.parse(body);
+      expect(caption.length).toBeLessThan(2000);
+      expect(payload.content).toBe(length === 2000 ? caption + '\n\n' + prompt : caption);
+      if (body instanceof FormData)
+        expect(await (body.get('files[0]') as Blob).text()).toBe(prompt);
+      expect(payload.allowed_mentions).toEqual({
+        parse: [],
+        users: [],
+        roles: [],
+        replied_user: false,
+      });
+      expect(payload.flags).toBe(4 | 4096);
+      expect(f.http).toHaveBeenCalledTimes(2);
+    }
+  });
+  it('rejects the removed parameter without effects', async () => {
+    const f = await publisherFixture();
+    const args = { ...input, source_message_url: source };
+    expect(await handleDiscord(f.service, 'openclaw_discord_ask', args)).toHaveProperty(
+      'isError',
+      true
+    );
+    await expect(f.service.ask(args)).rejects.toThrow('ASK_ARGUMENTS_INVALID');
+    expect(await readdir(f.dir)).toEqual([]);
+    expect(f.reader).not.toHaveBeenCalled();
+    expect(f.http).not.toHaveBeenCalled();
+    expect(f.create).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
+  });
+  it.each([false, true])(
+    'rejects changed source in exact readback (attachment=%s)',
+    async (attachment) => {
+      const prompt = attachment ? 'x'.repeat(2000) : input.prompt;
+      const f = await publisherFixture(prompt, 'sample-owner');
+      const original = f.http.getMockImplementation()!;
+      f.http.mockImplementation(async (url, opts) => {
+        const response = await original(url, opts);
+        if (opts.method !== 'GET') return response;
+        const body: any = await response.json();
+        body.content = body.content.replace(source, source.slice(0, -1) + '4');
+        return Response.json(body);
+      });
+      const sent = vi.fn(async () => {});
+      await expect(
+        f.send(target, thread, prompt, input.operation_id, sent, true, source)
+      ).rejects.toThrow('REQUEST_READBACK_UNVERIFIED');
+      expect(sent).toHaveBeenCalledWith(message);
+    }
+  );
+  it.each([
+    [undefined, source],
+    ['agent:main:main', source],
+    [undefined, 'https://client.example/conversations/abc'],
+    ['agent:main:main', 'Editor session-123'],
+    [undefined, 'Editor'],
+    ['agent:main:main', '<#' + thread + '> ' + source],
+  ])(
+    'keeps origin out of agent input and binds durable replay for fork %s and source %s',
+    async (fork, source) => {
+      const f = await publisherFixture(input.prompt, 'sample-owner');
+      const service = () =>
+        new DiscordService(
+          f.config,
+          undefined,
+          undefined,
+          f.reader,
+          f.create,
+          f.member,
+          f.send,
+          f.agent
+        );
+      const current = service();
+      const args = {
+        ...input,
+        source: source,
+        ...(fork ? { fork_from_session: fork } : {}),
+      };
+      try {
+        expect(await handleDiscord(current, 'openclaw_discord_ask', args)).not.toHaveProperty(
+          'isError',
+          true
+        );
+        await f.started.promise;
+        expect(f.agent.run.mock.calls[0][0].message).toBe(input.prompt);
+        expect(JSON.stringify(f.agent.run.mock.calls)).not.toContain(source);
+        expect(JSON.parse(f.http.mock.calls[0][1].body).content).toBe(
+          '**Forwarding sample\\-owner’s request** from ' + source + '\n\n' + input.prompt
+        );
+        if (fork)
+          expect(f.agent.forkSession).toHaveBeenCalledWith(
+            'agent:main:discord:channel:' + thread,
+            fork,
+            'main',
+            undefined
+          );
+        else expect(f.agent.forkSession).not.toHaveBeenCalled();
+        await current.ask(args);
+        f.generation.resolve({ status: 'ok' });
+        await current.drain();
+        const restarted = service();
+        expect(await restarted.ask(args)).toMatchObject({ status: 'completed' });
+        for (const changedSource of [undefined, source.slice(0, -1) + '4', '<b>' + source + '</b>'])
+          await expect(restarted.ask({ ...args, source: changedSource })).rejects.toThrow(
+            'different arguments'
+          );
+        expect(f.http).toHaveBeenCalledTimes(2);
+        expect(f.create).toHaveBeenCalledTimes(1);
+        expect(f.agent.run).toHaveBeenCalledTimes(1);
+        // Persist only the fingerprint, not an additional copy of the source URL.
+        expect(await readFile(join(f.dir, input.operation_id + '.json'), 'utf8')).not.toContain(
+          source
+        );
+      } finally {
+        f.generation.resolve({ status: 'ok' });
+        await current.drain();
+      }
+    }
+  );
+  it('retains the pre-source fingerprint and rejects adding origin on replay', async () => {
+    const f = await fixture();
+    await f.service.ask(input);
+    f.generation.resolve({ status: 'ok' });
+    await f.service.drain();
+    const record = JSON.parse(await readFile(join(f.dir, input.operation_id + '.json'), 'utf8'));
+    expect(record.fingerprint).toBe(
+      createHash('sha256')
+        .update(JSON.stringify([target, input.mode, input.title, undefined, input.prompt]))
+        .digest('hex')
+    );
+    expect(await f.make().ask(input)).toMatchObject({ status: 'completed' });
+    await expect(f.make().ask({ ...input, source: source })).rejects.toThrow('different arguments');
+    expect(f.create).toHaveBeenCalledTimes(1);
+    expect(f.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    '',
+    '   ',
+    null,
+    123,
+    {},
+    [],
+    true,
+    '<b></b>',
+    '<!-- hidden -->',
+    '<a title="quoted > value"></a>',
+    '&lt;b&gt;client&lt;/b&gt;',
+    '&lt b&gt client',
+    '&#60b>client',
+    '<!DOCTYPE html>',
+    '&#60;b&#62;client',
+    '&#x3c;b&#x3e;client',
+    '&amp;lt;b&amp;gt;client',
+    'client&NewLine;hidden',
+    'x'.repeat(1025),
+    '*'.repeat(801),
+    'client\nsecond',
+    'client\r\nsecond',
+    'client\tsecond',
+    'client\0',
+    'client\u007f',
+    'client\u0085',
+    'client\u2028',
+    'client\u2029',
+    'client\u202e',
+    'client\u2066',
+    'client\u200b',
+    'client\ud800',
+    'client\udfff',
+  ])('rejects invalid source before effects: %j', async (source) => {
+    const f = await publisherFixture();
+    const args = { ...input, source: source };
+    await expect(f.service.ask(args)).rejects.toThrow('SOURCE_INVALID');
+    expect(await handleDiscord(f.service, 'openclaw_discord_ask', args)).toMatchObject({
+      isError: true,
+      structuredContent: { error_code: 'SOURCE_INVALID' },
+    });
+    await expect(
+      f.send(
+        target,
+        thread,
+        input.prompt,
+        input.operation_id,
+        async () => {},
+        true,
+        source as string
+      )
+    ).rejects.toThrow('SOURCE_INVALID');
+    expect(await readdir(f.dir)).toEqual([]);
+    expect(f.reader).not.toHaveBeenCalled();
+    expect(f.create).not.toHaveBeenCalled();
+    expect(f.member).not.toHaveBeenCalled();
+    expect(f.publish).not.toHaveBeenCalled();
+    expect(f.http).not.toHaveBeenCalled();
+    expect(f.agent.ready).not.toHaveBeenCalled();
+    expect(f.agent.forkSession).not.toHaveBeenCalled();
+    expect(f.agent.run).not.toHaveBeenCalled();
+  });
+  it('exposes an optional source only on ask and rejects it on reply', async () => {
+    const ask = discordTools.find((tool) => tool.name === 'openclaw_discord_ask')!;
+    expect(ask.inputSchema.properties?.source).toEqual(sourceParameter);
+    expect(ask.inputSchema.required).not.toContain('source');
+    expect(sourceParameter).toMatchObject({ type: 'string', minLength: 1, maxLength: 1024 });
+    for (const tool of discordTools.filter((tool) => tool.name !== ask.name))
+      expect(tool.inputSchema.properties).not.toHaveProperty('source');
+    const f = await publisherFixture();
+    const reply = {
+      target: input.target,
+      channel_id: thread,
+      operation_id: input.operation_id,
+      prompt: input.prompt,
+      source: source,
+    };
+    expect(await handleDiscord(f.service, 'openclaw_discord_reply', reply)).toHaveProperty(
+      'isError',
+      true
+    );
+    await expect(f.service.reply(reply)).rejects.toThrow('REPLY_ARGUMENTS_INVALID');
+    await expect(
+      f.send(target, thread, input.prompt, input.operation_id, async () => {}, false, source)
+    ).rejects.toThrow('SOURCE_NEW_THREAD_REQUIRED');
+    expect(f.http).not.toHaveBeenCalled();
+    expect(await readdir(f.dir)).toEqual([]);
+  });
   it('escapes markdown and mention syntax only in the trusted name', async () => {
     const f = await publisherFixture(
       input.prompt,
@@ -440,7 +740,10 @@ describe('closed request publication', () => {
       );
     const service = make();
     try {
-      expect(await service.ask({ ...input, username: 'untrusted' })).toMatchObject({
+      await expect(service.ask({ ...input, username: 'untrusted' })).rejects.toThrow(
+        'ASK_ARGUMENTS_INVALID'
+      );
+      expect(await service.ask(input)).toMatchObject({
         request_verified: true,
       });
       await f.started.promise;
