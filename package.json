@@ -69,6 +69,7 @@
     "README.md",
     "LICENSE",
     "plugins",
+    "plugin.json",
     "skills"
   ],
   "homepage": "https://github.com/coccoinomane/openclaw-mcp#readme",

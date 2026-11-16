@@ -559,11 +559,11 @@ describe('operator configuration and closed inputs', () => {
     const tool = discordTools.find((t) => t.name === 'openclaw_discord_ask')!;
     expect(tool.description).toContain('not answer content');
     expect(tool.description).toContain('Does not wait for generation');
-    expect(tool.description).toContain('only the Discord link');
-    expect(tool.description).toContain('unless explicitly requested');
+    expect(tool.description).toContain('native thread mention on Discord');
+    expect(tool.description).toContain('without adding unrelated requirements');
     expect(tool.description).toContain('report errors or partial/unknown outcomes');
     expect((tool.inputSchema.properties?.prompt as { description: string }).description).toContain(
-      'original request to forward unchanged'
+      'request or self-contained delegated assignment'
     );
     expect(Object.keys(tool.inputSchema.properties!)).toEqual([
       'agent_id',
