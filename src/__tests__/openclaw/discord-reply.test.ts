@@ -260,9 +260,11 @@ describe('existing public thread replies', () => {
   });
   it('rejects a parent ID and client-selected session, agent or transport fields', async () => {
     const f = await fixture();
-    expect(await f.service.reply({ ...input, channel_id: parent })).toMatchObject({
-      status: 'run_failed',
-    });
+    await expect(f.service.reply({ ...input, channel_id: parent })).rejects.toThrow(
+      'PUBLIC_THREAD_REQUIRED'
+    );
+    expect(f.agent.run).not.toHaveBeenCalled();
+    expect(await readdir(f.dir)).toEqual([]);
     for (const key of ['session_key', 'agent', 'mode', 'title', 'account', 'url']) {
       expect(
         (await handleDiscord(f.service, 'openclaw_discord_reply', { ...input, [key]: 'spoof' }))

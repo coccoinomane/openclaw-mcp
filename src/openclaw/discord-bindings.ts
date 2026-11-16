@@ -64,8 +64,9 @@ export function selectedBindings(config: Record<string, any>, agent: string): Di
     )
       continue;
     if (!m.guildId && !m.peer) continue;
-    const account = m.accountId ?? 'default';
-    if (typeof account !== 'string' || (account !== '*' && !accountId.test(account))) continue;
+    if (m.accountId !== undefined && typeof m.accountId !== 'string') continue;
+    const account = m.accountId?.trim() || 'default';
+    if (account !== '*' && !accountId.test(account)) continue;
     for (const id of account === '*' ? accounts : [account]) {
       if (!accounts.has(id)) continue;
       result.push({

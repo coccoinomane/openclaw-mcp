@@ -392,6 +392,7 @@ export class DiscordService {
     )
       throw new DiscordError('REPLY_ARGUMENTS_INVALID');
     check(input.channel_id, snowflake, 'thread ID');
+    if (input.channel_id === input.target) throw new DiscordError('PUBLIC_THREAD_REQUIRED');
     return this.enqueue({ ...input, mode: 'reply' });
   }
   async send(input: any) {
@@ -694,7 +695,9 @@ export class DiscordService {
       if ([15, 16].includes(parent.type)) throw new DiscordError('FORUM_MEDIA_WRITES_UNSUPPORTED');
       let id = input.channel_id;
       if (replying || sending) {
-        op.session_key = await this.verifyDestination(t, id, input.prompt);
+        op.session_key = replying
+          ? await this.verifyReply(t, id, input.prompt)
+          : await this.verifyDestination(t, id, input.prompt);
         op.channel_id = id;
         op.discord_url = 'https://discord.com/channels/' + t.guildId + '/' + id;
         releaseSession = await this.claimSession(op.session_key, input.operation_id);

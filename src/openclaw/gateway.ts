@@ -22,9 +22,10 @@ export class OpenClawGateway {
   get agentIsMandatory() {
     return this.config.agentIsMandatory === true;
   }
-  async resolve(selector?: string): Promise<{ client: OpenClawClient; agentId: string }> {
+  async resolve(selector?: unknown): Promise<{ client: OpenClawClient; agentId: string }> {
+    if (selector !== undefined && typeof selector !== 'string') throw new Error('Invalid agent ID');
     if (selector === undefined && this.agentIsMandatory) throw new Error('agent_id is required');
-    const selected = selector ?? this.config.defaultAgentId;
+    const selected = this.agentIsMandatory ? selector : (selector ?? this.config.defaultAgentId);
     if (selected === undefined)
       throw new Error('Select agent_id or configure OPENCLAW_DEFAULT_AGENT_ID');
     if (typeof selected !== 'string' || !AGENT_ID_RE.test(selected))

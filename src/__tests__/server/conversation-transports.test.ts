@@ -1,5 +1,5 @@
 import { WebSocketServer } from 'ws';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -46,6 +46,7 @@ async function listen(server: Server): Promise<number> {
 }
 
 function gatewayRpc(server: Server, bindings: any[] = []) {
+  const methods: string[] = [];
   const ws = new WebSocketServer({ server });
   ws.on('connection', (socket) => {
     socket.send(
@@ -57,6 +58,7 @@ function gatewayRpc(server: Server, bindings: any[] = []) {
     );
     socket.on('message', (raw) => {
       const req = JSON.parse(raw.toString());
+      methods.push(req.method);
       let payload: any;
       if (req.method === 'connect')
         payload = {
@@ -94,6 +96,7 @@ function gatewayRpc(server: Server, bindings: any[] = []) {
     for (const c of ws.clients) c.terminate();
     ws.close();
   });
+  return methods;
 }
 async function deviceEnv() {
   const dir = await mkdtemp(join(tmpdir(), 'mcp-transport-device-'));
@@ -112,7 +115,7 @@ async function gateway() {
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
     const key = req.headers['x-openclaw-session-key'] as string;
-    const message = body.messages[0]?.content ?? '';
+    const message = body.messages?.[0]?.content ?? '';
     requests.push({ key, message });
     if (message === 'accepted-invalid') {
       res.end('invalid-json');
@@ -121,13 +124,13 @@ async function gateway() {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ choices: [{ message: { content: `reply:${message}` } }] }));
   });
-  gatewayRpc(server);
+  const methods = gatewayRpc(server);
   const port = await listen(server);
   cleanups.push(async () => {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
-  return { url: `http://127.0.0.1:${port}`, requests };
+  return { url: `http://127.0.0.1:${port}`, requests, methods };
 }
 
 async function stopChild(child: ChildProcess) {
@@ -201,6 +204,36 @@ async function httpBridge(
   throw new Error(`Bridge did not start: ${diagnostics}`);
 }
 
+async function mintToken(base: string) {
+  const verifier = randomUUID();
+  const authorize = new URL(base + '/authorize');
+  for (const [key, value] of Object.entries({
+    response_type: 'code',
+    client_id: 'integration-client',
+    redirect_uri: 'http://localhost/callback',
+    code_challenge: createHash('sha256').update(verifier).digest('base64url'),
+    code_challenge_method: 'S256',
+  }))
+    authorize.searchParams.set(key, value);
+  const response = await fetch(authorize.toString(), { redirect: 'manual' });
+  expect(response.status).toBe(302);
+  const code = new URL(response.headers.get('location')!).searchParams.get('code')!;
+  const tokenResponse = await fetch(base + '/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      code_verifier: verifier,
+      redirect_uri: 'http://localhost/callback',
+      client_id: 'integration-client',
+      client_secret: 'integration-secret-12345678901234567890',
+    }).toString(),
+  });
+  expect(tokenResponse.status).toBe(200);
+  return ((await tokenResponse.json()) as { access_token: string }).access_token;
+}
+
 function text(result: CallToolResult, index = 0): string {
   const content = result.content[index];
   expect(content.type).toBe('text');
@@ -234,11 +267,14 @@ describe('mandatory agent selection across transports', () => {
     '%s requires agent_id on every scoped schema and handler',
     async (transport) => {
       const mock = await gateway();
+      const stateDir = await mkdtemp(join(tmpdir(), 'mandatory-agent-state-'));
+      cleanups.push(() => rm(stateDir, { recursive: true, force: true }));
       const env = {
         ...(await deviceEnv()),
         OPENCLAW_AGENT_IS_MANDATORY: 'true',
         MCP_DISCORD_ENABLED: 'true',
-        MCP_DISCORD_STATE_DIR: '/unused-test-state',
+        MCP_DISCORD_STATE_DIR: stateDir,
+        MCP_DISCORD_CHANNEL_CREATE_ENABLED: 'true',
       };
       let client: Client | ModernClient;
       if (transport === 'stdio') {
@@ -252,29 +288,99 @@ describe('mandatory agent selection across transports', () => {
           })
         );
       } else {
-        const base = await httpBridge(mock.url, false, env);
+        const base = await httpBridge(mock.url, transport === 'modern', env);
         if (transport === 'modern') {
           client = new ModernClient(
             { name: 'mandatory', version: '1' },
             { versionNegotiation: { mode: { pin: '2026-07-28' } } }
           );
-          await client.connect(new ModernTransport(new URL(base + '/mcp')));
+          await client.connect(
+            new ModernTransport(new URL(base + '/mcp'), {
+              requestInit: { headers: { Authorization: 'Bearer ' + (await mintToken(base)) } },
+            })
+          );
         } else client = await connectHttp(base, 'mandatory', transport);
       }
       cleanups.push(() => client.close());
       const { tools } = await client.listTools();
-      for (const tool of tools) {
-        if (!tool.inputSchema.properties?.agent_id) continue;
+      const destination = {
+        guild_id: '400000000000000001',
+        account_id: 'bot',
+        target: '400000000000000002',
+      };
+      const turn = {
+        ...destination,
+        prompt: 'valid request',
+        operation_id: 'mandatory-agent-operation-01',
+      };
+      const validArgs: Record<string, Record<string, unknown>> = {
+        openclaw_chat: { message: 'valid request' },
+        openclaw_status: {},
+        openclaw_chat_async: { message: 'valid request' },
+        openclaw_task_status: { task_id: 'fixture-task-0001' },
+        openclaw_task_list: {},
+        openclaw_task_cancel: { task_id: 'fixture-task-0001' },
+        openclaw_models: {},
+        openclaw_discord_channels: {},
+        openclaw_discord_threads: destination,
+        openclaw_discord_ask: { ...turn, mode: 'new_thread', title: 'Task' },
+        openclaw_discord_reply: { ...turn, channel_id: '400000000000000003' },
+        openclaw_discord_send: turn,
+        openclaw_discord_operation: { operation_id: turn.operation_id },
+        openclaw_discord_create_channel: {
+          guild_id: destination.guild_id,
+          account_id: 'bot',
+          operation_id: turn.operation_id,
+          name: 'new-channel',
+          authorize_create: true,
+        },
+      };
+      const validator = new AjvJsonSchemaValidator();
+      const scoped = tools.filter((tool) => tool.inputSchema.properties?.agent_id);
+      expect(scoped.map((tool) => tool.name).sort()).toEqual(Object.keys(validArgs).sort());
+      for (const tool of scoped) {
         expect(tool.inputSchema.required).toContain('agent_id');
-        const missing = await client.callTool({ name: tool.name, arguments: {} });
-        expect(missing.isError).toBe(true);
+        const args = validArgs[tool.name];
+        expect(
+          validator.getValidator(
+            tool.inputSchema as Parameters<AjvJsonSchemaValidator['getValidator']>[0]
+          )({ ...args, agent_id: 'research' }).valid
+        ).toBe(true);
+        for (const selector of [
+          undefined,
+          null,
+          0,
+          1,
+          false,
+          true,
+          [],
+          ['research'],
+          {},
+          { id: 'research' },
+        ]) {
+          const methodsBefore = mock.methods.length;
+          const result = await client.callTool({
+            name: tool.name,
+            arguments: { ...args, ...(selector === undefined ? {} : { agent_id: selector }) },
+          });
+          expect(result.isError, tool.name + ':' + JSON.stringify(selector)).toBe(true);
+          expect(JSON.stringify(result.content)).toContain('schema validation failed');
+          expect(mock.methods).toHaveLength(methodsBefore);
+          expect(mock.requests).toHaveLength(0);
+          expect(await readdir(stateDir)).toEqual([]);
+        }
         const unknown = await client.callTool({
           name: tool.name,
-          arguments: { agent_id: 'absent' },
+          arguments: { ...args, agent_id: 'absent' },
         });
         expect(unknown.isError).toBe(true);
+        expect(JSON.stringify(unknown.content)).toContain('Unknown agent');
       }
       expect(mock.requests).toHaveLength(0);
+      expect(
+        mock.methods.filter((method) => method !== 'connect' && method !== 'agents.list')
+      ).toEqual([]);
+      expect(await readdir(stateDir)).toEqual([]);
       const roster = await client.callTool({ name: 'openclaw_agents', arguments: {} });
       expect(roster.isError).not.toBe(true);
       const result = await client.callTool({
@@ -697,36 +803,7 @@ describe('modern OAuth gate', () => {
     await expect(
       unauthenticated.connect(new ModernTransport(new URL(base + '/mcp')))
     ).rejects.toThrow();
-    const mintToken = async () => {
-      const verifier = randomUUID();
-      const authorize = new URL(base + '/authorize');
-      for (const [key, value] of Object.entries({
-        response_type: 'code',
-        client_id: 'integration-client',
-        redirect_uri: 'http://localhost/callback',
-        code_challenge: createHash('sha256').update(verifier).digest('base64url'),
-        code_challenge_method: 'S256',
-      }))
-        authorize.searchParams.set(key, value);
-      const response = await fetch(authorize.toString(), { redirect: 'manual' });
-      expect(response.status).toBe(302);
-      const code = new URL(response.headers.get('location')!).searchParams.get('code')!;
-      const tokenResponse = await fetch(base + '/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          code,
-          code_verifier: verifier,
-          redirect_uri: 'http://localhost/callback',
-          client_id: 'integration-client',
-          client_secret: 'integration-secret-12345678901234567890',
-        }).toString(),
-      });
-      expect(tokenResponse.status).toBe(200);
-      return ((await tokenResponse.json()) as { access_token: string }).access_token;
-    };
-    const token = await mintToken();
+    const token = await mintToken(base);
     const connect = async (name: string, accessToken: string) => {
       const client = new ModernClient(
         { name, version: '1' },
@@ -755,7 +832,7 @@ describe('modern OAuth gate', () => {
     });
     expect(polled.isError).not.toBe(true);
     expect((polled.structuredContent as Record<string, unknown>).session_id).toBe(meta.session_id);
-    const other = await connect('First', await mintToken());
+    const other = await connect('First', await mintToken(base));
     const rejected = await other.callTool({
       name: 'openclaw_task_status',
       arguments: { task_id: job.task_id },

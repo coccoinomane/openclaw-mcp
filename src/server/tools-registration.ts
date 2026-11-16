@@ -128,6 +128,7 @@ function toolSet(
         return handleDiscord(deps.discord!, tool.name, input ?? {});
       });
   }
+  const validator = new AjvJsonSchemaValidator();
   // Clone schemas per server; mandatory mode must not mutate another transport.
   for (let i = 0; i < allTools.length; i++) {
     const tool = structuredClone(allTools[i]);
@@ -135,11 +136,14 @@ function toolSet(
     if (!tool.inputSchema.properties?.agent_id) continue;
     if (gateway.agentIsMandatory)
       tool.inputSchema.required = [...new Set([...(tool.inputSchema.required ?? []), 'agent_id'])];
+    const validateInput = validator.getValidator(tool.inputSchema);
     const handler = toolHandlers.get(tool.name)!;
     toolHandlers.set(tool.name, async (input) => {
       if (!validateInputIsObject(input)) return errorResponse('Invalid input: expected an object');
+      if (!validateInput(input).valid)
+        return errorResponse('Invalid input: schema validation failed');
       try {
-        const { agentId } = await gateway.resolve(input.agent_id as string | undefined);
+        const { agentId } = await gateway.resolve(input.agent_id);
         return await handler({ ...input, agent_id: agentId });
       } catch (error) {
         return errorResponse(error instanceof Error ? error.message : 'Agent selection failed');
@@ -148,7 +152,6 @@ function toolSet(
   }
   // Low-level request handlers bypass the SDK's registered-tool output checks.
   // Use the same validators for legacy and modern transports, without rewriting payloads.
-  const validator = new AjvJsonSchemaValidator();
   for (const tool of allTools) {
     if (!tool.outputSchema) continue;
     const validate = validator.getValidator(tool.outputSchema);

@@ -61,6 +61,33 @@ const target = (agentId = 'a', id = channel) => ({
   agentId,
 });
 describe('live agent selection', () => {
+  it.each([true, false])(
+    'rejects supplied non-string agents with mandatory=%s before discovery',
+    async (agentIsMandatory) => {
+      const g = new OpenClawGateway({
+        url: 'https://fixture.invalid',
+        defaultAgentId: 'a',
+        agentIsMandatory,
+      });
+      vi.mocked(discoverGatewayAgents).mockClear();
+      for (const selector of [
+        null,
+        0,
+        1,
+        false,
+        true,
+        [],
+        ['a'],
+        {},
+        { agentId: 'a' },
+        '',
+        '   ',
+      ]) {
+        await expect(g.resolve(selector)).rejects.toThrow('Invalid agent ID');
+      }
+      expect(discoverGatewayAgents).not.toHaveBeenCalled();
+    }
+  );
   it('requires explicit selection in mandatory mode and never uses a default', async () => {
     const g = new OpenClawGateway({
       url: 'https://fixture.invalid',
@@ -103,6 +130,44 @@ describe('live agent selection', () => {
   });
 });
 describe('selected agent Discord union', () => {
+  it.each([undefined, '', ' ', '\t\n', 'default', ' default '])(
+    'normalizes default binding account %j for discovery and access',
+    async (accountId) => {
+      config.channels.discord = { defaultAccount: 'bot', accounts: { default: {}, bot: {} } };
+      config.bindings = [
+        {
+          agentId: 'a',
+          match: {
+            channel: 'discord',
+            guildId: guild,
+            ...(accountId === undefined ? {} : { accountId }),
+          },
+        },
+      ];
+      const { access: a } = access();
+      expect(selectedBindings(config, 'a')).toEqual([
+        { agentId: 'a', accountId: 'default', guildId: guild },
+      ]);
+      expect((await a.channels('a')).channels.map((c) => c.account_id)).toEqual([
+        'default',
+        'default',
+      ]);
+      await expect(a.assert({ ...target(), accountId: 'default' })).resolves.toBeUndefined();
+      await expect(a.assert({ ...target(), accountId: 'bot' })).rejects.toThrow('BINDING');
+      config.channels.discord.accounts.default.enabled = false;
+      expect(selectedBindings(config, 'a')).toEqual([]);
+    }
+  );
+  it.each([null, false, 1, [], {}, 'bad/account', 'def ault', 'missing'])(
+    'denies invalid or unconfigured binding account %j',
+    (accountId) => {
+      config.channels.discord = { accounts: { default: {}, bot: {} } };
+      config.bindings = [
+        { agentId: 'a', match: { channel: 'discord', guildId: guild, accountId } },
+      ];
+      expect(selectedBindings(config, 'a')).toEqual([]);
+    }
+  );
   it('does not revive a disabled default account through an inherited token', () => {
     config.channels.discord = {
       token: '__OPENCLAW_REDACTED__',
