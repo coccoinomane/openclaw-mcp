@@ -16,7 +16,7 @@ MCP_DISCORD_SDK_AUTH=device
 
 Discord uses the same OPENCLAW_URL and OPENCLAW_GATEWAY_TOKEN as direct chat. HTTPS or loopback HTTP is required. The bridge needs no local OpenClaw executable. Configure MCP_AGENT_DISCOVERY=gateway for a live startup roster, or leave it unset for static catalogs and locally known configured agents.
 
-The SDK agent transport and Gateway HTTP read/create adapters are always used together. Missing adapters or inconsistent settings fail closed. There is no CLI fallback, including after a refused connection. HTTP read denials never trigger another transport. No client-selected endpoint, account, scope or session key is accepted.
+The SDK agent transport and Gateway HTTP read/create adapters are always used together. Missing adapters or inconsistent settings fail closed. There is no CLI fallback, including after a refused connection. HTTP read denials never trigger another transport. No client-selected endpoint, account, scope or destination session key is accepted. The optional fork source is a same-agent session key validated separately.
 
 ## Service authentication
 
@@ -46,6 +46,16 @@ Identity creation and device-token provisioning are separate operator actions, n
 Missing identity state returns SDK_SERVICE_IDENTITY_REQUIRED in local-shared-token mode; missing/insufficient device state returns SDK_APPROVED_DEVICE_REQUIRED in device mode. A readiness handshake verifies grants before thread creation or prompt publication. The host can call discordAgentTransport(...).ready() to check this gate without a model turn. Run it only from the authorized service/operator host; never strip agent provenance to run it from an agent shell.
 
 A write scope does not grant local-admin tool parity. Gateway role ceilings, ownership/sharing, session lifecycle and send policy remain authoritative. A revoked or denied grant is a failure, not a reason to switch transports. /new and /reset can require admin and are not elevated by this adapter.
+
+## Native session forks
+
+New-thread asks may supply `fork_from_session`. The existing Discord SDK identity calls `sessions.resolve` to check that the fresh thread's destination session is absent, then `sessions.create` with a same-agent parent, `fork: true` and `forkFrom: "last-completed"`. The create request contains no initial message or task. An explicit model is supplied at creation so the Gateway checks fork capacity against that model. The ordinary prompt publication and agent turn follow only after a verified fork receipt.
+
+The durable operation records the source and fork stage before the mutation. Uncertain or interrupted forks are never replayed; their destination claims are retained. SDK idempotency is supplementary and is not a substitute for that journal. An existing destination is rejected rather than deliberately reforked.
+
+Gateway session creation currently has no atomic create-if-absent option. The fresh-thread workflow, local claim and existence check do not lock out unrelated native Discord messages between the check and creation. A receipt reporting a replaced session stops publication and execution, but cannot undo that replacement. This limitation needs a Gateway-level conditional-create primitive for a strict concurrency guarantee.
+
+Protocol and behavior are covered by fake-transport tests and checked against installed Gateway source. No live fork or deployment is performed by this PR.
 
 ## Execution and recovery
 

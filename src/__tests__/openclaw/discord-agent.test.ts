@@ -11,6 +11,8 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
   validateChatAbortParams,
+  validateSessionsCreateParams,
+  validateSessionsResolveParams,
 } from '@openclaw/gateway-protocol';
 import { discordAgentTransport, type AgentClientFactory } from '../../openclaw/discord-agent.js';
 import { gatewayDiscoveryAuth } from '../../openclaw/gateway-discovery-auth.js';
@@ -665,4 +667,133 @@ describe('official SDK protocol with an in-memory socket', () => {
       expect(frames.filter((frame) => frame.method === 'chat.abort')).toHaveLength(0);
     }
   );
+});
+
+describe('native same-agent session fork', () => {
+  const source = 'agent:main:discord:channel:400000000000000009';
+  const response = {
+    ok: true,
+    key: input.sessionKey,
+    sessionId: 'fork-session',
+    runStarted: false,
+    entry: { sessionId: 'fork-session', forkedFromParent: true },
+  };
+  it.each([undefined, 'p/model'])(
+    'creates a fresh child without starting a turn (model=%s)',
+    async (model) => {
+      const f = await fixture();
+      f.handler(async (method) => (method === 'sessions.resolve' ? { ok: false } : response));
+      await f.transport.forkSession!(input.sessionKey, source, 'main', model);
+      expect(f.calls.map((c) => c.method)).toEqual(['sessions.resolve', 'sessions.create']);
+      expect(validateSessionsResolveParams(f.calls[0].params)).toBe(true);
+      expect(validateSessionsCreateParams(f.calls[1].params)).toBe(true);
+      expect(f.calls[0].params).toEqual({
+        key: input.sessionKey,
+        agentId: 'main',
+        allowMissing: true,
+      });
+      expect(f.calls[1].params).toEqual({
+        key: input.sessionKey,
+        agentId: 'main',
+        parentSessionKey: source,
+        fork: true,
+        forkFrom: 'last-completed',
+        idempotencyKey: expect.stringMatching(/^discord-fork-[a-f0-9]{64}$/),
+        ...(model === undefined ? {} : { model }),
+      });
+      expect(f.options[0].scopes).toEqual(['operator.read', 'operator.write']);
+      expect(f.stops).toHaveBeenCalledTimes(1);
+    }
+  );
+  it.each([{ ok: true, key: input.sessionKey }, { ok: false, candidates: [] }, {}])(
+    'never forks a target whose absence is unverified: %j',
+    async (lookup) => {
+      const f = await fixture();
+      f.handler(async () => lookup);
+      await expect(f.transport.forkSession!(input.sessionKey, source, 'main')).rejects.toThrow(
+        /FORK_TARGET/
+      );
+      expect(f.calls).toHaveLength(1);
+      expect(f.stops).toHaveBeenCalledTimes(1);
+    }
+  );
+  it('rejects cross-agent, self and non-thread targets before connecting', async () => {
+    const f = await fixture();
+    await expect(
+      f.transport.forkSession!(input.sessionKey, 'agent:other:main', 'main')
+    ).rejects.toThrow('FORK_AGENT_MISMATCH');
+    await expect(
+      f.transport.forkSession!(input.sessionKey, input.sessionKey, 'main')
+    ).rejects.toThrow('FORK_TARGET_INVALID');
+    await expect(f.transport.forkSession!('agent:main:main', source, 'main')).rejects.toThrow(
+      'FORK_TARGET_INVALID'
+    );
+    expect(f.factory).not.toHaveBeenCalled();
+  });
+  it.each([
+    { ...response, key: 'agent:main:wrong' },
+    { ...response, runStarted: true },
+    { ...response, runStarted: undefined },
+    { ...response, sessionId: undefined },
+    { ...response, entry: { ...response.entry, sessionId: 'other-session' } },
+    { ...response, runError: { message: 'postcommit failure' } },
+    { ...response, entry: { ...response.entry, previousSessionId: 'old-session' } },
+    { ...response, entry: { ...response.entry, forkedFromParent: false } },
+  ])('treats an unverified creation receipt as uncertain: %j', async (receipt) => {
+    const f = await fixture();
+    f.handler(async (method) => (method === 'sessions.resolve' ? { ok: false } : receipt));
+    await expect(f.transport.forkSession!(input.sessionKey, source, 'main')).rejects.toMatchObject({
+      code: 'FORK_RESULT_UNVERIFIED',
+      uncertain: true,
+    });
+    expect(f.calls.filter((c) => c.method === 'sessions.create')).toHaveLength(1);
+    expect(f.stops).toHaveBeenCalledTimes(1);
+  });
+  it('does not retry an unknown creation outcome', async () => {
+    const f = await fixture();
+    f.handler(async (method) => {
+      if (method === 'sessions.resolve') return { ok: false };
+      throw new Error('socket closed');
+    });
+    await expect(f.transport.forkSession!(input.sessionKey, source, 'main')).rejects.toMatchObject({
+      code: 'FORK_OUTCOME_UNKNOWN',
+      uncertain: true,
+    });
+    expect(f.calls.filter((c) => c.method === 'sessions.create')).toHaveLength(1);
+    expect(f.stops).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('fork denial handling', () => {
+  it.each(['FORBIDDEN', 'INVALID_REQUEST'])(
+    'does not start or retry a fork rejected with %s',
+    async (code) => {
+      const f = await fixture();
+      f.handler(async (method) => {
+        if (method === 'sessions.resolve') return { ok: false };
+        throw new GatewayClientRequestError({ code, message: 'private detail' });
+      });
+      await expect(
+        f.transport.forkSession!(input.sessionKey, 'agent:main:main', 'main')
+      ).rejects.toMatchObject({ code: 'FORK_REJECTED', uncertain: false });
+      expect(f.calls.map((c) => c.method)).toEqual(['sessions.resolve', 'sessions.create']);
+    }
+  );
+});
+
+it('keeps UNAVAILABLE after create uncertain, but a failed lookup does not imply mutation', async () => {
+  for (const lookupFailure of [true, false]) {
+    const f = await fixture();
+    f.handler(async (method) => {
+      if (method === 'sessions.resolve' && !lookupFailure) return { ok: false };
+      throw new GatewayClientRequestError({ code: 'UNAVAILABLE', message: 'private detail' });
+    });
+    await expect(
+      f.transport.forkSession!(input.sessionKey, 'agent:main:main', 'main')
+    ).rejects.toMatchObject({
+      code: lookupFailure ? 'FORK_LOOKUP_FAILED' : 'FORK_OUTCOME_UNKNOWN',
+      uncertain: !lookupFailure,
+    });
+    expect(f.calls).toHaveLength(lookupFailure ? 1 : 2);
+  }
 });

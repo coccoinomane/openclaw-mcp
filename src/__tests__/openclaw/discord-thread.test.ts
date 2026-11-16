@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DiscordService, loadDiscordConfig, type DiscordConfig } from '../../openclaw/discord.js';
 import { threadInvoker, threadMemberAdder } from '../../openclaw/discord-thread.js';
+import { DiscordError } from '../../openclaw/discord-channels.js';
 import type { DiscordAgentRequest, DiscordAgentTransport } from '../../openclaw/discord-agent.js';
 import { channelReader } from '../../openclaw/discord-read.js';
 import { discordTools, handleDiscord } from '../../mcp/tools/discord.js';
@@ -128,6 +129,9 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
       : new Response(JSON.stringify({ id: thread, user_id: owner }));
   });
   const agent = {
+    forkSession: vi.fn(
+      async (_key: string, _source: string, _agent: string, _model?: string) => {}
+    ),
     selectModel: vi.fn(async (_key: string, _model: string) => {}),
     ready: vi.fn(async () => {}),
     run: vi.fn(async (_request: DiscordAgentRequest) => {
@@ -150,6 +154,8 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
       threadMemberAdder(config, env, member),
       async (_t, _id, _prompt, _op, sent) => {
         events.push('publish');
+        if ((await record()).fork_from_session)
+          expect(await record()).toMatchObject({ fork_status: 'completed' });
         await sent('300000000000000004');
       },
       agent
@@ -559,11 +565,11 @@ describe('operator configuration and closed inputs', () => {
     const tool = discordTools.find((t) => t.name === 'openclaw_discord_ask')!;
     expect(tool.description).toContain('not answer content');
     expect(tool.description).toContain('Does not wait for generation');
-    expect(tool.description).toContain('only the Discord link');
-    expect(tool.description).toContain('unless explicitly requested');
+    expect(tool.description).toContain('native thread mention on Discord');
+    expect(tool.description).toContain('without adding unrelated requirements');
     expect(tool.description).toContain('report errors or partial/unknown outcomes');
     expect((tool.inputSchema.properties?.prompt as { description: string }).description).toContain(
-      'original request to forward unchanged'
+      'request or self-contained delegated assignment'
     );
     expect(Object.keys(tool.inputSchema.properties!)).toEqual([
       'agent_id',
@@ -571,6 +577,7 @@ describe('operator configuration and closed inputs', () => {
       'operation_id',
       'mode',
       'model',
+      'fork_from_session',
       'title',
       'prompt',
     ]);
@@ -616,4 +623,147 @@ describe('new-thread model selection', () => {
       })
     ).rejects.toThrow('REPLY_ARGUMENTS_INVALID');
   });
+});
+
+describe('new-thread native fork', () => {
+  const source = 'agent:main:discord:channel:300000000000000009';
+  it('forks with the explicit model before publication and execution, and replays without effects', async () => {
+    const f = await fixture();
+    f.agent.forkSession.mockImplementation(async () => {
+      expect(await f.record()).toMatchObject({ fork_status: 'forking', fork_from_session: source });
+      expect(f.events).not.toContain('publish');
+      expect(f.agent.run).not.toHaveBeenCalled();
+      expect(f.agent.selectModel).not.toHaveBeenCalled();
+    });
+    f.agent.selectModel.mockImplementation(async () => {
+      expect(f.agent.forkSession).toHaveBeenCalledTimes(1);
+    });
+    const args = { ...input, fork_from_session: source, model: 'p/m' };
+    const result = await finished(f.service, args);
+    expect(result).toMatchObject({
+      status: 'completed',
+      fork_status: 'completed',
+      fork_from_session: source,
+    });
+    expect(f.agent.forkSession).toHaveBeenCalledWith(
+      'agent:main:discord:channel:' + thread,
+      source,
+      'main',
+      'p/m'
+    );
+    expect(f.agent.selectModel).not.toHaveBeenCalled();
+    expect(f.agent.run.mock.calls[0][0].message).toBe(input.prompt);
+    await f.service.ask(args);
+    await f.restart().ask(args);
+    expect(f.agent.forkSession).toHaveBeenCalledTimes(1);
+    expect(f.agent.run).toHaveBeenCalledTimes(1);
+    await expect(f.service.ask({ ...args, fork_from_session: source + '0' })).rejects.toThrow(
+      'different arguments'
+    );
+    await expect(f.service.ask({ ...input, model: 'p/m' })).rejects.toThrow('different arguments');
+  });
+  it('does not select a new model unless requested; fresh-session behavior is unchanged', async () => {
+    const fork = await fixture();
+    await finished(fork.service, { ...input, fork_from_session: source });
+    expect(fork.agent.selectModel).not.toHaveBeenCalled();
+    const fresh = await fixture();
+    await finished(fresh.service, input);
+    expect(fresh.agent.forkSession).not.toHaveBeenCalled();
+  });
+  it.each([
+    'agent:writer:main',
+    'main',
+    '',
+    'agent:main:bad key',
+    'agent:main::main',
+    'agent:main::',
+    null,
+  ])('rejects invalid or cross-agent source before creating a thread: %s', async (value) => {
+    const f = await fixture();
+    await expect(f.service.ask({ ...input, fork_from_session: value })).rejects.toThrow(
+      /FORK_(AGENT_MISMATCH|SOURCE_INVALID)/
+    );
+    expect(f.gateway).not.toHaveBeenCalled();
+    expect(f.agent.forkSession).not.toHaveBeenCalled();
+  });
+  it.each([false, true])(
+    'retains the thread and prevents publication after fork failure (uncertain=%s)',
+    async (uncertain) => {
+      const f = await fixture();
+      f.agent.forkSession.mockRejectedValue(new DiscordError('FORK_TEST_FAILURE', uncertain));
+      const args = { ...input, fork_from_session: source };
+      const result = await finished(f.service, args);
+      expect(result).toMatchObject({
+        status: 'run_failed',
+        channel_id: thread,
+        fork_status: uncertain ? 'unknown' : 'failed',
+        fork_error_code: 'FORK_TEST_FAILURE',
+      });
+      expect(f.events).not.toContain('publish');
+      expect(f.agent.run).not.toHaveBeenCalled();
+      expect(f.agent.selectModel).not.toHaveBeenCalled();
+      const locks = (await readdir(f.config.stateDir)).filter((name) => name.endsWith('.lock'));
+      expect(locks).toHaveLength(uncertain ? 1 : 0);
+      await f.restart().ask(args);
+      expect(f.agent.forkSession).toHaveBeenCalledTimes(1);
+    }
+  );
+  it('rejects fork on reply and exposes it only on ask', async () => {
+    const f = await fixture();
+    await expect(
+      f.service.reply({
+        target: 'work',
+        channel_id: thread,
+        operation_id: 'fork-reply-denied',
+        prompt: 'hi',
+        fork_from_session: source,
+      })
+    ).rejects.toThrow('REPLY_ARGUMENTS_INVALID');
+    expect(
+      discordTools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema.properties
+    ).toHaveProperty('fork_from_session');
+    expect(
+      discordTools.find((t) => t.name === 'openclaw_discord_reply')!.inputSchema.properties
+    ).not.toHaveProperty('fork_from_session');
+  });
+});
+
+it('reports an interrupted fork as unknown without re-running it', async () => {
+  const f = await fixture();
+  const args = { ...input, fork_from_session: 'agent:main:main' };
+  await finished(f.service, args);
+  const record = await f.record();
+  await writeFile(
+    join(f.config.stateDir, input.operation_id + '.json'),
+    JSON.stringify({
+      ...record,
+      status: 'created',
+      fork_status: 'forking',
+      owner: 'previous-process',
+    })
+  );
+  const result = await f.restart().ask(args);
+  expect(result).toMatchObject({
+    status: 'run_unknown',
+    fork_status: 'unknown',
+    error_code: 'OPERATION_INTERRUPTED',
+  });
+  expect(f.agent.forkSession).toHaveBeenCalledTimes(1);
+});
+
+it('rejects unavailable fork transport before creating the Discord thread', async () => {
+  const f = await fixture();
+  delete (f.agent as Partial<DiscordAgentTransport>).forkSession;
+  const result = await f.service.ask({ ...input, fork_from_session: 'agent:main:main' });
+  expect(result).toMatchObject({ status: 'run_failed', error_code: 'FORK_UNSUPPORTED' });
+  expect(f.gateway).not.toHaveBeenCalled();
+  expect(f.agent.run).not.toHaveBeenCalled();
+});
+
+it('releases the fork destination claim after successful execution', async () => {
+  const f = await fixture();
+  await finished(f.service, { ...input, fork_from_session: 'agent:main:main' });
+  expect((await readdir(f.config.stateDir)).filter((name) => name.endsWith('.lock'))).toHaveLength(
+    0
+  );
 });

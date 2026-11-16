@@ -1,4 +1,5 @@
 import { checkModel } from './models.js';
+import { checkForkSource } from './session-fork.js';
 import {
   assertChannelAllowed,
   assertTargetAllowed,
@@ -238,6 +239,9 @@ interface Operation {
   starter_message_id?: string;
   model?: string;
   model_error?: string;
+  fork_from_session?: string;
+  fork_status?: 'pending' | 'forking' | 'completed' | 'failed' | 'unknown';
+  fork_error_code?: string;
   member_status?: 'disabled' | 'pending' | 'adding' | 'verified' | 'failed' | 'unknown';
   member_verified?: boolean;
   member_error_code?: string;
@@ -662,6 +666,7 @@ export class DiscordService {
       if (op.request_status === 'publishing' || op.request_status === 'sent')
         result.request_status = 'unknown';
       if (op.member_status === 'adding') result.member_status = 'unknown';
+      if (op.fork_status === 'forking') result.fork_status = 'unknown';
     }
     if (result.discord_url && !result.handoff)
       result.handoff =
@@ -814,6 +819,7 @@ export class DiscordService {
         throw new Error('Invalid thread title or channel_id');
     }
     checkModel(input.model);
+    checkForkSource(input.fork_from_session, t.agentId);
     const fingerprint = createHash('sha256')
       .update(
         JSON.stringify([
@@ -823,6 +829,9 @@ export class DiscordService {
           input.channel_id,
           input.prompt,
           ...(input.model !== undefined ? [input.model] : []),
+          ...(input.fork_from_session !== undefined
+            ? [{ fork_from_session: input.fork_from_session }]
+            : []),
         ])
       )
       .digest('hex');
@@ -860,6 +869,9 @@ export class DiscordService {
     const op: Operation = {
       fingerprint,
       ...(input.model !== undefined ? { model: input.model } : {}),
+      ...(input.fork_from_session !== undefined
+        ? { fork_from_session: input.fork_from_session, fork_status: 'pending' as const }
+        : {}),
       agent_id: t.agentId,
       agent_transport: 'sdk',
       agent_idempotency_key:
@@ -910,6 +922,8 @@ export class DiscordService {
       if (this.config.acknowledgeInboundRouting !== true || t.normalRouting !== true)
         throw new DiscordError('NORMAL_ROUTING_ACKNOWLEDGEMENT_REQUIRED');
       if (!this.publishRequest) throw new DiscordError('REQUEST_PUBLISHER_REQUIRED');
+      if (input.fork_from_session !== undefined && !this.agent?.forkSession)
+        throw new DiscordError('FORK_UNSUPPORTED');
       await this.agent!.ready();
       const parent = await this.info(t, t.channelId, true);
       if ([15, 16].includes(parent.type)) throw new DiscordError('FORUM_MEDIA_WRITES_UNSUPPORTED');
@@ -953,7 +967,27 @@ export class DiscordService {
       op.channel_id = id;
       op.discord_url = 'https://discord.com/channels/' + t.guildId + '/' + id;
       op.session_key = await this.ordinaryRoute(t, id);
-      if (!replying && input.model !== undefined) {
+      if (!replying && input.fork_from_session !== undefined) {
+        releaseSession = await this.claimSession(op.session_key, input.operation_id);
+        op.fork_status = 'forking';
+        await save();
+        try {
+          await this.agent!.forkSession!(
+            op.session_key,
+            input.fork_from_session,
+            t.agentId,
+            input.model
+          );
+          op.fork_status = 'completed';
+        } catch (error) {
+          const known = error instanceof DiscordError && !error.uncertain;
+          op.fork_status = known ? 'failed' : 'unknown';
+          op.fork_error_code = error instanceof DiscordError ? error.code : 'FORK_OUTCOME_UNKNOWN';
+          throw new DiscordError(op.fork_error_code, !known);
+        }
+        await save();
+      }
+      if (!replying && input.model !== undefined && input.fork_from_session === undefined) {
         if (!this.agent?.selectModel) throw new DiscordError('MODEL_SELECTION_UNSUPPORTED');
         try {
           await this.agent.selectModel(op.session_key, input.model);
@@ -1162,7 +1196,8 @@ export class DiscordService {
     } finally {
       if (
         !this.background.has(input.operation_id) &&
-        !['unknown', 'partial', 'publishing', 'sent'].includes(op.request_status ?? '')
+        !['unknown', 'partial', 'publishing', 'sent'].includes(op.request_status ?? '') &&
+        !['forking', 'unknown'].includes(op.fork_status ?? '')
       )
         await releaseSession?.();
     }

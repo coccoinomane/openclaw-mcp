@@ -1,4 +1,6 @@
-import { selectSessionModel } from './models.js';
+import { checkModel, selectSessionModel } from './models.js';
+import { checkForkSource } from './session-fork.js';
+import { createHash } from 'node:crypto';
 import {
   GatewayClient,
   GatewayClientRequestError,
@@ -25,6 +27,7 @@ export type DiscordAgentRequest = {
 export interface DiscordAgentTransport {
   ready(): Promise<void>;
   selectModel?(key: string, model: string): Promise<void>;
+  forkSession?(key: string, source: string, agentId: string, model?: string): Promise<void>;
   run(
     request: DiscordAgentRequest,
     accepted: (receipt: AgentReceipt) => Promise<void>
@@ -196,6 +199,71 @@ export function discordAgentTransport(
     await client.stopAndWait({ timeoutMs: 1_000 }).catch(() => undefined);
   }
   return {
+    async forkSession(key, source, agentId, model) {
+      assertServiceProvenance();
+      checkForkSource(source, agentId);
+      checkModel(model);
+      if (
+        !new RegExp('^agent:' + agentId + ':discord:channel:[1-9][0-9]{16,19}$').test(key) ||
+        key === source
+      )
+        throw new DiscordError('FORK_TARGET_INVALID');
+      const client = await connect();
+      let mutationStarted = false;
+      try {
+        const existing: any = await client.request(
+          'sessions.resolve',
+          {
+            key,
+            agentId,
+            allowMissing: true,
+          },
+          { timeoutMs: 30_000 }
+        );
+        if (existing?.ok === true) throw new DiscordError('FORK_TARGET_EXISTS');
+        if (existing?.ok !== false || existing.candidates !== undefined)
+          throw new DiscordError('FORK_TARGET_UNVERIFIED');
+        mutationStarted = true;
+        const result: any = await client.request(
+          'sessions.create',
+          {
+            key,
+            agentId,
+            parentSessionKey: source,
+            fork: true,
+            forkFrom: 'last-completed',
+            idempotencyKey: 'discord-fork-' + createHash('sha256').update(key).digest('hex'),
+            ...(model !== undefined ? { model } : {}),
+          },
+          { timeoutMs: 30_000 }
+        );
+        if (
+          result?.ok !== true ||
+          result.key !== key ||
+          typeof result.sessionId !== 'string' ||
+          !result.sessionId ||
+          result.entry?.sessionId !== result.sessionId ||
+          result.entry?.forkedFromParent !== true ||
+          result.runStarted !== false ||
+          result.runError ||
+          result.entry?.previousSessionId
+        )
+          throw new DiscordError('FORK_RESULT_UNVERIFIED', true);
+      } catch (error) {
+        if (error instanceof DiscordError) throw error;
+        if (
+          error instanceof GatewayClientRequestError &&
+          ['FORBIDDEN', 'INVALID_REQUEST'].includes(error.gatewayCode)
+        )
+          throw new DiscordError('FORK_REJECTED');
+        throw new DiscordError(
+          mutationStarted ? 'FORK_OUTCOME_UNKNOWN' : 'FORK_LOOKUP_FAILED',
+          mutationStarted
+        );
+      } finally {
+        await close(client);
+      }
+    },
     async selectModel(key, model) {
       await selectSessionModel(gateway, key, model);
     },

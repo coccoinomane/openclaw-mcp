@@ -135,6 +135,9 @@ const turn: OutputSchema = {
     starter_message_id: string,
     model: string,
     model_error: string,
+    fork_from_session: string,
+    fork_status: { type: 'string', enum: ['pending', 'forking', 'completed', 'failed', 'unknown'] },
+    fork_error_code: string,
     member_status: {
       type: 'string',
       enum: ['disabled', 'pending', 'adding', 'verified', 'failed', 'unknown'],
