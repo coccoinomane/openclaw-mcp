@@ -29,13 +29,13 @@ Use the archive from [GitHub Releases](https://github.com/coccoinomane/openclaw-
 
 ```sh
 mkdir openclaw-mcp && cd openclaw-mcp
-tar -xzf /path/to/openclaw-mcp-2.4.2.tar.gz
+tar -xzf /path/to/openclaw-mcp-3.0.0.tar.gz
 npm ci --omit=dev --ignore-scripts
 # Set Gateway credentials and HTTP authentication environment variables first.
 node dist/index.js --transport http
 ```
 
-Point your MCP client at `https://your-host/mcp`. For local stdio, use `node dist/index.js --transport stdio` with the required environment. Follow [configuration](docs/configuration.md) and [deployment](docs/deployment.md) for authentication and hosting. This fork is released on GitHub only; the upstream npm package and container images do not contain these fork-specific changes.
+Point your MCP client at `https://your-host/mcp`. For local stdio, use `node dist/index.js --transport stdio` with the required environment. Follow [configuration](docs/configuration.md) and [deployment](docs/deployment.md) for authentication and hosting. This fork is released on GitHub only; the upstream npm package and container images do not contain these fork-specific changes. `server.json` records release metadata without registry package entries. For upgrades from 2.x, follow the [breaking configuration changes](docs/configuration.md#breaking-upgrade).
 
 ## Operation and limits
 

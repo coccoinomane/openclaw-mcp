@@ -1,11 +1,11 @@
 {
   "name": "openclaw",
   "description": "OpenClaw AI assistant integration. Chat, manage sessions, access memory, and run async tasks through one OpenClaw installation.",
-  "version": "0.1.0",
+  "version": "3.0.0",
   "author": {
     "name": "Tomáš Grasl",
     "url": "https://www.tomasgrasl.cz/"
   },
-  "repository": "https://github.com/freema/openclaw-mcp",
+  "repository": "https://github.com/coccoinomane/openclaw-mcp",
   "license": "MIT"
 }
