@@ -29,13 +29,19 @@ Use the archive from [GitHub Releases](https://github.com/coccoinomane/openclaw-
 
 ```sh
 mkdir openclaw-mcp && cd openclaw-mcp
-tar -xzf /path/to/openclaw-mcp-3.0.1.tar.gz
+tar -xzf /path/to/openclaw-mcp-4.0.0.tar.gz
 npm ci --omit=dev --ignore-scripts
 # Set Gateway credentials and HTTP authentication environment variables first.
 node dist/index.js --transport http
 ```
 
 Point your MCP client at `https://your-host/mcp`. For local stdio, use `node dist/index.js --transport stdio` with the required environment. Follow [configuration](docs/configuration.md) and [deployment](docs/deployment.md) for authentication and hosting. This fork is released on GitHub only; the upstream npm package and container images do not contain these fork-specific changes. `server.json` records release metadata without registry package entries. For upgrades from 2.x, follow the [breaking configuration changes](docs/configuration.md#breaking-upgrade).
+
+## Upgrade to 4.0
+
+Version 4.0 uses explicit channel, thread, server, Discord account and session parameter names across all tools and results. Old names are rejected; there are no compatibility aliases. Refresh client tool schemas and use [Discord Coordination 0.3.0](https://github.com/coccoinomane/openclaw-discord-coordination/releases/tag/v0.3.0) with this release.
+
+Preserve existing operation journals. Entries from older schemas reject replay and status with `OPERATION_SCHEMA_UNSUPPORTED`; do not retry uncertain work with new operation IDs. See [journal upgrade precautions](docs/discord-skills.md#recovery) and [validated tool examples](docs/tool-contract-examples.json).
 
 ## Operation and limits
 
