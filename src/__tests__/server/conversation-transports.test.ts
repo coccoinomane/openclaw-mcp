@@ -357,6 +357,13 @@ describe('mandatory agent selection across transports', () => {
           ['research'],
           {},
           { id: 'research' },
+          'openclaw:main',
+          'agent:research',
+          '',
+          '   ',
+          ' research ',
+          '../research',
+          'a'.repeat(65),
         ]) {
           const methodsBefore = mock.methods.length;
           const result = await client.callTool({
@@ -364,7 +371,15 @@ describe('mandatory agent selection across transports', () => {
             arguments: { ...args, ...(selector === undefined ? {} : { agent_id: selector }) },
           });
           expect(result.isError, tool.name + ':' + JSON.stringify(selector)).toBe(true);
-          expect(JSON.stringify(result.content)).toContain('schema validation failed');
+          expect(result.content).toEqual([
+            {
+              type: 'text',
+              text:
+                selector === undefined
+                  ? 'Error: Invalid input: schema validation failed'
+                  : `Error: Invalid agent_id ${JSON.stringify(selector)}. Use a bare agent ID, e.g. "main". Call openclaw_agents to list available agents.`,
+            },
+          ]);
           expect(mock.methods).toHaveLength(methodsBefore);
           expect(mock.requests).toHaveLength(0);
           expect(await readdir(stateDir)).toEqual([]);
@@ -374,7 +389,22 @@ describe('mandatory agent selection across transports', () => {
           arguments: { ...args, agent_id: 'absent' },
         });
         expect(unknown.isError).toBe(true);
-        expect(JSON.stringify(unknown.content)).toContain('Unknown agent');
+        expect(unknown.content).toEqual([
+          {
+            type: 'text',
+            text: 'Error: Unknown agent_id "absent". Call openclaw_agents to list available agents.',
+          },
+        ]);
+        const methodsBefore = mock.methods.length;
+        const unrelated = await client.callTool({
+          name: tool.name,
+          arguments: { ...args, agent_id: 'research', unexpected: true },
+        });
+        expect(unrelated.isError).toBe(true);
+        expect(unrelated.content).toEqual([
+          { type: 'text', text: 'Error: Invalid input: schema validation failed' },
+        ]);
+        expect(mock.methods).toHaveLength(methodsBefore);
       }
       expect(mock.requests).toHaveLength(0);
       expect(
@@ -388,7 +418,10 @@ describe('mandatory agent selection across transports', () => {
         arguments: { agent_id: 'research', message: 'explicit' },
       });
       expect(result.isError).not.toBe(true);
-      expect(mock.requests).toHaveLength(1);
+      expect(result.structuredContent).toMatchObject({ agent_id: 'research' });
+      expect(mock.requests).toEqual([
+        { key: expect.stringMatching(/^agent:research:mcp:/), message: 'explicit' },
+      ]);
     },
     20000
   );
