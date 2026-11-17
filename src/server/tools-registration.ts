@@ -23,7 +23,7 @@ import { validateInputIsObject } from '../utils/validation.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-import type { OpenClawGateway } from '../openclaw/gateway.js';
+import { validateAgentId, type OpenClawGateway } from '../openclaw/gateway.js';
 import { SERVER_ICON_SVG_BASE64 } from '../config/constants.js';
 import { log, logError } from '../utils/logger.js';
 import * as tools from '../mcp/tools/index.js';
@@ -140,9 +140,10 @@ function toolSet(
     const handler = toolHandlers.get(tool.name)!;
     toolHandlers.set(tool.name, async (input) => {
       if (!validateInputIsObject(input)) return errorResponse('Invalid input: expected an object');
-      if (!validateInput(input).valid)
-        return errorResponse('Invalid input: schema validation failed');
       try {
+        validateAgentId(input.agent_id);
+        if (!validateInput(input).valid)
+          return errorResponse('Invalid input: schema validation failed');
         const { agentId } = await gateway.resolve(input.agent_id);
         return await handler({ ...input, agent_id: agentId });
       } catch (error) {

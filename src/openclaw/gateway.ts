@@ -5,6 +5,13 @@ import type { GatewayConfig } from './types.js';
 
 const AGENT_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
+export function validateAgentId(selector: unknown): asserts selector is string | undefined {
+  if (selector !== undefined && (typeof selector !== 'string' || !AGENT_ID_RE.test(selector)))
+    throw new Error(
+      `Invalid agent_id ${JSON.stringify(selector)}. Use a bare agent ID, e.g. "main". Call openclaw_agents to list available agents.`
+    );
+}
+
 export class OpenClawGateway {
   private readonly agentClients = new Map<string, OpenClawClient>();
   constructor(private readonly config: GatewayConfig) {
@@ -23,16 +30,16 @@ export class OpenClawGateway {
     return this.config.agentIsMandatory === true;
   }
   async resolve(selector?: unknown): Promise<{ client: OpenClawClient; agentId: string }> {
-    if (selector !== undefined && typeof selector !== 'string') throw new Error('Invalid agent ID');
+    validateAgentId(selector);
     if (selector === undefined && this.agentIsMandatory) throw new Error('agent_id is required');
     const selected = this.agentIsMandatory ? selector : (selector ?? this.config.defaultAgentId);
     if (selected === undefined)
       throw new Error('Select agent_id or configure OPENCLAW_DEFAULT_AGENT_ID');
-    if (typeof selected !== 'string' || !AGENT_ID_RE.test(selected))
-      throw new Error('Invalid agent ID');
     const agentId = selected.toLowerCase();
     if (!(await this.listAgents()).some((a) => a.agentId === agentId))
-      throw new Error('Unknown agent "' + agentId + '"');
+      throw new Error(
+        `Unknown agent_id "${agentId}". Call openclaw_agents to list available agents.`
+      );
     let client = this.agentClients.get(agentId);
     if (!client) {
       client = new OpenClawClient(this.config.url, {

@@ -62,7 +62,7 @@ const target = (agentId = 'a', id = channel) => ({
 });
 describe('live agent selection', () => {
   it.each([true, false])(
-    'rejects supplied non-string agents with mandatory=%s before discovery',
+    'rejects malformed agents with mandatory=%s before discovery',
     async (agentIsMandatory) => {
       const g = new OpenClawGateway({
         url: 'https://fixture.invalid',
@@ -82,8 +82,15 @@ describe('live agent selection', () => {
         { agentId: 'a' },
         '',
         '   ',
+        'openclaw:main',
+        'agent:a',
+        '../a',
+        ' a ',
+        'a'.repeat(65),
       ]) {
-        await expect(g.resolve(selector)).rejects.toThrow('Invalid agent ID');
+        await expect(g.resolve(selector)).rejects.toThrow(
+          `Invalid agent_id ${JSON.stringify(selector)}. Use a bare agent ID, e.g. "main". Call openclaw_agents to list available agents.`
+        );
       }
       expect(discoverGatewayAgents).not.toHaveBeenCalled();
     }
@@ -106,7 +113,9 @@ describe('live agent selection', () => {
       'Select'
     );
     await expect(g.resolve('../a')).rejects.toThrow('Invalid');
-    await expect(g.resolve('missing')).rejects.toThrow('Unknown');
+    await expect(g.resolve('missing')).rejects.toThrow(
+      'Unknown agent_id "missing". Call openclaw_agents to list available agents.'
+    );
   });
   it('reloads every list and validation, including cached clients', async () => {
     const g = gateway();
