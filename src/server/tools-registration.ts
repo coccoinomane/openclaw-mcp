@@ -19,6 +19,7 @@ import type { DiscordService } from '../openclaw/discord.js';
 import { discordTools, handleDiscord } from '../mcp/tools/discord.js';
 import { randomUUID } from 'node:crypto';
 import { validateInputIsObject } from '../utils/validation.js';
+import { createInputValidator } from './input-validation.js';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -133,17 +134,25 @@ function toolSet(
   for (let i = 0; i < allTools.length; i++) {
     const tool = structuredClone(allTools[i]);
     allTools[i] = tool;
-    if (!tool.inputSchema.properties?.agent_id) continue;
-    if (gateway.agentIsMandatory)
+    const agentScoped = !!tool.inputSchema.properties?.agent_id;
+    if (agentScoped && gateway.agentIsMandatory)
       tool.inputSchema.required = [...new Set([...(tool.inputSchema.required ?? []), 'agent_id'])];
-    const validateInput = validator.getValidator(tool.inputSchema);
+    const validateInput = createInputValidator(tool.name, tool.inputSchema);
     const handler = toolHandlers.get(tool.name)!;
     toolHandlers.set(tool.name, async (input) => {
-      if (!validateInputIsObject(input)) return errorResponse('Invalid input: expected an object');
+      if (agentScoped && validateInputIsObject(input)) {
+        try {
+          validateAgentId(input.agent_id);
+        } catch {
+          return errorResponse(
+            `Invalid input for ${tool.name}: agent_id must be a bare agent ID, e.g. "main". Call openclaw_agents to list available agents.`
+          );
+        }
+      }
+      const inputError = validateInput(input);
+      if (inputError) return errorResponse(inputError);
+      if (!agentScoped || !validateInputIsObject(input)) return handler(input);
       try {
-        validateAgentId(input.agent_id);
-        if (!validateInput(input).valid)
-          return errorResponse('Invalid input: schema validation failed');
         const { agentId } = await gateway.resolve(input.agent_id);
         return await handler({ ...input, agent_id: agentId });
       } catch (error) {

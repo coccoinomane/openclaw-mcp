@@ -1,6 +1,6 @@
 # MCP conversation continuity
 
-Save `session_id` and `agent_id` (when present) from every chat response and send them on each follow-up turn. Omitting `session_id` starts a new conversation, even on the same MCP connection. Both `openclaw_chat` and `openclaw_chat_async` allocate the key before submitting or queueing work.
+Save `session_key` and `agent_id` (when present) from every chat response and send them on each follow-up turn. Omitting `session_key` starts a new conversation, even on the same MCP connection. Both `openclaw_chat` and `openclaw_chat_async` allocate the key before submitting or queueing work.
 
 ```json
 {"name":"openclaw_chat","arguments":{"message":"Remember the release name","agent_id":"research"}}
@@ -12,10 +12,10 @@ A synchronous response keeps the assistant's text in the original first content 
 {
   "content": [
     {"type":"text","text":"What release name should I remember?"},
-    {"type":"text","text":"\n\n{\"session_id\":\"agent:research:mcp:mcp.example.com:desktop:550e8400-e29b-41d4-a716-446655440000\",\"agent_id\":\"research\"}"}
+    {"type":"text","text":"\n\n{\"session_key\":\"agent:research:mcp:mcp.example.com:desktop:550e8400-e29b-41d4-a716-446655440000\",\"agent_id\":\"research\"}"}
   ],
   "structuredContent": {
-    "session_id":"agent:research:mcp:mcp.example.com:desktop:550e8400-e29b-41d4-a716-446655440000",
+    "session_key":"agent:research:mcp:mcp.example.com:desktop:550e8400-e29b-41d4-a716-446655440000",
     "agent_id":"research"
   }
 }
@@ -24,7 +24,7 @@ A synchronous response keeps the assistant's text in the original first content 
 Send the returned key unchanged on the next turn:
 
 ```json
-{"name":"openclaw_chat","arguments":{"message":"The release is Aurora","session_id":"agent:research:mcp:mcp.example.com:desktop:550e8400-e29b-41d4-a716-446655440000","agent_id":"research"}}
+{"name":"openclaw_chat","arguments":{"message":"The release is Aurora","session_key":"agent:research:mcp:mcp.example.com:desktop:550e8400-e29b-41d4-a716-446655440000","agent_id":"research"}}
 ```
 
 Supplied keys keep the existing validation: they must be nonempty strings, at most 256 characters after trimming, with prohibited control characters rejected. Leading/trailing whitespace is trimmed as before. Validated keys are passed through without adding a prefix, renaming, or generating a replacement. A supplied `agent:<id>:` key that disagrees with explicit `agent_id` fails before submission. The configured default is also checked against a qualified supplied key. Invalid supplied keys fail before Gateway submission.
@@ -43,11 +43,11 @@ The server label is the hostname of configured `MCP_ISSUER_URL` / `--issuer-url`
 
 The client label comes from that MCP connection's initialize `clientInfo.name`, with `unknown` as the fallback when unavailable or empty after sanitization. It is an untrusted display label, not an authenticated identity. Two clients may claim the same name. Labels are lowercase ASCII letters, digits, dots, underscores and dashes, limited to 40 characters each. Separators and control characters are replaced so labels cannot inject `agent:`, `cron:`, `subagent:`, or `acp:` namespaces. The UUID, rather than the labels, makes conversations distinct. Truncation or sanitization can make labels look alike without causing shared conversations. Even with a 64-character agent ID, generated keys fit the existing 256-character validation limit.
 
-The exact effective request key is sent in `x-openclaw-session-key` and the existing JSON `session_id` field. Gateway may canonicalize an unqualified key for internal storage. The returned value is the request key to reuse, not a claim about the Gateway's internal storage identifier. See the [Gateway HTTP API](https://docs.openclaw.ai/gateway/openai-http-api).
+The exact effective request key is sent in `x-openclaw-session-key` and the Gateway JSON `session_id` field. Gateway may canonicalize an unqualified key for internal storage. The returned value is the request key to reuse, not a claim about the Gateway's internal storage identifier. See the [Gateway HTTP API](https://docs.openclaw.ai/gateway/openai-http-api).
 
 ## Async work and failures
 
-Async tools retain their existing JSON first text block and add `structuredContent` with the same object. Enqueue persists the selected agent for worker execution and adds `agent_id` when known, plus `session_id` alongside the existing `task_id`, `status`, and `message` fields. Status responses include it while pending, running, completed, failed, or cancelled. Task-list entries also include it. Completed status responses retain the existing string `result`; failed status responses retain the existing `error` field. For example, the structured status object is:
+Async tools retain their existing JSON first text block and add `structuredContent` with the same object. Enqueue persists the selected agent for worker execution and adds `agent_id` when known, plus `session_key` alongside the existing `task_id`, `status`, and `message` fields. Status responses include it while pending, running, completed, failed, or cancelled. Task-list entries also include it. Completed status responses retain the existing string `result`; failed status responses retain the existing `error` field. For example, the structured status object is:
 
 ```json
 {
@@ -55,7 +55,7 @@ Async tools retain their existing JSON first text block and add `structuredConte
   "type":"chat",
   "status":"completed",
   "agent_id":"research",
-  "session_id":"agent:research:mcp:mcp.example.com:desktop:550e8400-e29b-41d4-a716-446655440000",
+  "session_key":"agent:research:mcp:mcp.example.com:desktop:550e8400-e29b-41d4-a716-446655440000",
   "created_at":"2026-10-19T00:00:00.000Z",
   "started_at":"2026-10-19T00:00:00.100Z",
   "completed_at":"2026-10-19T00:00:01.000Z",
@@ -69,11 +69,11 @@ Synchronous Gateway failures retain `isError: true` and the original `Error: ...
 
 Async failed jobs continue to be successful status queries containing `status: "failed"` and `error`; this feature does not change that signaling. The key stays on the task through failure and cancellation until existing expiry cleanup removes it. Queue capacity and process-local storage are unchanged. Queue-capacity exhaustion retains the existing MCP protocol error without conversation metadata; no Gateway request has been submitted in that case. Restarting the MCP server loses task records. Connection ownership, cleanup timing, OAuth policy and authorization are unchanged.
 
-## Client compatibility
+## Client contracts
 
 MCP transport session IDs, async task IDs, and Gateway conversation keys have separate purposes. An MCP connection owns its async tasks. A Gateway key selects conversation history. Neither the display labels nor possession of a conversation key creates a new authorization policy; caller-supplied keys retain the previous Gateway access semantics.
 
-The supported tools are registered on Streamable HTTP, legacy SSE, and stdio. The added `openclaw_agents` discovery tool declares an object output schema. Existing generic tools retain their optional structured metadata contract. The installed MCP SDK accepts optional object-valued `structuredContent` while requiring normal `content`; introducing a required output schema would also constrain validation-error results that have no conversation key. Async `structuredContent` mirrors the existing JSON object. Sync `structuredContent` contains metadata only, leaving the assistant reply as text.
+Tools share input and output validation across stdio, legacy SSE, Streamable HTTP and modern HTTP. Chat metadata and task responses declare output schemas using session_key. Validation errors may remain text-only; sync replies retain their original first text block.
 
 Clients that render all text blocks can save the extra JSON metadata block even if they ignore structured output. Clients that only read `content[0].text` keep their old assistant-text behavior but must be updated to read another block or `structuredContent` to gain continuity. Clients that assume exactly one sync content block or reject unknown JSON properties may need adaptation. The extra metadata may be displayed in the conversation UI. Client-specific rendering in desktop/web products has not been verified.
 

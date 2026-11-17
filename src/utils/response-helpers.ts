@@ -32,7 +32,7 @@ export function withConversation(
   sessionId: string,
   agentId?: string
 ): ToolResponse {
-  const metadata = { session_id: sessionId, ...(agentId ? { agent_id: agentId } : {}) };
+  const metadata = { session_key: sessionId, ...(agentId ? { agent_id: agentId } : {}) };
   return {
     ...response,
     content: [...response.content, { type: 'text', text: `\n\n${JSON.stringify(metadata)}` }],

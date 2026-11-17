@@ -62,7 +62,7 @@ describe('generic agent routing without Discord', () => {
   it('rejects unknown agents and explicit session mismatch before dispatch', async () => {
     for (const input of [
       { message: 'bad', agent_id: 'unknown' },
-      { message: 'bad', agent_id: 'beta', session_id: 'agent:alpha:mcp:old' },
+      { message: 'bad', agent_id: 'beta', session_key: 'agent:alpha:mcp:old' },
     ]) {
       expect((await handleOpenclawChat(gateway, input)).isError).toBe(true);
       expect((await handleOpenclawChatAsync(gateway, input, owner)).isError).toBe(true);
@@ -72,7 +72,7 @@ describe('generic agent routing without Discord', () => {
   });
 
   it('rejects a session owned by an unselected agent before sync or queued inference', async () => {
-    const input = { message: 'hello', session_id: 'agent:legacy:mcp:old' };
+    const input = { message: 'hello', session_key: 'agent:legacy:mcp:old' };
     expect((await handleOpenclawChat(gateway, input)).isError).toBe(true);
     expect((await handleOpenclawChatAsync(gateway, input, owner)).isError).toBe(true);
     expect(calls).toHaveLength(0);

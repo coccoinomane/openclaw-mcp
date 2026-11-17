@@ -3,11 +3,12 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 type OutputSchema = NonNullable<Tool['outputSchema']>;
 const string = { type: 'string' };
 const boolean = { type: 'boolean' };
-const route = { agent_id: string, account_id: string };
+const route = { agent_id: string, discord_account_id: string, server_id: string };
 const nullableString = { type: ['string', 'null'] };
 const retrySafe = { type: 'boolean', const: false };
 const error = {
   type: 'object',
+  additionalProperties: false,
   properties: { error_code: string, uncertain: boolean, retry_safe: retrySafe },
   required: ['error_code', 'uncertain', 'retry_safe'],
 };
@@ -20,71 +21,75 @@ function output(success: OutputSchema): OutputSchema {
 
 export const discordChannelsOutput = output({
   type: 'object',
+  additionalProperties: false,
   properties: {
     channels: {
       type: 'array',
       items: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           ...route,
-          target: string,
           channel_id: string,
-          guild_id: string,
-          name: string,
-          topic: nullableString,
+          channel_name: string,
+          channel_topic: nullableString,
           category_id: nullableString,
           category_name: nullableString,
           discord_url: string,
         },
         required: [
-          'target',
+          'agent_id',
+          'discord_account_id',
           'channel_id',
-          'guild_id',
-          'name',
-          'topic',
+          'server_id',
+          'channel_name',
+          'channel_topic',
           'category_id',
           'category_name',
           'discord_url',
         ],
       },
     },
-    creation_guilds: {
+    creation_servers: {
       type: 'array',
       items: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           ...route,
-          guild_id: string,
           category_id: string,
         },
-        required: ['agent_id', 'account_id', 'guild_id'],
+        required: ['agent_id', 'discord_account_id', 'server_id'],
       },
     },
   },
-  required: ['channels', 'creation_guilds'],
+  required: ['channels', 'creation_servers'],
 });
 
 // Metadata may be absent; malformed values are rejected by output validation.
 export const discordThreadsOutput = output({
   type: 'object',
+  additionalProperties: false,
   properties: {
     ...route,
+    channel_id: string,
     threads: {
       type: 'array',
       items: {
         type: 'object',
+        additionalProperties: false,
         properties: {
-          channel_id: string,
-          name: string,
+          thread_id: string,
+          thread_name: string,
           archived: boolean,
           archive_timestamp: string,
           discord_url: string,
         },
-        required: ['channel_id', 'discord_url'],
+        required: ['thread_id', 'discord_url'],
       },
     },
     has_more: boolean,
-    next_before: string,
+    next_before_archive_timestamp: string,
     pagination: { type: 'string', enum: ['none', 'archived_public_timestamp'] },
   },
   required: ['threads', 'has_more', 'pagination'],
@@ -92,11 +97,12 @@ export const discordThreadsOutput = output({
 
 const turn: OutputSchema = {
   type: 'object',
+  additionalProperties: false,
   properties: {
     ...route,
     kind: { type: 'string', enum: ['thread_reply', 'channel_message'] },
     operation_id: string,
-    target: string,
+    channel_id: string,
     status: {
       type: 'string',
       enum: [
@@ -112,7 +118,7 @@ const turn: OutputSchema = {
       ],
     },
     retry_safe: retrySafe,
-    channel_id: string,
+    thread_id: string,
     session_key: string,
     discord_url: string,
     run_id: string,
@@ -133,7 +139,7 @@ const turn: OutputSchema = {
     starter_message_id: string,
     model: string,
     model_error: string,
-    fork_from_session: string,
+    fork_from_session_key: string,
     fork_status: { type: 'string', enum: ['pending', 'forking', 'completed', 'failed', 'unknown'] },
     fork_error_code: string,
     member_status: {
@@ -146,14 +152,15 @@ const turn: OutputSchema = {
     recovery: string,
     error_code: string,
   },
-  required: ['operation_id', 'target', 'status', 'retry_safe'],
+  required: ['operation_id', 'channel_id', 'status', 'retry_safe'],
 };
 const creation: OutputSchema = {
   type: 'object',
+  additionalProperties: false,
   properties: {
     ...route,
     kind: { type: 'string', const: 'channel_create' },
-    guild_id: string,
+    server_id: string,
     category_id: string,
     operation_id: string,
     status: {
@@ -169,12 +176,11 @@ const creation: OutputSchema = {
     retry_safe: retrySafe,
     channel_id: string,
     discord_url: string,
-    target: string,
     routing: string,
     error_code: string,
     recovery: string,
   },
-  required: ['kind', 'guild_id', 'operation_id', 'status', 'retry_safe'],
+  required: ['kind', 'server_id', 'operation_id', 'status', 'retry_safe'],
 };
 
 // Early failures and interrupted records may lack URLs, session keys or run IDs.

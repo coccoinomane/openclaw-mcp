@@ -138,7 +138,7 @@ For production with Claude.ai, keep DCR disabled and use the pre-configured `MCP
 
 ## Conversation labels and routing
 
-Generated keys contain the selected agent and trusted issuer/host label. Client names are display labels only. Reuse session_id and agent_id together. A supplied agent-qualified session cannot override selection. Every authenticated MCP client can select every Gateway agent; authentication does not isolate tenants.
+Generated keys contain the selected agent and trusted issuer/host label. Client names are display labels only. Reuse session_key and agent_id together. A supplied agent-qualified session cannot override selection. Every authenticated MCP client can select every Gateway agent; authentication does not isolate tenants.
 
 ### Session model selection
 

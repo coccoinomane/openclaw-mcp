@@ -1,0 +1,128 @@
+[
+  {
+    "name": "openclaw_agents",
+    "arguments": {}
+  },
+  {
+    "name": "openclaw_models",
+    "arguments": {
+      "agent_id": "main"
+    }
+  },
+  {
+    "name": "openclaw_status",
+    "arguments": {
+      "agent_id": "main"
+    }
+  },
+  {
+    "name": "openclaw_chat",
+    "arguments": {
+      "agent_id": "main",
+      "message": "Remember this request"
+    }
+  },
+  {
+    "name": "openclaw_chat_async",
+    "arguments": {
+      "agent_id": "main",
+      "message": "Continue the request",
+      "session_key": "agent:main:mcp:server:client:conversation"
+    }
+  },
+  {
+    "name": "openclaw_task_status",
+    "arguments": {
+      "agent_id": "main",
+      "task_id": "task_example"
+    }
+  },
+  {
+    "name": "openclaw_task_list",
+    "arguments": {
+      "agent_id": "main",
+      "session_key": "agent:main:mcp:server:client:conversation",
+      "status": "completed"
+    }
+  },
+  {
+    "name": "openclaw_task_cancel",
+    "arguments": {
+      "agent_id": "main",
+      "task_id": "task_example"
+    }
+  },
+  {
+    "name": "openclaw_discord_channels",
+    "arguments": {
+      "agent_id": "main"
+    }
+  },
+  {
+    "name": "openclaw_discord_threads",
+    "arguments": {
+      "agent_id": "main",
+      "server_id": "400000000000000001",
+      "discord_account_id": "bot",
+      "channel_id": "400000000000000002",
+      "archived": true,
+      "before_archive_timestamp": "2026-11-01T00:00:00Z"
+    }
+  },
+  {
+    "name": "openclaw_discord_ask",
+    "arguments": {
+      "agent_id": "main",
+      "server_id": "400000000000000001",
+      "discord_account_id": "bot",
+      "channel_id": "400000000000000002",
+      "thread_name": "Project review",
+      "prompt": "Review the project",
+      "operation_id": "example-ask-operation-01",
+      "source": "Editor session abc-123",
+      "fork_from_session_key": "agent:main:mcp:server:client:conversation"
+    }
+  },
+  {
+    "name": "openclaw_discord_reply",
+    "arguments": {
+      "agent_id": "main",
+      "server_id": "400000000000000001",
+      "discord_account_id": "bot",
+      "channel_id": "400000000000000002",
+      "thread_id": "400000000000000003",
+      "prompt": "Continue the review",
+      "operation_id": "example-reply-operation-01"
+    }
+  },
+  {
+    "name": "openclaw_discord_send",
+    "arguments": {
+      "agent_id": "main",
+      "server_id": "400000000000000001",
+      "discord_account_id": "bot",
+      "channel_id": "400000000000000002",
+      "prompt": "Review the project",
+      "operation_id": "example-send-operation-01"
+    }
+  },
+  {
+    "name": "openclaw_discord_operation",
+    "arguments": {
+      "agent_id": "main",
+      "operation_id": "example-ask-operation-01"
+    }
+  },
+  {
+    "name": "openclaw_discord_create_channel",
+    "arguments": {
+      "agent_id": "main",
+      "server_id": "400000000000000001",
+      "discord_account_id": "bot",
+      "channel_name": "project-review",
+      "channel_topic": "Project decisions",
+      "authorize_create": true,
+      "operation_id": "example-create-operation-01"
+    }
+  }
+]

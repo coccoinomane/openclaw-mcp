@@ -1,6 +1,6 @@
 # Existing-thread replies
 
-The shared MCP tool openclaw_discord_reply accepts target, channel_id, prompt and operation_id. It reuses the coordinator, request publisher, background worker and durable operation journal. It does not create a thread or change membership. The user request remains verbatim, posted by the bot with mentions disabled, then passed once to the ordinary agent in agent:<agent>:discord:channel:<thread>.
+The shared MCP tool openclaw_discord_reply accepts channel_id, thread_id, prompt and operation_id. It reuses the coordinator, request publisher, background worker and durable operation journal. It does not create a thread or change membership. The user request remains verbatim, posted by the bot with mentions disabled, then passed once to the ordinary agent in agent:<agent>:discord:channel:<thread>.
 
 Existing-thread replies share the [single-Gateway Discord setup](discord-skills.md). They do not create a thread. Agent execution always uses the [Gateway SDK](discord-sdk.md); destination, permission and exact-message reads use the Gateway HTTP adapter. No OpenClaw CLI is invoked.
 
@@ -8,7 +8,7 @@ Forwarded requests in both new and existing threads suppress embeds and push/des
 
 ## Agent and destination
 
-Select agent_id first, then supply concrete target, guild_id, account_id and the thread channel_id. The selected agent's bindings grant access through the verified parent. The canonical session is agent:<selectedAgent>:discord:channel:<threadId>. This does not assert inbound runtime ownership.
+Select agent_id first, then supply concrete channel_id, server_id, discord_account_id and thread_id. The selected agent's bindings grant access through the verified parent. The canonical session is agent:<selectedAgent>:discord:channel:<threadId>. This does not assert inbound runtime ownership.
 
 ## Context is not guaranteed by the thread ID
 

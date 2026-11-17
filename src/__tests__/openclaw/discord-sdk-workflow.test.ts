@@ -26,19 +26,18 @@ const target = {
   normalRouting: true,
 };
 const input = {
-  mode: 'new_thread',
-  target: target.channelId,
-  guild_id: guild,
-  account_id: 'bot',
-  title: 'Task',
+  channel_id: target.channelId,
+  server_id: guild,
+  discord_account_id: 'bot',
+  thread_name: 'Task',
   operation_id: 'sdk-operation-0001',
   prompt: '  original @everyone 😀\n  ',
 };
 const reply = {
-  target: target.channelId,
-  guild_id: guild,
-  account_id: 'bot',
-  channel_id: thread,
+  channel_id: target.channelId,
+  server_id: guild,
+  discord_account_id: 'bot',
+  thread_id: thread,
   operation_id: input.operation_id,
   prompt: input.prompt,
 };
@@ -170,18 +169,17 @@ describe('ordinary Discord workflows without subprocesses', () => {
     async (kind) => {
       const f = await fixture(kind === 'archived');
       expect((await f.service.channels()).channels[0]).toMatchObject({
-        target: target.channelId,
-        guild_id: guild,
-        account_id: 'bot',
-        channel_id: parent,
+        channel_id: target.channelId,
+        server_id: guild,
+        discord_account_id: 'bot',
       });
-      expect((await f.service.threads({ target: 'work' })).threads[0].channel_id).toBe(thread);
+      expect((await f.service.threads({ channel_id: 'work' })).threads[0].thread_id).toBe(thread);
       const result = kind === 'new' ? await f.service.ask(input) : await f.service.reply(reply);
       expect(result).toMatchObject({
         status: 'queued',
         request_verified: true,
         agent_transport: 'sdk',
-        channel_id: thread,
+        thread_id: thread,
       });
       expect(result.agent_idempotency_key).toBe(
         'discord-run-' +
@@ -258,11 +256,11 @@ describe('ordinary Discord workflows without subprocesses', () => {
   ])('preserves archived thread timestamp cursor %s', async (before) => {
     const f = await fixture();
     await f.service.threads({
-      target: target.channelId,
-      guild_id: guild,
-      account_id: 'bot',
+      channel_id: target.channelId,
+      server_id: guild,
+      discord_account_id: 'bot',
       archived: true,
-      before,
+      before_archive_timestamp: before,
       limit: 10,
     });
     const args = JSON.parse(f.fetcher.mock.calls.at(-1)![1].body).args;
@@ -277,7 +275,12 @@ describe('ordinary Discord workflows without subprocesses', () => {
       limit: 10,
     });
     await expect(
-      f.service.threads({ target: target.channelId, guild_id: guild, account_id: 'bot', before })
+      f.service.threads({
+        channel_id: target.channelId,
+        server_id: guild,
+        discord_account_id: 'bot',
+        before_archive_timestamp: before,
+      })
     ).rejects.toThrow('Pagination');
   });
   it('blocks lack of SDK authority before creation, member-add or publication', async () => {

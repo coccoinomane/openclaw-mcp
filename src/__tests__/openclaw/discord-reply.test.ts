@@ -15,10 +15,10 @@ const guild = '400000000000000001',
   parent = '400000000000000002',
   thread = '400000000000000003';
 const input = {
-  target: parent,
-  guild_id: guild,
-  account_id: 'bot',
-  channel_id: thread,
+  channel_id: parent,
+  server_id: guild,
+  discord_account_id: 'bot',
+  thread_id: thread,
   operation_id: 'reply-operation-0001',
   prompt: '  exact @everyone 😀\ntrailing  ',
 };
@@ -139,7 +139,7 @@ describe('existing public thread replies', () => {
         kind: 'thread_reply',
         status: 'queued',
         request_verified: true,
-        channel_id: thread,
+        thread_id: thread,
         session_key: f.route.sessionKey,
         member_status: 'disabled',
         discord_url: 'https://discord.com/channels/' + guild + '/' + thread,
@@ -260,7 +260,7 @@ describe('existing public thread replies', () => {
   });
   it('rejects a parent ID and client-selected session, agent or transport fields', async () => {
     const f = await fixture();
-    await expect(f.service.reply({ ...input, channel_id: parent })).rejects.toThrow(
+    await expect(f.service.reply({ ...input, thread_id: parent })).rejects.toThrow(
       'PUBLIC_THREAD_REQUIRED'
     );
     expect(f.agent.run).not.toHaveBeenCalled();

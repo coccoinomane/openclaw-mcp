@@ -104,24 +104,29 @@ export class DiscordAccess {
       throw new DiscordError('BINDING_ACCESS_DENIED');
   }
   async target(
-    input: { agent_id?: string; account_id?: string; guild_id?: string; target?: string },
-    id = input.target
+    input: {
+      agent_id?: string;
+      discord_account_id?: string;
+      server_id?: string;
+      channel_id?: string;
+    },
+    id = input.channel_id
   ): Promise<AdmittedTarget> {
     const agentId = await this.select(input.agent_id);
     if (
       typeof id !== 'string' ||
       !snowflake.test(id) ||
-      typeof input.account_id !== 'string' ||
-      !accountId.test(input.account_id) ||
-      typeof input.guild_id !== 'string' ||
-      !snowflake.test(input.guild_id)
+      typeof input.discord_account_id !== 'string' ||
+      !accountId.test(input.discord_account_id) ||
+      typeof input.server_id !== 'string' ||
+      !snowflake.test(input.server_id)
     )
       throw new DiscordError('DESTINATION_INVALID');
     const t: AdmittedTarget = {
       name: id,
       channelId: id,
-      guildId: input.guild_id,
-      accountId: input.account_id,
+      guildId: input.server_id,
+      accountId: input.discord_account_id,
       agentId,
     };
     // Metadata must be verified before interpreting an ID as a channel or thread.
@@ -144,7 +149,10 @@ export class DiscordAccess {
     const agentId = await this.select(selector);
     const bindings = await this.bindings(agentId);
     const channels = new Map<string, any>();
-    const guilds = new Map<string, { agent_id: string; account_id: string; guild_id: string }>();
+    const guilds = new Map<
+      string,
+      { agent_id: string; discord_account_id: string; server_id: string }
+    >();
     for (const b of bindings) {
       const scope = { agentId, accountId: b.accountId, guildId: b.guildId ?? '' };
       let rows: any[];
@@ -155,8 +163,8 @@ export class DiscordAccess {
       else {
         guilds.set(b.accountId + ':' + b.guildId, {
           agent_id: agentId,
-          account_id: b.accountId,
-          guild_id: b.guildId!,
+          discord_account_id: b.accountId,
+          server_id: b.guildId!,
         });
         const data = await this.reader(scope, { action: 'channel-list' });
         if (!data || data.partial || data.ok === false || !Array.isArray(data.channels))
@@ -184,18 +192,17 @@ export class DiscordAccess {
           throw new DiscordError('CHANNEL_METADATA_UNVERIFIED');
         channels.set(b.accountId + ':' + c.id, {
           agent_id: agentId,
-          account_id: b.accountId,
-          target: c.id,
+          discord_account_id: b.accountId,
           channel_id: c.id,
-          guild_id: c.guild_id,
-          name: c.name,
-          topic: c.topic ?? null,
+          server_id: c.guild_id,
+          channel_name: c.name,
+          channel_topic: c.topic ?? null,
           category_id: c.parent_id ?? null,
           category_name: rows.find((r) => r.id === c.parent_id && r.type === 4)?.name ?? null,
           discord_url: 'https://discord.com/channels/' + c.guild_id + '/' + c.id,
         });
       }
     }
-    return { channels: [...channels.values()], creation_guilds: [...guilds.values()] };
+    return { channels: [...channels.values()], creation_servers: [...guilds.values()] };
   }
 }

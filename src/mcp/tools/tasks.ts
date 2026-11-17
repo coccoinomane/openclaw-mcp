@@ -1,3 +1,4 @@
+import { taskOutput, taskListOutput } from './conversation-output.js';
 /**
  * Async Task Tools for OpenClaw MCP
  *
@@ -27,8 +28,9 @@ import { validateInputIsObject, validateMessage, validateId } from '../../utils/
 
 export const openclawChatAsyncTool: Tool = {
   name: 'openclaw_chat_async',
+  outputSchema: taskOutput,
   description:
-    'Send a message to OpenClaw asynchronously. Returns a task_id immediately that can be polled for results. Use this for potentially long-running conversations. Save the returned session_id and agent_id (when present) and reuse them for follow-up turns; omission starts a new conversation. Poll the task after enqueue; do not resend ambiguous failures automatically.',
+    'Send a message to OpenClaw asynchronously. Returns a task_id immediately that can be polled for results. Use this for potentially long-running conversations. Save the returned session_key and agent_id (when present) and reuse them for follow-up turns; omission starts a new conversation. Poll the task after enqueue; do not resend ambiguous failures automatically.',
   inputSchema: {
     type: 'object',
     additionalProperties: false,
@@ -37,10 +39,9 @@ export const openclawChatAsyncTool: Tool = {
         type: 'string',
         description: 'The message to send to OpenClaw',
       },
-      session_id: {
+      session_key: {
         type: 'string',
-        description:
-          'Gateway conversation key from a previous chat; reuse unchanged for follow-up turns, or omit for a new conversation. Distinct from MCP transport session and task IDs.',
+        description: 'Gateway conversation key from a previous chat; omit for a new conversation.',
       },
       priority: {
         type: 'number',
@@ -54,8 +55,9 @@ export const openclawChatAsyncTool: Tool = {
 
 export const openclawTaskStatusTool: Tool = {
   name: 'openclaw_task_status',
+  outputSchema: taskOutput,
   description:
-    'Check the status of an async task. Returns status, session_id, and result if completed. Save session_id and agent_id for follow-up chat calls, including after failures.',
+    'Check the status of an async task. Returns status, session_key, and result if completed. Save session_key and agent_id for follow-up chat calls, including after failures.',
   inputSchema: {
     type: 'object',
     additionalProperties: false,
@@ -75,8 +77,9 @@ export const openclawTaskStatusTool: Tool = {
 
 export const openclawTaskListTool: Tool = {
   name: 'openclaw_task_list',
+  outputSchema: taskListOutput,
   description:
-    'List owned tasks with session_id and agent_id for conversation reuse. Optionally filter by status, session, or agent.',
+    'List owned tasks with session_key and agent_id for conversation reuse. Optionally filter by status, session, or agent.',
   inputSchema: {
     type: 'object',
     additionalProperties: false,
@@ -86,9 +89,9 @@ export const openclawTaskListTool: Tool = {
         enum: ['pending', 'running', 'completed', 'failed', 'cancelled'],
         description: 'Filter by task status',
       },
-      session_id: {
+      session_key: {
         type: 'string',
-        description: 'Filter by session ID',
+        description: 'Filter by Gateway conversation key',
       },
       agent_id: { type: 'string', description: 'Configured agent ID from openclaw_agents.' },
     },
@@ -98,6 +101,7 @@ export const openclawTaskListTool: Tool = {
 
 export const openclawTaskCancelTool: Tool = {
   name: 'openclaw_task_cancel',
+  outputSchema: taskOutput,
   description: "Cancel a pending task. Only works for tasks that haven't started yet.",
   inputSchema: {
     type: 'object',
@@ -136,8 +140,8 @@ async function processTask(task: Task, gateway: OpenClawGateway): Promise<void> 
   }
 
   try {
-    const input = task.input as { message: string; session_id?: string };
-    const response = await client.chat(input.message, input.session_id);
+    const input = task.input as { message: string; session_key?: string };
+    const response = await client.chat(input.message, input.session_key);
     taskManager.updateStatus(task.id, 'completed', response.response);
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
@@ -199,8 +203,8 @@ export async function handleOpenclawChatAsync(
   }
 
   let sessionId: string | undefined;
-  if (input.session_id !== undefined) {
-    const sidResult = validateId(input.session_id, 'session_id');
+  if (input.session_key !== undefined) {
+    const sidResult = validateId(input.session_key, 'session_key');
     if (sidResult.valid === false) {
       return errorResponse(sidResult.error);
     }
@@ -233,7 +237,7 @@ export async function handleOpenclawChatAsync(
   // Create task
   const task = taskManager.create({
     type: 'chat',
-    input: { message: msgResult.value, session_id: sessionId },
+    input: { message: msgResult.value, session_key: sessionId },
     ownerId,
     sessionId,
     priority,
@@ -245,7 +249,7 @@ export async function handleOpenclawChatAsync(
     task_id: task.id,
     status: task.status,
     ...(agentId ? { agent_id: agentId } : {}),
-    session_id: sessionId,
+    session_key: sessionId,
     message: 'Task queued. Use openclaw_task_status to check progress.',
   });
 }
@@ -288,7 +292,7 @@ export async function handleOpenclawTaskStatus(
     type: task.type,
     status: task.status,
     ...(task.agentId ? { agent_id: task.agentId } : {}),
-    session_id: task.sessionId,
+    session_key: task.sessionId,
     created_at: task.createdAt.toISOString(),
   };
 
@@ -344,13 +348,13 @@ export async function handleOpenclawTaskList(
     status = input.status as TaskStatus;
   }
 
-  let session_id: string | undefined;
-  if (input.session_id !== undefined) {
-    const sidResult = validateId(input.session_id, 'session_id');
+  let session_key: string | undefined;
+  if (input.session_key !== undefined) {
+    const sidResult = validateId(input.session_key, 'session_key');
     if (sidResult.valid === false) {
       return errorResponse(sidResult.error);
     }
-    session_id = sidResult.value;
+    session_key = sidResult.value;
   }
 
   let agentFilter: string;
@@ -362,7 +366,7 @@ export async function handleOpenclawTaskList(
 
   const tasks = taskManager.list(ownerId, {
     status,
-    sessionId: session_id,
+    sessionId: session_key,
     agentId: agentFilter,
   });
   const stats = taskManager.stats(ownerId);
@@ -372,7 +376,7 @@ export async function handleOpenclawTaskList(
     type: t.type,
     status: t.status,
     ...(t.agentId ? { agent_id: t.agentId } : {}),
-    session_id: t.sessionId,
+    session_key: t.sessionId,
     priority: t.priority,
     created_at: t.createdAt.toISOString(),
     has_result: t.status === 'completed' && !!t.result,
@@ -430,7 +434,7 @@ export async function handleOpenclawTaskCancel(
   return structuredJsonResponse({
     task_id,
     status: 'cancelled',
-    session_id: task.sessionId,
+    session_key: task.sessionId,
     ...(task.agentId ? { agent_id: task.agentId } : {}),
     message: 'Task cancelled successfully',
   });

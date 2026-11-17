@@ -65,7 +65,7 @@ async function connect(modern: boolean, discord: DiscordService) {
 }
 describe.each([false, true])('Discord output validation (modern=%s)', (modern) => {
   it('rejects unknown selector agents before dispatch on every transport', async () => {
-    const channels = vi.fn(async () => ({ channels: [], creation_guilds: [] }));
+    const channels = vi.fn(async () => ({ channels: [], creation_servers: [] }));
     const client = await connect(modern, {
       config: {},
       channels,
@@ -80,7 +80,7 @@ describe.each([false, true])('Discord output validation (modern=%s)', (modern) =
 
   it('preserves typed or absent thread metadata and rejects malformed fields', async () => {
     const item = {
-      channel_id: '500000000000000003',
+      thread_id: '500000000000000003',
       discord_url: 'https://discord.com/channels/500000000000000001/500000000000000003',
     };
     const sparse = { threads: [item], has_more: false, pagination: 'none' };
@@ -90,18 +90,18 @@ describe.each([false, true])('Discord output validation (modern=%s)', (modern) =
     const request = {
       name: 'openclaw_discord_threads',
       arguments: {
-        target: '500000000000000002',
-        guild_id: '500000000000000001',
-        account_id: 'bot',
+        channel_id: '500000000000000002',
+        server_id: '500000000000000001',
+        discord_account_id: 'bot',
       },
     };
     expect((await client.callTool(request)).structuredContent).toEqual(sparse);
     const complete = {
       threads: [
-        { ...item, name: 'Task', archived: true, archive_timestamp: '2026-11-01T00:00:00Z' },
+        { ...item, thread_name: 'Task', archived: true, archive_timestamp: '2026-11-01T00:00:00Z' },
       ],
       has_more: true,
-      next_before: '2026-11-01T00:00:00Z',
+      next_before_archive_timestamp: '2026-11-01T00:00:00Z',
       pagination: 'archived_public_timestamp',
     };
     threads.mockResolvedValue(complete);
@@ -110,8 +110,8 @@ describe.each([false, true])('Discord output validation (modern=%s)', (modern) =
     expect(valid.structuredContent).toEqual(complete);
     expect(valid.content[0]).toEqual({ type: 'text', text: JSON.stringify(complete, null, 2) });
     for (const patch of [
-      { name: null },
-      { name: 42 },
+      { thread_name: null },
+      { thread_name: 42 },
       { archived: 'false' },
       { archive_timestamp: 42 },
     ]) {
@@ -120,11 +120,11 @@ describe.each([false, true])('Discord output validation (modern=%s)', (modern) =
       expect(result.isError).toBe(true);
       expect(result.structuredContent).toBeUndefined();
     }
-    threads.mockResolvedValue({ ...sparse, next_before: 42 });
+    threads.mockResolvedValue({ ...sparse, next_before_archive_timestamp: 42 });
     expect((await client.callTool(request)).isError).toBe(true);
   });
   it('advertises all schemas and rejects invalid success output server-side', async () => {
-    const channels = vi.fn(async (): Promise<any> => ({ channels: [], creation_guilds: [] }));
+    const channels = vi.fn(async (): Promise<any> => ({ channels: [], creation_servers: [] }));
     const client = await connect(modern, { channels } as unknown as DiscordService);
     const listing = await client.listTools();
     for (const tool of discordTools)
@@ -133,11 +133,11 @@ describe.each([false, true])('Discord output validation (modern=%s)', (modern) =
       );
     const request = { name: 'openclaw_discord_channels', arguments: {} };
     const success = await client.callTool(request);
-    expect(success.structuredContent).toEqual({ channels: [], creation_guilds: [] });
+    expect(success.structuredContent).toEqual({ channels: [], creation_servers: [] });
     expect(success.isError).not.toBe(true);
     channels.mockResolvedValue({
       channels: 'malformed',
-      creation_guilds: [],
+      creation_servers: [],
       secret: 'must-not-leak',
     });
     const invalid = await client.callTool(request);

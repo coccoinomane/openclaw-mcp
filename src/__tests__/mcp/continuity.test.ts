@@ -40,7 +40,7 @@ function json(response: ToolResponse) {
   return JSON.parse(response.content[0].text);
 }
 function metadata(response: ToolResponse) {
-  return response.structuredContent as { session_id: string; agent_id?: string };
+  return response.structuredContent as { session_key: string; agent_id?: string };
 }
 async function status(taskId: string, ownerId: string, expected: string) {
   let response: ToolResponse;
@@ -115,15 +115,15 @@ afterAll(async () => {
 describe('sync Gateway conversation continuity', () => {
   it('reuses the exact generated key on turn two while preserving the original text block', async () => {
     const first = await handleOpenclawChat(gateway, { message: 'remember blue' }, context);
-    const { session_id, agent_id } = metadata(first);
+    const { session_key, agent_id } = metadata(first);
     expect(first.content[0]).toEqual({ type: 'text', text: 'remember blue' });
     expect(JSON.parse(first.content[1].text)).toEqual(metadata(first));
-    expect(session_id).toMatch(/^agent:research:mcp:mcp.example.test:test-app:/);
-    const second = await handleOpenclawChat(gateway, { message: 'recall', session_id, agent_id });
+    expect(session_key).toMatch(/^agent:research:mcp:mcp.example.test:test-app:/);
+    const second = await handleOpenclawChat(gateway, { message: 'recall', session_key, agent_id });
     expect(second.content[0].text).toBe('remember blue -> recall');
     expect(metadata(second)).toEqual(metadata(first));
-    expect(calls.map((call) => call.key)).toEqual([session_id, session_id]);
-    expect(calls.every((call) => call.bodyKey === session_id && call.agent === 'research')).toBe(
+    expect(calls.map((call) => call.key)).toEqual([session_key, session_key]);
+    expect(calls.every((call) => call.bodyKey === session_key && call.agent === 'research')).toBe(
       true
     );
   });
@@ -133,10 +133,10 @@ describe('sync Gateway conversation continuity', () => {
     async (supplied) => {
       const response = await handleOpenclawChat(
         gateway,
-        { message: 'hello', session_id: supplied },
+        { message: 'hello', session_key: supplied },
         context
       );
-      expect(metadata(response).session_id).toBe(supplied.trim());
+      expect(metadata(response).session_key).toBe(supplied.trim());
       expect(calls[0].key).toBe(supplied.trim());
     }
   );
@@ -147,9 +147,9 @@ describe('sync Gateway conversation continuity', () => {
       handleOpenclawChat(gateway, { message: 'two' }, context),
       handleOpenclawChat(gateway, { message: 'three', agent_id: 'ops' }, context),
     ]);
-    expect(new Set(responses.map((r) => metadata(r).session_id)).size).toBe(3);
+    expect(new Set(responses.map((r) => metadata(r).session_key)).size).toBe(3);
     expect(metadata(responses[2])).toMatchObject({ agent_id: 'ops' });
-    expect(metadata(responses[2]).session_id).toMatch(/^agent:ops:mcp:/);
+    expect(metadata(responses[2]).session_key).toMatch(/^agent:ops:mcp:/);
     expect(calls.find((call) => call.message === 'three').agent).toBe('ops');
     expect(responses.map((r) => r.content[0].text)).toEqual(['one', 'two', 'three']);
   });
@@ -162,8 +162,8 @@ describe('sync Gateway conversation continuity', () => {
 
   it.each(['', '   ', null, 4, 'x'.repeat(257), 'bad\u0000key'])(
     'rejects invalid supplied keys without submitting or allocating a replacement (%s)',
-    async (session_id) => {
-      const response = await handleOpenclawChat(gateway, { message: 'hello', session_id });
+    async (session_key) => {
+      const response = await handleOpenclawChat(gateway, { message: 'hello', session_key });
       expect(response.isError).toBe(true);
       expect(response.structuredContent).toBeUndefined();
       expect(calls).toHaveLength(0);
@@ -186,7 +186,7 @@ describe('sync Gateway conversation continuity', () => {
       const result = await handleOpenclawChat(gateway, { message }, context);
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toMatch(/^Error: /);
-      expect(metadata(result).session_id).toBe(calls[0].key);
+      expect(metadata(result).session_key).toBe(calls[0].key);
       expect(JSON.parse(result.content[1].text)).toEqual(metadata(result));
       expect(calls).toHaveLength(1);
       const followup = await handleOpenclawChat(gateway, {
@@ -209,35 +209,35 @@ describe('async conversation metadata and ownership', () => {
     );
     const data = json(queued);
     expect(queued.structuredContent).toEqual(data);
-    expect(data.session_id).toMatch(/^agent:ops:mcp:mcp.example.test:test-app:/);
+    expect(data.session_key).toMatch(/^agent:ops:mcp:mcp.example.test:test-app:/);
     const completed = await status(data.task_id, id, 'completed');
     expect(json(completed)).toMatchObject({
-      session_id: data.session_id,
+      session_key: data.session_key,
       agent_id: 'ops',
       result: 'async first',
     });
     expect(completed.structuredContent).toEqual(json(completed));
     const listed = await handleOpenclawTaskList(
       gateway,
-      { session_id: data.session_id, agent_id: 'ops' },
+      { session_key: data.session_key, agent_id: 'ops' },
       id
     );
     expect(json(listed).tasks).toHaveLength(1);
-    expect(json(listed).tasks[0].session_id).toBe(data.session_id);
+    expect(json(listed).tasks[0].session_key).toBe(data.session_key);
     expect(listed.structuredContent).toEqual(json(listed));
     const next = json(
       await handleOpenclawChatAsync(
         gateway,
-        { message: 'async second', session_id: data.session_id, agent_id: data.agent_id },
+        { message: 'async second', session_key: data.session_key, agent_id: data.agent_id },
         id,
         context
       )
     );
-    expect(next.session_id).toBe(data.session_id);
+    expect(next.session_key).toBe(data.session_key);
     expect(json(await status(next.task_id, id, 'completed')).result).toBe(
       'async first -> async second'
     );
-    expect(calls.every((c) => c.key === data.session_id && c.bodyKey === data.session_id)).toBe(
+    expect(calls.every((c) => c.key === data.session_key && c.bodyKey === data.session_key)).toBe(
       true
     );
   });
@@ -249,16 +249,16 @@ describe('async conversation metadata and ownership', () => {
     );
     const failed = await status(queued.task_id, id, 'failed');
     expect(failed.isError).toBeUndefined(); // Existing status-tool contract.
-    expect(json(failed)).toMatchObject({ session_id: queued.session_id, status: 'failed' });
+    expect(json(failed)).toMatchObject({ session_key: queued.session_key, status: 'failed' });
     expect(json(failed).error).toBeTruthy();
     expect(calls).toHaveLength(1);
-    expect(calls[0].key).toBe(queued.session_id);
+    expect(calls[0].key).toBe(queued.session_key);
     expect(
-      json(await handleOpenclawTaskList(gateway, { status: 'failed' }, id)).tasks[0].session_id
-    ).toBe(queued.session_id);
+      json(await handleOpenclawTaskList(gateway, { status: 'failed' }, id)).tasks[0].session_key
+    ).toBe(queued.session_key);
     const cancelled = await handleOpenclawTaskCancel(gateway, { task_id: queued.task_id }, id);
     expect(cancelled.isError).toBe(true);
-    expect(metadata(cancelled).session_id).toBe(queued.session_id);
+    expect(metadata(cancelled).session_key).toBe(queued.session_key);
   });
 
   it('exposes the same key while running and rejects running cancellation without losing the result', async () => {
@@ -268,10 +268,12 @@ describe('async conversation metadata and ownership', () => {
     );
     try {
       await vi.waitFor(() => expect(releaseRunning).toBeTypeOf('function'));
-      expect(json(await status(queued.task_id, id, 'running')).session_id).toBe(queued.session_id);
+      expect(json(await status(queued.task_id, id, 'running')).session_key).toBe(
+        queued.session_key
+      );
       const cancelled = await handleOpenclawTaskCancel(gateway, { task_id: queued.task_id }, id);
       expect(cancelled.isError).toBe(true);
-      expect(metadata(cancelled).session_id).toBe(queued.session_id);
+      expect(metadata(cancelled).session_key).toBe(queued.session_key);
       expect(taskManager.get(queued.task_id, id).status).toBe('running');
     } finally {
       releaseRunning?.();
@@ -283,11 +285,11 @@ describe('async conversation metadata and ownership', () => {
 
   it.each(['', null, 'bad\u0000key'])(
     'rejects invalid async keys without queueing or submitting (%s)',
-    async (session_id) => {
+    async (session_key) => {
       const id = owner();
       const response = await handleOpenclawChatAsync(
         gateway,
-        { message: 'hello', session_id },
+        { message: 'hello', session_key },
         id,
         context
       );
@@ -321,19 +323,23 @@ describe('async conversation metadata and ownership', () => {
         await handleOpenclawChatAsync(gateway, { message: 'pending' }, alice, context)
       );
       expect(
-        json(await handleOpenclawTaskStatus(gateway, { task_id: queued.task_id }, alice)).session_id
-      ).toBe(queued.session_id);
+        json(await handleOpenclawTaskStatus(gateway, { task_id: queued.task_id }, alice))
+          .session_key
+      ).toBe(queued.session_key);
       for (const handler of [handleOpenclawTaskStatus, handleOpenclawTaskCancel]) {
         const denied = await handler(gateway, { task_id: queued.task_id }, bob);
         expect(denied.isError).toBe(true);
         expect(denied.structuredContent).toBeUndefined();
-        expect(JSON.stringify(denied)).not.toContain(queued.session_id);
+        expect(JSON.stringify(denied)).not.toContain(queued.session_key);
       }
       expect(
-        json(await handleOpenclawTaskList(gateway, { session_id: queued.session_id }, bob)).tasks
+        json(await handleOpenclawTaskList(gateway, { session_key: queued.session_key }, bob)).tasks
       ).toEqual([]);
       const cancelled = await handleOpenclawTaskCancel(gateway, { task_id: queued.task_id }, alice);
-      expect(json(cancelled)).toMatchObject({ session_id: queued.session_id, status: 'cancelled' });
+      expect(json(cancelled)).toMatchObject({
+        session_key: queued.session_key,
+        status: 'cancelled',
+      });
       expect(cancelled.structuredContent).toEqual(json(cancelled));
       expect(calls).toHaveLength(0);
       taskManager.get(queued.task_id, alice).completedAt = new Date(Date.now() - 7200000);

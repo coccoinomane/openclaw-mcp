@@ -1,12 +1,12 @@
 # Discord destinations
 
-Select agent_id from openclaw_agents, then discover its current Discord channels. Reuse concrete target, guild_id and account_id; replies also need the thread channel_id. No local policies or target aliases are accepted.
+Select agent_id from openclaw_agents, then discover its current Discord channels. Reuse concrete channel_id, server_id and discord_account_id; replies also need thread_id. No destination aliases are accepted.
 
 Use the Discord tools when the user wants an OpenClaw conversation to continue in a Discord thread. Choose an allowed channel for new work, or resume the specified existing thread. New threads include their associated OpenClaw session; do not create another session separately.
 
 Forward a self-contained request faithfully. For a contextual handoff, include the decisions, materials and constraints needed to carry out the assignment. Include known source OpenClaw session keys and conversation links when available. Do not invent source identifiers or require the calling client to have a Discord origin.
 
-A native fork can copy a known OpenClaw session into a new same-agent thread on the connected Gateway. For example, a session_id returned by an earlier MCP chat can supply the source key if it is canonical and agent-qualified (agent:<agent>:...). If a returned key is unqualified, do not invent an agent prefix; use a contextual handoff unless a trusted source provides the canonical key. The client's own Claude or ChatGPT conversation is not an OpenClaw source session. If that is the context to transfer, summarize it in a handoff instead.
+A native fork can copy a known OpenClaw session into a new same-agent thread on the connected Gateway. For example, a session_key returned by an earlier MCP chat can supply the source key if it is canonical and agent-qualified (agent:<agent>:...). If a returned key is unqualified, do not invent an agent prefix; use a contextual handoff unless a trusted source provides the canonical key. The client's own Claude or ChatGPT conversation is not an OpenClaw source session. If that is the context to transfer, summarize it in a handoff instead.
 
 Forks inherit history through the last completed turn. Keep the new assignment separate and include relevant unfinished-turn details. If the user requests a cross-agent fork, explain the same-agent limit before substituting a handoff.
 

@@ -1,3 +1,4 @@
+import { conversationOutput } from './conversation-output.js';
 import { modelParameter, checkModel } from '../../openclaw/models.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { OpenClawGateway } from '../../openclaw/gateway.js';
@@ -16,8 +17,9 @@ import {
 
 export const openclawChatTool: Tool = {
   name: 'openclaw_chat',
+  outputSchema: conversationOutput,
   description:
-    'Send a message to OpenClaw and get a response. Save the returned session_id and agent_id (when present) and reuse them for follow-up turns. Omitting session_id starts a new conversation. The key is returned in structuredContent and an additional text block, including on Gateway errors; errors may follow accepted work, so do not automatically resend.',
+    'Send a message to OpenClaw and get a response. Save the returned session_key and agent_id (when present) and reuse them for follow-up turns. Omitting session_key starts a new conversation. The key is returned in structuredContent and an additional text block, including on Gateway errors; errors may follow accepted work, so do not automatically resend.',
   inputSchema: {
     type: 'object',
     additionalProperties: false,
@@ -27,10 +29,9 @@ export const openclawChatTool: Tool = {
         type: 'string',
         description: 'The message to send to OpenClaw',
       },
-      session_id: {
+      session_key: {
         type: 'string',
-        description:
-          'Gateway conversation key returned by a previous chat. Reuse it unchanged for follow-up turns; omit for a new conversation. Distinct from MCP transport session and task IDs.',
+        description: 'Gateway conversation key from a previous chat; omit for a new conversation.',
       },
       agent_id: { type: 'string', description: 'Configured agent ID from openclaw_agents.' },
     },
@@ -60,8 +61,8 @@ export async function handleOpenclawChat(
   }
 
   let sessionId: string | undefined;
-  if (input.session_id !== undefined) {
-    const sidResult = validateId(input.session_id, 'session_id');
+  if (input.session_key !== undefined) {
+    const sidResult = validateId(input.session_key, 'session_key');
     if (sidResult.valid === false) {
       return errorResponse(sidResult.error);
     }
@@ -73,7 +74,7 @@ export async function handleOpenclawChat(
   try {
     checkModel(input.model);
     if (input.model !== undefined && sessionId !== undefined)
-      throw new Error('model can only be selected when starting a new session; omit session_id');
+      throw new Error('model can only be selected when starting a new session; omit session_key');
     const resolved = await resolveConversation(gateway, input.agent_id, sessionId);
     const { client } = resolved;
     agentId = resolved.agentId;

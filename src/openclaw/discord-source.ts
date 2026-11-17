@@ -5,7 +5,7 @@ export const sourceParameter = {
   minLength: 1,
   maxLength: 1024,
   description:
-    'Include source whenever known. Prefer the full originating conversation URL; otherwise use the declared client name plus session ID, or just the client name. Omit only when none is known. Do not invent missing information. Any client or domain is supported. Displayed visibly in the new-thread caption, including forks, after HTML stripping and formatting sanitization. Never added to agent input, fetched, or used as identity or authority. No automatic clientInfo wiring. Do not add it to the prompt merely for attribution.',
+    'Include known origin: full conversation URL, else client name and session ID, else client name. Omit only if unknown; never invent it. Caption attribution only; do not add it to prompt.',
 };
 
 /** Render untrusted attribution as visible text, keeping only channel tags and raw URLs active. */

@@ -46,6 +46,6 @@ export async function resolveConversation(
   const resolved = await gateway.resolve(selector as string | undefined);
   const sessionAgent = sessionId?.match(/^agent:([^:]+):/i)?.[1];
   if (sessionAgent && sessionAgent.toLowerCase() !== resolved.agentId)
-    throw new Error('agent_id conflicts with the agent in session_id');
+    throw new Error('agent_id conflicts with the agent in session_key');
   return { ...resolved, routingAgentId: resolved.agentId };
 }
