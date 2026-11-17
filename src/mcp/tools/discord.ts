@@ -70,7 +70,7 @@ export const discordTools: Tool[] = [
     outputSchema: discordTurnOutput,
     annotations: { title: 'Ask OpenClaw on Discord', readOnlyHint: false, destructiveHint: false },
     description:
-      'Create a new Discord thread in a destination from openclaw_discord_channels and queue the request. Optionally fork a same-agent session; model overrides only the child. Return the thread mention or discord_url immediately on queued handoff, not answer content. Preserve operation_id on uncertainty; use openclaw_discord_operation for recovery. Use openclaw_discord_reply for existing threads.',
+      'Create a new Discord thread in a destination from openclaw_discord_channels and queue the request. Optionally fork a same-agent session; model overrides only the child. Return the thread mention or discord_url immediately on queued handoff, not answer content. Preserve operation_id on uncertainty; use openclaw_discord_operation for recovery. Use openclaw_discord_reply for existing threads. Forward faithfully with necessary context; omit client-only routing instructions and the server-owned forwarding header.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -110,7 +110,7 @@ export const discordTools: Tool[] = [
       destructiveHint: false,
     },
     description:
-      'Publish a request in an existing public thread from openclaw_discord_threads and queue its canonical agent session. Unlocked archived threads are supported. Return the thread mention or discord_url on queued handoff. Preserve operation_id on uncertainty; use openclaw_discord_operation for recovery. Forks and model overrides are unsupported.',
+      'Publish a request in an existing public thread from openclaw_discord_threads and queue its canonical agent session. Unlocked archived threads are supported. Return the thread mention or discord_url on queued handoff. Preserve operation_id on uncertainty; use openclaw_discord_operation for recovery. Forks and model overrides are unsupported. Forward faithfully with necessary context; omit client-only routing instructions and the server-owned forwarding header.',
     inputSchema: {
       type: 'object',
       properties: {

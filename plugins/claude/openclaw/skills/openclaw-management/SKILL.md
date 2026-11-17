@@ -61,6 +61,6 @@ openclaw_task_status task_id="task_abc123"
 
 ## Agent selection
 
-One MCP deployment connects to one OpenClaw installation; additional installations need separate deployments. Use `openclaw_agents` to discover the configured roster. Pass `agent_id` to chat or async chat when choosing an agent. Generic chat works without Discord. Save the returned `agent_id` and `session_key` for follow-ups; an explicit agent must agree with an agent-qualified session key. Status and cancellation use the task's stored route and retain existing ownership checks.
+One MCP deployment connects to one OpenClaw installation; additional installations need separate deployments. Use `openclaw_agents` to discover the configured roster. Pass `agent_id` to chat or async chat when choosing an agent. Generic chat works without Discord. Save the returned `agent_id` and `session_key` for follow-ups; an explicit agent must agree with an agent-qualified session key. Task calls must reuse the selected agent_id; status and cancellation check it against the stored route and retain ownership checks.
 
 All authenticated clients share access to every configured agent. Selecting an agent does not change caller identity or the operator's Discord forwarding attribution. For Discord work use the packaged coordinator workflow and reuse channel_id, server_id and discord_account_id from destination discovery; replies also require thread_id.

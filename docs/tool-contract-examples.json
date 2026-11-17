@@ -33,12 +33,14 @@
   {
     "name": "openclaw_task_status",
     "arguments": {
+      "agent_id": "main",
       "task_id": "task_example"
     }
   },
   {
     "name": "openclaw_task_list",
     "arguments": {
+      "agent_id": "main",
       "session_key": "agent:main:mcp:server:client:conversation",
       "status": "completed"
     }
@@ -46,6 +48,7 @@
   {
     "name": "openclaw_task_cancel",
     "arguments": {
+      "agent_id": "main",
       "task_id": "task_example"
     }
   },

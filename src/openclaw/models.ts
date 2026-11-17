@@ -7,7 +7,7 @@ export const modelParameter = {
   minLength: 1,
   maxLength: 256,
   description:
-    'Model reference from openclaw_models for the same agent. Omit to keep defaults or inherited fork settings.',
+    'Model reference from openclaw_models for the same agent. New sessions only; persists for that session, not the agent default. Omit to keep defaults or inherited fork settings.',
 };
 export function checkModel(value: unknown): asserts value is string | undefined {
   if (

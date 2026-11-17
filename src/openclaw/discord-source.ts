@@ -5,7 +5,7 @@ export const sourceParameter = {
   minLength: 1,
   maxLength: 1024,
   description:
-    'Known source URL or client/session label, displayed in the thread caption only. Omit if unknown; never invent it.',
+    'Include known origin: full conversation URL, else client name and session ID, else client name. Omit only if unknown; never invent it. Caption attribution only; do not add it to prompt.',
 };
 
 /** Render untrusted attribution as visible text, keeping only channel tags and raw URLs active. */

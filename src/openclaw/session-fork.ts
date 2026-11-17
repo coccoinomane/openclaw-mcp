@@ -5,7 +5,7 @@ export const forkSessionParameter = {
   minLength: 1,
   maxLength: 512,
   description:
-    'Canonical same-agent source key (agent:<agent>:...). Copies completed history; prompt is the new assignment. Omit if unknown.',
+    'Known canonical OpenClaw session_key from this Gateway, same agent. Never prefix an unqualified key or use the client conversation ID; otherwise omit and hand off context. Copies completed history; prompt is the new assignment.',
 };
 
 export function checkForkSource(
