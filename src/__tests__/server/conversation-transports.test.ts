@@ -364,6 +364,8 @@ describe('mandatory agent selection across transports', () => {
           ' research ',
           '../research',
           'a'.repeat(65),
+          'private-value'.repeat(1000),
+          { secret: 'private-value' },
         ]) {
           const methodsBefore = mock.methods.length;
           const result = await client.callTool({
@@ -376,8 +378,10 @@ describe('mandatory agent selection across transports', () => {
               type: 'text',
               text:
                 selector === undefined
-                  ? 'Error: Invalid input: schema validation failed'
-                  : `Error: Invalid agent_id ${JSON.stringify(selector)}. Use a bare agent ID, e.g. "main". Call openclaw_agents to list available agents.`,
+                  ? 'Error: Invalid input for ' +
+                    tool.name +
+                    ': missing required field: agent_id. Check the input schema in tools/list.'
+                  : `Error: Invalid input for ${tool.name}: agent_id must be a bare agent ID, e.g. "main". Call openclaw_agents to list available agents.`,
             },
           ]);
           expect(mock.methods).toHaveLength(methodsBefore);
@@ -402,7 +406,13 @@ describe('mandatory agent selection across transports', () => {
         });
         expect(unrelated.isError).toBe(true);
         expect(unrelated.content).toEqual([
-          { type: 'text', text: 'Error: Invalid input: schema validation failed' },
+          {
+            type: 'text',
+            text:
+              'Error: Invalid input for ' +
+              tool.name +
+              ': unknown field: unexpected. Check the input schema in tools/list.',
+          },
         ]);
         expect(mock.methods).toHaveLength(methodsBefore);
       }
@@ -411,6 +421,62 @@ describe('mandatory agent selection across transports', () => {
         mock.methods.filter((method) => method !== 'connect' && method !== 'agents.list')
       ).toEqual([]);
       expect(await readdir(stateDir)).toEqual([]);
+      const invalidCases = [
+        {
+          name: 'openclaw_discord_threads',
+          arguments: { agent_id: 'research', channel_id: destination.target },
+          details: [
+            'missing required field: guild_id',
+            'missing required field: account_id',
+            'missing required field: target',
+            'unknown field: channel_id',
+          ],
+        },
+        {
+          name: 'openclaw_discord_threads',
+          arguments: {
+            ...destination,
+            agent_id: 'research',
+            archived: 'private-value',
+            limit: 101,
+          },
+          details: ['archived must be boolean', 'limit must be <= 100'],
+        },
+        {
+          name: 'openclaw_chat',
+          arguments: { agent_id: 'research', message: { secret: 'private-value' } },
+          details: ['message must be string'],
+        },
+        {
+          name: 'openclaw_agents',
+          arguments: { unexpected: 'private-value' },
+          details: ['unknown field: unexpected'],
+        },
+        {
+          name: 'openclaw_discord_send',
+          arguments: { ...turn, agent_id: 'research', prompt: { secret: 'private-value' } },
+          details: ['prompt must be string'],
+        },
+        {
+          name: 'openclaw_discord_threads',
+          arguments: { ...destination, agent_id: 'research', ['injected\nprivate-value']: true },
+          details: ['unknown field: [redacted field]'],
+        },
+      ];
+      for (const { name, arguments: args, details } of invalidCases) {
+        const methodsBefore = mock.methods.length;
+        const result = await client.callTool({ name, arguments: args });
+        expect(result.isError).toBe(true);
+        expect(result.structuredContent).toBeUndefined();
+        const message = (result.content[0] as { text: string }).text;
+        expect(message).toContain('Invalid input for ' + name + ':');
+        for (const detail of details) expect(message).toContain(detail);
+        expect(message).not.toContain('private-value');
+        expect(message.length).toBeLessThanOrEqual(2048);
+        expect(mock.methods).toHaveLength(methodsBefore);
+        expect(mock.requests).toHaveLength(0);
+        expect(await readdir(stateDir)).toEqual([]);
+      }
       const roster = await client.callTool({ name: 'openclaw_agents', arguments: {} });
       expect(roster.isError).not.toBe(true);
       const result = await client.callTool({
@@ -553,6 +619,18 @@ describe('conversation metadata across real MCP transports', () => {
       );
       for (const source of ['https://example.com/chat/123', 'Editor session-123', 'Editor'])
         expect(validateAsk({ ...sourceArgs, source }).valid).toBe(true);
+      const invalidThreads = await client.callTool({
+        name: 'openclaw_discord_threads',
+        arguments: { channel_id: channel },
+      });
+      expect(invalidThreads.isError).toBe(true);
+      expect(invalidThreads.content).toEqual([
+        {
+          type: 'text',
+          text: 'Error: Invalid input for openclaw_discord_threads: missing required field: guild_id; missing required field: account_id; missing required field: target; unknown field: channel_id. Check the input schema in tools/list.',
+        },
+      ]);
+      expect(requests).toEqual([]);
       const invalidSource = await client.callTool({
         name: 'openclaw_discord_ask',
         arguments: {
