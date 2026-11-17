@@ -29,7 +29,7 @@ Use the archive from [GitHub Releases](https://github.com/coccoinomane/openclaw-
 
 ```sh
 mkdir openclaw-mcp && cd openclaw-mcp
-tar -xzf /path/to/openclaw-mcp-3.0.0.tar.gz
+tar -xzf /path/to/openclaw-mcp-3.0.1.tar.gz
 npm ci --omit=dev --ignore-scripts
 # Set Gateway credentials and HTTP authentication environment variables first.
 node dist/index.js --transport http
