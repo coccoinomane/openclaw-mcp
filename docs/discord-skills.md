@@ -4,15 +4,15 @@ Enable MCP_DISCORD_ENABLED and configure the [SDK identity](discord-sdk.md), pri
 
 ## Tools
 
-- openclaw_discord_channels: current channels and creation_guilds for the selected agent.
-- openclaw_discord_threads: active or archived public threads; archived results support timestamp pagination.
-- openclaw_discord_ask: new thread, published prompt and queued agent. Optional same-agent fork_from_session, new-session model and display source.
+- openclaw_discord_channels: current channels and creation_servers for the selected agent.
+- openclaw_discord_threads: active or archived public threads; archived results accept before_archive_timestamp and return next_before_archive_timestamp.
+- openclaw_discord_ask: new thread, published prompt and queued agent. Required thread_name; optional same-agent fork_from_session_key, new-session model and display source.
 - openclaw_discord_reply: publish and queue in an existing unlocked public thread.
 - openclaw_discord_send: publish and queue in a text channel.
-- openclaw_discord_create_channel: guild_id, account_id, optional category_id, name, operation_id and authorize_create=true.
+- openclaw_discord_create_channel: server_id, discord_account_id, optional category_id, channel_name, optional channel_topic, operation_id and authorize_create=true.
 - openclaw_discord_operation: read durable status without repeating effects.
 
-Channel/thread operations take concrete target (parent channel ID), guild_id and account_id. Replies also take channel_id (thread ID). Select agent_id first. Direct IDs receive the same checks as discovered destinations.
+Channel/thread operations take concrete channel_id (parent channel ID), server_id and discord_account_id. Replies also take thread_id (thread ID). Select agent_id first. Direct IDs receive the same checks as discovered destinations.
 
 ## Checks
 
@@ -26,6 +26,6 @@ Access does not model inbound routing, runtime ownership, roles, broadcast or AC
 
 Retain an unpredictable operation_id. Identical repeats read existing results; conflicting arguments fail. Unknown creation, publication, fork or run outcomes require inspection, never an automatic retry with a new ID.
 
-Journals retain links and partial effects. Shutdown drains accepted work; crashes never resume it. Preserve journals and session claims through upgrades. Status remains readable for the stored selected agent after binding removal, without authorizing writes.
+Journals retain links and partial effects. Shutdown drains accepted work; crashes never resume it. Preserve journals and session claims through upgrades. Current-version status remains readable for the stored selected agent after binding removal, without authorizing writes. Unversioned or incompatible records fail with OPERATION_SCHEMA_UNSUPPORTED and are never replayed or rewritten. Preserve them for operator reconciliation; do not retry with a new ID.
 
 Source is display text only. A server-owned forwarding header applies to new-thread requests, not replies or agent input. Publication disables mentions and verifies exact message IDs. A queue response is a handoff link, not proof of answer delivery.

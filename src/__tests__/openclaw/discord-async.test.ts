@@ -24,12 +24,11 @@ const target = {
   normalRouting: true,
 };
 const input = {
-  mode: 'new_thread',
-  target: target.channelId,
-  guild_id: guild,
-  account_id: 'bot',
+  channel_id: target.channelId,
+  server_id: guild,
+  discord_account_id: 'bot',
   operation_id: 'async-operation-0001',
-  title: 'Task',
+  thread_name: 'Task',
   prompt: '  exact @everyone <@400000000000000006> 😀\ntrailing  ',
 };
 const source =
@@ -558,7 +557,7 @@ describe('closed request publication', () => {
       const args = {
         ...input,
         source: source,
-        ...(fork ? { fork_from_session: fork } : {}),
+        ...(fork ? { fork_from_session_key: fork } : {}),
       };
       try {
         expect(await handleDiscord(current, 'openclaw_discord_ask', args)).not.toHaveProperty(
@@ -609,7 +608,7 @@ describe('closed request publication', () => {
     const record = JSON.parse(await readFile(join(f.dir, input.operation_id + '.json'), 'utf8'));
     expect(record.fingerprint).toBe(
       createHash('sha256')
-        .update(JSON.stringify([target, input.mode, input.title, undefined, input.prompt]))
+        .update(JSON.stringify([target, 'new_thread', input.thread_name, undefined, input.prompt]))
         .digest('hex')
     );
     expect(await f.make().ask(input)).toMatchObject({ status: 'completed' });
@@ -690,8 +689,8 @@ describe('closed request publication', () => {
       expect(tool.inputSchema.properties).not.toHaveProperty('source');
     const f = await publisherFixture();
     const reply = {
-      target: input.target,
-      channel_id: thread,
+      channel_id: input.channel_id,
+      thread_id: thread,
       operation_id: input.operation_id,
       prompt: input.prompt,
       source: source,

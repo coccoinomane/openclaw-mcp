@@ -24,9 +24,9 @@ const guild = '700000000000000001',
   other = '700000000000000004',
   category = '700000000000000005';
 const args = {
-  target: parent,
-  guild_id: guild,
-  account_id: 'bot',
+  channel_id: parent,
+  server_id: guild,
+  discord_account_id: 'bot',
   agent_id: 'b',
   operation_id: 'agent-first-write-0001',
   prompt: 'hello',
@@ -157,7 +157,7 @@ describe('binding checks on writes', () => {
     const f = await fixture(undefined, true);
     const denied = await handleDiscord(f.service, 'openclaw_discord_reply', {
       ...args,
-      channel_id: parent,
+      thread_id: parent,
     });
     expect(denied.isError).toBe(true);
     expect(JSON.stringify(denied)).toContain('PUBLIC_THREAD_REQUIRED');
@@ -200,9 +200,8 @@ describe('binding checks on writes', () => {
       const result = await f.service.ask({
         ...args,
         agent_id,
-        mode: 'new_thread',
-        title: 'Task',
-        fork_from_session: 'agent:' + agent_id + ':mcp:source',
+        thread_name: 'Task',
+        fork_from_session_key: 'agent:' + agent_id + ':mcp:source',
         source: 'Editor',
       });
       expect(result.status).toBe('queued');
@@ -213,7 +212,7 @@ describe('binding checks on writes', () => {
       const reply = await f.service.reply({
         ...args,
         agent_id,
-        channel_id: thread,
+        thread_id: thread,
         operation_id: 'agent-first-reply-0001',
       });
       expect(reply.status).toBe('queued');
@@ -230,13 +229,12 @@ describe('binding checks on writes', () => {
   );
   it('denies direct other-channel IDs and cross-agent forks before effects', async () => {
     const f = await fixture();
-    await expect(f.service.send({ ...args, target: other })).rejects.toThrow('BINDING');
+    await expect(f.service.send({ ...args, channel_id: other })).rejects.toThrow('BINDING');
     await expect(
       f.service.ask({
         ...args,
-        mode: 'new_thread',
-        title: 'Task',
-        fork_from_session: 'agent:a:mcp:source',
+        thread_name: 'Task',
+        fork_from_session_key: 'agent:a:mcp:source',
       })
     ).rejects.toThrow();
     expect(f.create).not.toHaveBeenCalled();
@@ -245,7 +243,7 @@ describe('binding checks on writes', () => {
   it('checks ancestry and permissions, even for inherited thread access', async () => {
     const f = await fixture();
     f.permissions.splice(0);
-    const result = await f.service.reply({ ...args, channel_id: thread });
+    const result = await f.service.reply({ ...args, thread_id: thread });
     expect(result.status).toBe('run_failed');
     expect(f.publish).not.toHaveBeenCalled();
     const g = await fixture();
@@ -255,7 +253,7 @@ describe('binding checks on writes', () => {
       if (r.channelId === thread) v.channel.parent_id = other;
       return v;
     });
-    expect((await g.service.reply({ ...args, channel_id: thread })).status).toBe('run_failed');
+    expect((await g.service.reply({ ...args, thread_id: thread })).status).toBe('run_failed');
     expect(g.publish).not.toHaveBeenCalled();
   });
   it('rechecks removal after thread creation and never publishes or runs', async () => {
@@ -264,9 +262,9 @@ describe('binding checks on writes', () => {
       bindings = [];
       return { thread: { id: thread } };
     });
-    const r = await f.service.ask({ ...args, mode: 'new_thread', title: 'Task' });
+    const r = await f.service.ask({ ...args, thread_name: 'Task' });
     expect(r.status).toBe('run_failed');
-    expect(r.channel_id).toBe(thread);
+    expect(r.thread_id).toBe(thread);
     expect(f.publish).not.toHaveBeenCalled();
     expect(f.run).not.toHaveBeenCalled();
   });
@@ -276,7 +274,7 @@ describe('binding checks on writes', () => {
       await sent(other);
       bindings = [];
     });
-    expect((await f.service.reply({ ...args, channel_id: thread })).status).toBe('queued');
+    expect((await f.service.reply({ ...args, thread_id: thread })).status).toBe('queued');
     await f.service.drain();
     expect(f.run).not.toHaveBeenCalled();
     expect(await f.service.status(args.operation_id, { agent_id: 'b' })).toMatchObject({
@@ -287,7 +285,7 @@ describe('binding checks on writes', () => {
   it('preserves idempotency and uncertain outcomes through restart', async () => {
     const f = await fixture();
     f.create.mockRejectedValue(new DiscordError('GATEWAY_OUTCOME_UNKNOWN', true));
-    const input = { ...args, mode: 'new_thread', title: 'Task' };
+    const input = { ...args, thread_name: 'Task' };
     const first = await f.service.ask(input);
     expect(first.status).toBe('creation_unknown');
     expect(await f.service.ask(input)).toEqual(first);
@@ -315,7 +313,7 @@ describe('binding checks on writes', () => {
     async (mode) => {
       const f = await fixture();
       f.run.mockRejectedValue(new DiscordError('SDK_OUTCOME_UNKNOWN', true));
-      const input = mode === 'reply' ? { ...args, channel_id: thread } : args;
+      const input = mode === 'reply' ? { ...args, thread_id: thread } : args;
       expect((await f.service[mode](input)).status).toBe('queued');
       await f.service.drain();
       const before = await f.service.status(args.operation_id, { agent_id: 'b' });
@@ -363,10 +361,10 @@ describe('binding checks on writes', () => {
     const f = await fixture();
     const input = {
       agent_id: 'b',
-      guild_id: guild,
-      account_id: 'bot',
+      server_id: guild,
+      discord_account_id: 'bot',
       operation_id: 'agent-first-create-001',
-      name: 'new',
+      channel_name: 'new',
       authorize_create: true,
     };
     await expect(f.service.createChannel(input)).rejects.toThrow('GUILD_BINDING');
@@ -376,7 +374,7 @@ describe('binding checks on writes', () => {
     expect(await f.service.createChannel({ ...input, agent_id: 'a' })).toEqual(created);
     expect(f.createChannel).toHaveBeenCalledOnce();
     await expect(
-      f.service.createChannel({ ...input, agent_id: 'a', name: 'different' })
+      f.service.createChannel({ ...input, agent_id: 'a', channel_name: 'different' })
     ).rejects.toThrow('CONFLICT');
   });
   it('denies unsupported conditions without effects', async () => {
@@ -387,7 +385,7 @@ describe('binding checks on writes', () => {
         match: { channel: 'discord', accountId: 'bot', guildId: guild, roles: ['role'] },
       },
     ];
-    await expect(f.service.reply({ ...args, channel_id: thread })).rejects.toThrow('BINDING');
+    await expect(f.service.reply({ ...args, thread_id: thread })).rejects.toThrow('BINDING');
     expect(f.publish).not.toHaveBeenCalled();
   });
 });

@@ -157,7 +157,7 @@ describe('selected agent Discord union', () => {
       expect(selectedBindings(config, 'a')).toEqual([
         { agentId: 'a', accountId: 'default', guildId: guild },
       ]);
-      expect((await a.channels('a')).channels.map((c) => c.account_id)).toEqual([
+      expect((await a.channels('a')).channels.map((c) => c.discord_account_id)).toEqual([
         'default',
         'default',
       ]);
@@ -205,13 +205,13 @@ describe('selected agent Discord union', () => {
   it('verifies direct IDs and denies forged guild/account and thread-specific binding', async () => {
     const { access: a } = access();
     await expect(
-      a.target({ agent_id: 'b', target: channel, guild_id: guild, account_id: 'bot' })
+      a.target({ agent_id: 'b', channel_id: channel, server_id: guild, discord_account_id: 'bot' })
     ).resolves.toMatchObject(target('b'));
     await expect(
-      a.target({ agent_id: 'b', target: other, guild_id: guild, account_id: 'bot' })
+      a.target({ agent_id: 'b', channel_id: other, server_id: guild, discord_account_id: 'bot' })
     ).rejects.toThrow('BINDING');
     await expect(
-      a.target({ agent_id: 'b', target: channel, guild_id: other, account_id: 'bot' })
+      a.target({ agent_id: 'b', channel_id: channel, server_id: other, discord_account_id: 'bot' })
     ).rejects.toThrow('UNVERIFIED');
     await expect(a.assert({ ...target(), accountId: 'else' })).rejects.toThrow('BINDING');
     config.bindings = [
@@ -222,7 +222,7 @@ describe('selected agent Discord union', () => {
     ];
     expect((await a.channels('b')).channels).toEqual([]);
     await expect(
-      a.target({ agent_id: 'b', target: thread, guild_id: guild, account_id: 'bot' })
+      a.target({ agent_id: 'b', channel_id: thread, server_id: guild, discord_account_id: 'bot' })
     ).rejects.toThrow('PARENT');
   });
   it('reloads binding removals and ignores malformed other-agent bindings', async () => {

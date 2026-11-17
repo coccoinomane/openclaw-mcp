@@ -16,51 +16,52 @@ const selectors = {
   agent_id: {
     type: 'string',
     pattern: '^[a-z0-9][a-z0-9_-]{0,63}$',
-    description:
-      'Selected Gateway agent. Access is the union of this agent’s Discord server/channel bindings.',
+    description: 'Agent ID from openclaw_agents.',
   },
 };
 const destination = {
-  guild_id: { type: 'string', pattern: '^[1-9][0-9]{16,19}$' },
-  account_id: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' },
+  server_id: { type: 'string', pattern: '^[1-9][0-9]{16,19}$' },
+  discord_account_id: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' },
 };
-const target = {
+const channel_id = {
   type: 'string',
   pattern: '^[1-9][0-9]{16,19}$',
-  description: 'Concrete parent channel ID; verified even when supplied without discovery.',
+  description: 'Parent or text channel ID from openclaw_discord_channels.',
 };
 const operation = {
   type: 'string',
   minLength: 16,
   maxLength: 100,
   pattern: '^[a-zA-Z0-9_-]+$',
-  description:
-    'Unique unpredictable operation ID. Reuse with identical arguments after disconnect; never substitute a new ID blindly.',
+  description: 'Unique operation ID; reuse with identical arguments after uncertainty.',
 };
 export const discordTools: Tool[] = [
   {
     name: 'openclaw_discord_channels',
     outputSchema: discordChannelsOutput,
     description:
-      "List verified Discord channels bound to the selected agent. Use their names, topics and categories to choose the most suitable channel for a new thread about the user's request; ask for clarification only when the destination is ambiguous. Requires service opt-in.",
+      'List verified destinations for the selected agent. Reuse channel_id, server_id and discord_account_id in Discord tools; creation_servers lists servers eligible for channel creation.',
     inputSchema: { type: 'object', properties: { ...selectors }, additionalProperties: false },
   },
   {
     name: 'openclaw_discord_threads',
     outputSchema: discordThreadsOutput,
     description:
-      'List active threads or archived public threads under an allowed channel. Only archived results support pagination.',
+      'List threads under a channel from openclaw_discord_channels. Reuse thread_id with openclaw_discord_reply. Archived public threads support timestamp pagination.',
     inputSchema: {
       type: 'object',
       properties: {
         ...selectors,
-        target,
+        channel_id,
         ...destination,
         archived: { type: 'boolean' },
-        before: { type: 'string', description: 'Archive timestamp cursor, not a snowflake.' },
+        before_archive_timestamp: {
+          type: 'string',
+          description: 'Archive timestamp cursor, not a snowflake.',
+        },
         limit: { type: 'integer', minimum: 1, maximum: 100 },
       },
-      required: ['guild_id', 'account_id', 'target'],
+      required: ['server_id', 'discord_account_id', 'channel_id'],
       additionalProperties: false,
     },
   },
@@ -69,28 +70,34 @@ export const discordTools: Tool[] = [
     outputSchema: discordTurnOutput,
     annotations: { title: 'Ask OpenClaw on Discord', readOnlyHint: false, destructiveHint: false },
     description:
-      'Create a NEW ordinary Discord thread and its OpenClaw session, optionally forking a same-agent source with fork_from_session. The separate prompt is the new assignment; fork history is not republished. Without model, a fork retains inherited model settings; an explicit model overrides them for the child only. Publish the original request as a bot with an optional server-configured forwarding header, and return a queued Continue on Discord link, not answer content. Does not wait for generation. Forward self-contained requests faithfully; for delegated work, include the context needed to carry out the user’s intent without adding unrelated requirements. The submitted prompt is published on Discord; the server adds any configured forwarding header, never the client. On successful handoff, return the destination in the originating conversation using a native thread mention on Discord or the returned link elsewhere; report errors or partial/unknown outcomes instead of implying success. Use openclaw_discord_operation only when eventual status or recovery is needed, not before handing off. Select an allowed channel using openclaw_discord_channels when unspecified; ask if ambiguous. Use openclaw_discord_reply for an existing public thread. Preserve operation ID; inspect partial/unknown outcomes before further action.',
+      'Create a new Discord thread in a destination from openclaw_discord_channels and queue the request. Optionally fork a same-agent session; model overrides only the child. Return the thread mention or discord_url immediately on queued handoff, not answer content. Preserve operation_id on uncertainty; use openclaw_discord_operation for recovery. Use openclaw_discord_reply for existing threads.',
     inputSchema: {
       type: 'object',
       properties: {
         ...selectors,
-        target,
+        channel_id,
         ...destination,
         operation_id: operation,
-        mode: { type: 'string', enum: ['new_thread'] },
         model: modelParameter,
-        fork_from_session: forkSessionParameter,
+        fork_from_session_key: forkSessionParameter,
         source: sourceParameter,
-        title: { type: 'string', minLength: 1, maxLength: 100 },
+        thread_name: { type: 'string', minLength: 1, maxLength: 100 },
         prompt: {
           type: 'string',
           minLength: 1,
           maxLength: 1048576,
           description:
-            'The request or self-contained delegated assignment to publish and execute. Preserve the user’s intent; include necessary context and available source session/link references for handoffs. Omit instructions addressed only to the client about choosing a destination. The server adds any configured forwarding header.',
+            'Request to publish and execute, with the context needed for delegated work.',
         },
       },
-      required: ['guild_id', 'account_id', 'target', 'operation_id', 'mode', 'title', 'prompt'],
+      required: [
+        'server_id',
+        'discord_account_id',
+        'channel_id',
+        'operation_id',
+        'thread_name',
+        'prompt',
+      ],
       additionalProperties: false,
     },
   },
@@ -103,28 +110,34 @@ export const discordTools: Tool[] = [
       destructiveHint: false,
     },
     description:
-      'Publish the exact request as a bot in an EXISTING public Discord thread and queue an ordinary agent turn in the same canonical session. Active and archived unlocked threads are supported; sending auto-unarchives. Uses the selected agent’s canonical session; Gateway owns run admission and queueing. Forking, model overrides and runtime rebindings are unsupported on this existing-thread tool. Do not supply a destination session key; it is constructed from the selected agent and verified thread. Forward faithfully or include necessary context for delegated work. Source session references may appear in the prompt. Return a native thread mention on Discord or the returned link elsewhere on queued handoff, without polling for the answer; report denied, partial or unknown outcomes honestly. Reuse the operation ID and identical arguments after a disconnect; use openclaw_discord_operation for recovery. Never retry uncertain writes with a new ID.',
+      'Publish a request in an existing public thread from openclaw_discord_threads and queue its canonical agent session. Unlocked archived threads are supported. Return the thread mention or discord_url on queued handoff. Preserve operation_id on uncertainty; use openclaw_discord_operation for recovery. Forks and model overrides are unsupported.',
     inputSchema: {
       type: 'object',
       properties: {
         ...selectors,
-        target,
+        channel_id,
         ...destination,
-        channel_id: {
+        thread_id: {
           type: 'string',
           pattern: '^[1-9][0-9]{16,19}$',
-          description: 'Existing public thread ID under the selected target parent.',
+          description: 'Public thread ID from openclaw_discord_threads.',
         },
         operation_id: operation,
         prompt: {
           type: 'string',
           minLength: 1,
           maxLength: 1048576,
-          description:
-            'Request or contextual handoff to publish and execute in this thread, preserving the user’s intent and including source references when available.',
+          description: 'Request to publish and execute in this thread.',
         },
       },
-      required: ['guild_id', 'account_id', 'target', 'channel_id', 'operation_id', 'prompt'],
+      required: [
+        'server_id',
+        'discord_account_id',
+        'channel_id',
+        'thread_id',
+        'operation_id',
+        'prompt',
+      ],
       additionalProperties: false,
     },
   },
@@ -132,17 +145,17 @@ export const discordTools: Tool[] = [
     name: 'openclaw_discord_send',
     outputSchema: discordTurnOutput,
     description:
-      'Publish a request in a bound text channel and queue the selected agent. Use a stable operation ID; never replay uncertain effects with a new ID.',
+      'Publish a request in a text channel from openclaw_discord_channels and queue the selected agent. Preserve operation_id on uncertainty; use openclaw_discord_operation for recovery.',
     inputSchema: {
       type: 'object',
       properties: {
         ...selectors,
         ...destination,
-        target,
+        channel_id,
         operation_id: operation,
         prompt: { type: 'string', minLength: 1, maxLength: 1048576 },
       },
-      required: ['guild_id', 'account_id', 'target', 'operation_id', 'prompt'],
+      required: ['server_id', 'discord_account_id', 'channel_id', 'operation_id', 'prompt'],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false },
@@ -163,7 +176,7 @@ export const discordTools: Tool[] = [
     name: 'openclaw_discord_create_channel',
     outputSchema: discordCreationOutput,
     description:
-      'Create a text channel in a server bound to the selected agent, optionally under a category. Requires channel creation opt-in, verified bot ManageChannels and explicit authorization. Keep operation ID on uncertainty.',
+      'Create a text channel in a creation_servers destination from openclaw_discord_channels. Requires creation opt-in, bot ManageChannels and explicit authorization. Preserve operation_id on uncertainty.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -171,11 +184,17 @@ export const discordTools: Tool[] = [
         ...destination,
         category_id: { type: 'string', pattern: '^[1-9][0-9]{16,19}$' },
         operation_id: operation,
-        name: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,99}$' },
-        topic: { type: 'string', maxLength: 1024 },
+        channel_name: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,99}$' },
+        channel_topic: { type: 'string', maxLength: 1024 },
         authorize_create: { type: 'boolean', const: true },
       },
-      required: ['guild_id', 'account_id', 'operation_id', 'name', 'authorize_create'],
+      required: [
+        'server_id',
+        'discord_account_id',
+        'operation_id',
+        'channel_name',
+        'authorize_create',
+      ],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },

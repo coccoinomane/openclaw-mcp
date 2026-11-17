@@ -18,8 +18,8 @@ const policy: ChannelDestination = {
 };
 const input = {
   operation_id: 'create-operation-001',
-  name: 'new-project',
-  topic: 'Project notes',
+  channel_name: 'new-project',
+  channel_topic: 'Project notes',
   authorize_create: true,
 };
 const dirs: string[] = [];
@@ -57,14 +57,14 @@ describe('explicit channel creation', () => {
     const result = await f.creation.create(input, policy);
     expect(result).toMatchObject({
       status: 'completed',
-      target: channel,
+      channel_id: channel,
     });
     expect(result.session_key).toBeUndefined();
     expect(f.inspect.mock.calls.map((c) => c[1])).toEqual([category, channel]);
     const restarted = new ChannelCreation(f.dir, f.invoke, f.inspect, async () => {});
     expect(await restarted.create(input, policy)).toEqual(result);
     expect(f.invoke).toHaveBeenCalledTimes(1);
-    await expect(restarted.create({ ...input, name: 'different' }, policy)).rejects.toThrow(
+    await expect(restarted.create({ ...input, channel_name: 'different' }, policy)).rejects.toThrow(
       'OPERATION_CONFLICT'
     );
   });
@@ -73,7 +73,7 @@ describe('explicit channel creation', () => {
     await Promise.allSettled([f.creation.create(input, policy), f.creation.create(input, policy)]);
     expect(f.invoke).toHaveBeenCalledTimes(1);
   });
-  it.each([{ authorize_create: false }, { name: '--bad' }, { operation_id: '../escape' }])(
+  it.each([{ authorize_create: false }, { channel_name: '--bad' }, { operation_id: '../escape' }])(
     'rejects unapproved input %j before effects',
     async (invalid) => {
       const f = await fixture();

@@ -1,6 +1,6 @@
 import { fixtureAccess, fixturePermissions } from '../discord-fixture.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
@@ -130,6 +130,8 @@ async function fixture() {
   });
   return {
     service,
+    invokeThread,
+    agent,
     channels,
     threads,
     invoke,
@@ -146,24 +148,96 @@ async function fixture() {
   };
 }
 const ask = {
-  target: target.channelId,
-  guild_id: guild,
-  account_id: 'bot',
-  mode: 'new_thread',
-  title: 'Task',
+  channel_id: target.channelId,
+  server_id: guild,
+  discord_account_id: 'bot',
+  thread_name: 'Task',
   prompt: 'Exact request',
   operation_id: 'schema-operation-001',
 };
 const creation = {
-  guild_id: guild,
-  account_id: 'bot',
+  server_id: guild,
+  discord_account_id: 'bot',
   category_id: category,
-  name: 'created',
+  channel_name: 'created',
   authorize_create: true,
   operation_id: 'schema-creation-001',
 };
 
 describe('Discord output contracts', () => {
+  it('chains discovered routes into ask, reply, send and channel creation', async () => {
+    const f = await fixture();
+    const discovered = (await checked(f.service, 'channels')).channels as any[];
+    const { agent_id, server_id, discord_account_id, channel_id } = discovered[0];
+    const route = { agent_id, server_id, discord_account_id, channel_id };
+    expect(discovered[0]).not.toHaveProperty('target');
+    const listing = await checked(f.service, 'threads', route);
+    expect(listing).toMatchObject(route);
+    const { thread_id } = (listing.threads as any[])[0];
+    const createdThread = await checked(f.service, 'ask', {
+      ...route,
+      thread_name: 'Task',
+      prompt: 'Help',
+      operation_id: 'chain-ask-operation-01',
+    });
+    expect(createdThread).toMatchObject({ ...route, thread_id });
+    await f.service.drain();
+    const reply = await checked(f.service, 'reply', {
+      ...route,
+      thread_id,
+      prompt: 'Continue',
+      operation_id: 'chain-reply-operation-01',
+    });
+    expect(reply).toMatchObject({ ...route, thread_id });
+    await f.service.drain();
+    const sent = await checked(f.service, 'send', {
+      ...route,
+      prompt: 'Channel request',
+      operation_id: 'chain-send-operation-01',
+    });
+    expect(sent).toMatchObject(route);
+    expect(sent).not.toHaveProperty('thread_id');
+    expect(sent).not.toHaveProperty('target');
+    const createdChannel = await checked(f.service, 'create_channel', creation);
+    expect(createdChannel.channel_id).toBe(created);
+    expect(createdChannel).not.toHaveProperty('thread_id');
+    expect(createdChannel).not.toHaveProperty('target');
+  });
+
+  it.each(['ask', 'create_channel'])(
+    'rejects old %s journals without replay or rewriting',
+    async (name) => {
+      const f = await fixture();
+      const input = name === 'ask' ? ask : creation;
+      await checked(f.service, name, input);
+      await f.service.drain();
+      const path = join(f.stateDir, input.operation_id + '.json');
+      const record = JSON.parse(await readFile(path, 'utf8'));
+      expect(record.schema_version).toBe(2);
+      for (const version of [undefined, 1, 99]) {
+        const old = { ...record, schema_version: version };
+        const raw = JSON.stringify(old);
+        await writeFile(path, raw);
+        f.invoke.mockClear();
+        f.invokeThread.mockClear();
+        f.agent.run.mockClear();
+        const status = await handleDiscord(f.service, 'openclaw_discord_operation', {
+          operation_id: input.operation_id,
+        });
+        const replay = await handleDiscord(f.service, 'openclaw_discord_' + name, input);
+        for (const result of [status, replay]) {
+          expect(result.isError).toBe(true);
+          expect(result.structuredContent).toMatchObject({
+            error_code: 'OPERATION_SCHEMA_UNSUPPORTED',
+            retry_safe: false,
+          });
+        }
+        expect(f.invoke).not.toHaveBeenCalled();
+        expect(await readFile(path, 'utf8')).toBe(raw);
+      }
+    }
+  );
+
   it('validates live channels output', async () => {
     const f = await fixture();
     expect((await checked(f.service, 'channels')).channels).toHaveLength(1);
@@ -171,32 +245,37 @@ describe('Discord output contracts', () => {
   it('validates active, archived, empty and sparse thread payloads', async () => {
     const f = await fixture();
     expect(
-      (await checked(f.service, 'threads', { target: parent, guild_id: guild, account_id: 'bot' }))
-        .pagination
+      (
+        await checked(f.service, 'threads', {
+          channel_id: parent,
+          server_id: guild,
+          discord_account_id: 'bot',
+        })
+      ).pagination
     ).toBe('none');
     f.more();
     const archived = await checked(f.service, 'threads', {
-      target: target.channelId,
-      guild_id: guild,
-      account_id: 'bot',
+      channel_id: target.channelId,
+      server_id: guild,
+      discord_account_id: 'bot',
       archived: true,
       limit: 1,
     });
-    expect(archived.next_before).toBe('2026-11-01T00:00:00Z');
+    expect(archived.next_before_archive_timestamp).toBe('2026-11-01T00:00:00Z');
     delete f.threads[0].name;
     delete f.threads[0].thread_metadata;
     await checked(f.service, 'threads', {
-      target: target.channelId,
-      guild_id: guild,
-      account_id: 'bot',
+      channel_id: target.channelId,
+      server_id: guild,
+      discord_account_id: 'bot',
       archived: true,
     });
     f.threads[0].name = null;
     f.threads[0].thread_metadata = { archived: 'upstream-value', archive_timestamp: 42 };
     const malformed = await handleDiscord(f.service, 'openclaw_discord_threads', {
-      target: target.channelId,
-      guild_id: guild,
-      account_id: 'bot',
+      channel_id: target.channelId,
+      server_id: guild,
+      discord_account_id: 'bot',
       archived: true,
     });
     expect(validators.get('openclaw_discord_threads')!(malformed.structuredContent).valid).toBe(
@@ -204,8 +283,13 @@ describe('Discord output contracts', () => {
     );
     f.threads.splice(0);
     expect(
-      (await checked(f.service, 'threads', { target: parent, guild_id: guild, account_id: 'bot' }))
-        .threads
+      (
+        await checked(f.service, 'threads', {
+          channel_id: parent,
+          server_id: guild,
+          discord_account_id: 'bot',
+        })
+      ).threads
     ).toEqual([]);
   });
   it.each(['ask', 'reply'])(
@@ -216,10 +300,10 @@ describe('Discord output contracts', () => {
         name === 'ask'
           ? ask
           : {
-              target: target.channelId,
-              guild_id: guild,
-              account_id: 'bot',
-              channel_id: thread,
+              channel_id: target.channelId,
+              server_id: guild,
+              discord_account_id: 'bot',
+              thread_id: thread,
               prompt: ask.prompt,
               operation_id: ask.operation_id,
             };
@@ -231,7 +315,7 @@ describe('Discord output contracts', () => {
       valid(name, completed);
       await writeFile(
         join(f.stateDir, input.operation_id + '.json'),
-        JSON.stringify({ ...queued, owner: 'old-process', status: 'running' })
+        JSON.stringify({ ...queued, schema_version: 2, owner: 'old-process', status: 'running' })
       );
       const interrupted = await checked(f.service, 'operation', {
         operation_id: input.operation_id,
@@ -251,10 +335,10 @@ describe('Discord output contracts', () => {
         name === 'ask'
           ? ask
           : {
-              target: target.channelId,
-              guild_id: guild,
-              account_id: 'bot',
-              channel_id: thread,
+              channel_id: target.channelId,
+              server_id: guild,
+              discord_account_id: 'bot',
+              thread_id: thread,
               prompt: ask.prompt,
               operation_id: ask.operation_id,
             };
@@ -263,7 +347,7 @@ describe('Discord output contracts', () => {
         status: 'run_failed',
         error_code: 'BINDING_ACCESS_DENIED',
       });
-      expect(failed.channel_id).toBeUndefined();
+      expect(failed.thread_id).toBeUndefined();
       expect(failed.session_key).toBeUndefined();
       valid('operation', failed);
     }
@@ -327,13 +411,19 @@ describe('Discord output contracts', () => {
         false
       );
     }
-    valid('channels', { channels: [], creation_guilds: [], future_metadata: 'allowed' });
+    expect(
+      validators.get('openclaw_discord_channels')!({
+        channels: [],
+        creation_servers: [],
+        target: 'old',
+      }).valid
+    ).toBe(false);
     for (const status of ['creating', 'created', 'running']) {
       const turn = {
         operation_id: ask.operation_id,
-        target: target.channelId,
-        guild_id: guild,
-        account_id: 'bot',
+        channel_id: target.channelId,
+        server_id: guild,
+        discord_account_id: 'bot',
         status,
         retry_safe: false,
       };
@@ -343,8 +433,8 @@ describe('Discord output contracts', () => {
     }
     const creating = {
       kind: 'channel_create',
-      guild_id: guild,
-      account_id: 'bot',
+      server_id: guild,
+      discord_account_id: 'bot',
       category_id: category,
       operation_id: creation.operation_id,
       status: 'creating',
@@ -353,7 +443,7 @@ describe('Discord output contracts', () => {
     valid('create_channel', creating);
     valid('operation', creating);
     expect(
-      validators.get('openclaw_discord_channels')!({ channels: [{}], creation_guilds: [] }).valid
+      validators.get('openclaw_discord_channels')!({ channels: [{}], creation_servers: [] }).valid
     ).toBe(false);
     expect(
       validators.get('openclaw_discord_threads')!({
@@ -366,9 +456,9 @@ describe('Discord output contracts', () => {
       expect(
         validators.get('openclaw_discord_' + name)!({
           operation_id: ask.operation_id,
-          target: target.channelId,
-          guild_id: guild,
-          account_id: 'bot',
+          channel_id: target.channelId,
+          server_id: guild,
+          discord_account_id: 'bot',
           status: 'completed',
           retry_safe: true,
         }).valid

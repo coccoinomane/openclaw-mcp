@@ -304,9 +304,9 @@ describe('mandatory agent selection across transports', () => {
       cleanups.push(() => client.close());
       const { tools } = await client.listTools();
       const destination = {
-        guild_id: '400000000000000001',
-        account_id: 'bot',
-        target: '400000000000000002',
+        server_id: '400000000000000001',
+        discord_account_id: 'bot',
+        channel_id: '400000000000000002',
       };
       const turn = {
         ...destination,
@@ -323,15 +323,15 @@ describe('mandatory agent selection across transports', () => {
         openclaw_models: {},
         openclaw_discord_channels: {},
         openclaw_discord_threads: destination,
-        openclaw_discord_ask: { ...turn, mode: 'new_thread', title: 'Task' },
-        openclaw_discord_reply: { ...turn, channel_id: '400000000000000003' },
+        openclaw_discord_ask: { ...turn, thread_name: 'Task' },
+        openclaw_discord_reply: { ...turn, thread_id: '400000000000000003' },
         openclaw_discord_send: turn,
         openclaw_discord_operation: { operation_id: turn.operation_id },
         openclaw_discord_create_channel: {
-          guild_id: destination.guild_id,
-          account_id: 'bot',
+          server_id: destination.server_id,
+          discord_account_id: 'bot',
           operation_id: turn.operation_id,
-          name: 'new-channel',
+          channel_name: 'new-channel',
           authorize_create: true,
         },
       };
@@ -424,12 +424,12 @@ describe('mandatory agent selection across transports', () => {
       const invalidCases = [
         {
           name: 'openclaw_discord_threads',
-          arguments: { agent_id: 'research', channel_id: destination.target },
+          arguments: { agent_id: 'research', thread_id: destination.channel_id },
           details: [
-            'missing required field: guild_id',
-            'missing required field: account_id',
-            'missing required field: target',
-            'unknown field: channel_id',
+            'missing required field: server_id',
+            'missing required field: discord_account_id',
+            'missing required field: channel_id',
+            'unknown field: thread_id',
           ],
         },
         {
@@ -559,13 +559,19 @@ describe('conversation metadata across real MCP transports', () => {
           })
         );
       } else {
-        const base = await httpBridge(url, false, env);
+        const base = await httpBridge(url, transport === 'modern', env);
         if (transport === 'modern') {
           client = new ModernClient(
             { name: 'discord-modern', version: '1' },
             { versionNegotiation: { mode: { pin: '2026-07-28' } } }
           );
-          await client.connect(new ModernTransport(new URL(base + '/mcp')));
+          await client.connect(
+            new ModernTransport(new URL(base + '/mcp'), {
+              requestInit: {
+                headers: { Authorization: 'Bearer ' + (await mintToken(base)) },
+              },
+            })
+          );
         } else client = await connectHttp(base, 'discord-read', transport);
       }
       cleanups.push(() => client.close());
@@ -578,13 +584,20 @@ describe('conversation metadata across real MCP transports', () => {
       }
       expect(
         listing.tools
-          .filter((t) => !t.name.startsWith('openclaw_discord_') && t.name !== 'openclaw_agents')
+          .filter((t) => ['openclaw_status', 'openclaw_models'].includes(t.name))
           .every((t) => t.outputSchema === undefined)
       ).toBe(true);
       expect(
         listing.tools.find((t: any) => t.name === 'openclaw_discord_reply')?.inputSchema
       ).toMatchObject({
-        required: ['guild_id', 'account_id', 'target', 'channel_id', 'operation_id', 'prompt'],
+        required: [
+          'server_id',
+          'discord_account_id',
+          'channel_id',
+          'thread_id',
+          'operation_id',
+          'prompt',
+        ],
         additionalProperties: false,
       });
       const askSchema = listing.tools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema;
@@ -602,11 +615,10 @@ describe('conversation metadata across real MCP transports', () => {
         discordTools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema
       );
       const sourceArgs = {
-        target: channel,
-        guild_id: guild,
-        account_id: 'bot',
-        mode: 'new_thread',
-        title: 'Task',
+        channel_id: channel,
+        server_id: guild,
+        discord_account_id: 'bot',
+        thread_name: 'Task',
         prompt: 'Help',
         operation_id: 'origin-schema-test-01',
         source:
@@ -621,15 +633,51 @@ describe('conversation metadata across real MCP transports', () => {
         expect(validateAsk({ ...sourceArgs, source }).valid).toBe(true);
       const invalidThreads = await client.callTool({
         name: 'openclaw_discord_threads',
-        arguments: { channel_id: channel },
+        arguments: { thread_id: channel },
       });
       expect(invalidThreads.isError).toBe(true);
       expect(invalidThreads.content).toEqual([
         {
           type: 'text',
-          text: 'Error: Invalid input for openclaw_discord_threads: missing required field: guild_id; missing required field: account_id; missing required field: target; unknown field: channel_id. Check the input schema in tools/list.',
+          text: 'Error: Invalid input for openclaw_discord_threads: missing required field: server_id; missing required field: discord_account_id; missing required field: channel_id; unknown field: thread_id. Check the input schema in tools/list.',
         },
       ]);
+      expect(requests).toEqual([]);
+      for (const [name, args, field] of [
+        ['openclaw_chat', { message: 'Help', session_id: 'old-key' }, 'session_id'],
+        ['openclaw_chat_async', { message: 'Help', session_id: 'old-key' }, 'session_id'],
+        ['openclaw_task_list', { session_id: 'old-key' }, 'session_id'],
+        ...['target', 'guild_id', 'account_id', 'title', 'mode', 'fork_from_session'].map(
+          (field) => ['openclaw_discord_ask', { ...sourceArgs, [field]: 'old-value' }, field]
+        ),
+        [
+          'openclaw_discord_threads',
+          {
+            channel_id: channel,
+            server_id: guild,
+            discord_account_id: 'bot',
+            before: '2026-11-01T00:00:00Z',
+          },
+          'before',
+        ],
+        [
+          'openclaw_discord_create_channel',
+          {
+            server_id: guild,
+            discord_account_id: 'bot',
+            operation_id: 'old-name-creation-01',
+            channel_name: 'new',
+            authorize_create: true,
+            name: 'old',
+            topic: 'old',
+          },
+          'name',
+        ],
+      ] as Array<[string, Record<string, unknown>, string]>) {
+        const rejected = await client.callTool({ name, arguments: args });
+        expect(rejected.isError).toBe(true);
+        expect(JSON.stringify(rejected)).toContain('unknown field: ' + field);
+      }
       expect(requests).toEqual([]);
       const invalidSource = await client.callTool({
         name: 'openclaw_discord_ask',
@@ -642,7 +690,7 @@ describe('conversation metadata across real MCP transports', () => {
       const result = await client.callTool({ name: 'openclaw_discord_channels', arguments: {} });
       expect(result.isError).not.toBe(true);
       expect(result.structuredContent).toMatchObject({
-        channels: [{ target: channel, channel_id: channel, name: 'Allowed' }],
+        channels: [{ channel_id: channel, channel_name: 'Allowed' }],
       });
       expect(JSON.stringify(result)).not.toContain('Private');
       const validate = new AjvJsonSchemaValidator().getValidator(
@@ -655,10 +703,10 @@ describe('conversation metadata across real MCP transports', () => {
       const denied = await client.callTool({
         name: 'openclaw_discord_create_channel',
         arguments: {
-          guild_id: guild,
-          account_id: 'bot',
+          server_id: guild,
+          discord_account_id: 'bot',
           operation_id: 'denied-operation-01',
-          name: 'unused',
+          channel_name: 'unused',
           authorize_create: true,
         },
       });
@@ -709,12 +757,12 @@ describe('conversation metadata across real MCP transports', () => {
         expect(text(result)).toBe(`reply:hello-${index}`);
         const metadata = result.structuredContent!;
         expect(JSON.parse(text(result, 1))).toEqual(metadata);
-        expect(metadata.session_id).toMatch(
+        expect(metadata.session_key).toMatch(
           new RegExp(
             `^agent:research:mcp:trusted\\.example:${index === 2 ? 'other-client' : 'desktop-client'}:[0-9a-f-]{36}$`
           )
         );
-        return metadata.session_id as string;
+        return metadata.session_key as string;
       });
       expect(new Set(keys).size).toBe(3);
       expect(mock.requests.map((request) => request.key).sort()).toEqual([...keys].sort());
@@ -731,7 +779,7 @@ describe('conversation metadata across real MCP transports', () => {
       ]);
       expect(
         tools
-          .filter((tool) => tool.name !== 'openclaw_agents')
+          .filter((tool) => ['openclaw_status', 'openclaw_models'].includes(tool.name))
           .every((tool) => tool.outputSchema === undefined)
       ).toBe(true);
       const discovery = await call(first, 'openclaw_agents', {});
@@ -746,22 +794,22 @@ describe('conversation metadata across real MCP transports', () => {
         tools.find((tool) => tool.name === 'openclaw_agents')!.outputSchema!
       );
       expect(validateAgents(discovery.structuredContent).valid).toBe(true);
-      const invalid = await call(first, 'openclaw_chat', { message: 'hello', session_id: '' });
+      const invalid = await call(first, 'openclaw_chat', { message: 'hello', session_key: '' });
       expect(invalid.isError).toBe(true);
       expect(invalid.structuredContent).toBeUndefined();
       const acceptedFailure = await call(first, 'openclaw_chat', { message: 'accepted-invalid' });
       expect(acceptedFailure.isError).toBe(true);
       expect(text(acceptedFailure)).toMatch(/^Error: /);
-      expect(acceptedFailure.structuredContent!.session_id).toBe(mock.requests.at(-1)!.key);
+      expect(acceptedFailure.structuredContent!.session_key).toBe(mock.requests.at(-1)!.key);
       expect(JSON.parse(text(acceptedFailure, 1))).toEqual(acceptedFailure.structuredContent);
       const unnamed = await connectHttp(base, '', transport);
       const unnamedResult = await call(unnamed, 'openclaw_chat', { message: 'unnamed' });
-      expect(unnamedResult.structuredContent!.session_id).toMatch(
+      expect(unnamedResult.structuredContent!.session_key).toMatch(
         /^agent:research:mcp:trusted\.example:unknown:/
       );
       const hostileName = await connectHttp(base, 'agent:other:cron:injected/child', transport);
       const hostileResult = await call(hostileName, 'openclaw_chat', { message: 'hostile label' });
-      expect(hostileResult.structuredContent!.session_id).toMatch(
+      expect(hostileResult.structuredContent!.session_key).toMatch(
         /^agent:research:mcp:trusted\.example:agent-other-cron-injected-child:/
       );
       const followUp = await call(first, 'openclaw_chat', {
@@ -773,9 +821,9 @@ describe('conversation metadata across real MCP transports', () => {
 
       const queued = await call(first, 'openclaw_chat_async', {
         message: 'background follow-up',
-        session_id: keys[0],
+        session_key: keys[0],
       });
-      expect(queued.structuredContent).toMatchObject({ session_id: keys[0] });
+      expect(queued.structuredContent).toMatchObject({ session_key: keys[0] });
       expect(JSON.parse(text(queued))).toEqual(queued.structuredContent);
       const taskId = queued.structuredContent!.task_id;
       const otherStatus = await call(sameName, 'openclaw_task_status', { task_id: taskId });
@@ -793,7 +841,7 @@ describe('conversation metadata across real MCP transports', () => {
       }
       expect(status!.structuredContent).toMatchObject({
         status: 'completed',
-        session_id: keys[0],
+        session_key: keys[0],
         result: 'reply:background follow-up',
       });
       expect(mock.requests.at(-1)).toEqual({ key: keys[0], message: 'background follow-up' });
@@ -828,12 +876,12 @@ describe('conversation metadata across real MCP transports', () => {
         .replace(/[^a-z0-9._-]+/g, '-')
         .replace(/^[._-]+|[._-]+$/g, '')
         .slice(0, 40) || 'local';
-    expect(result.structuredContent?.session_id).toEqual(
+    expect(result.structuredContent?.session_key).toEqual(
       expect.stringContaining(`mcp:${hostLabel}:terminal-client:`)
     );
     expect(text(result)).toBe('reply:stdio hello');
     expect(JSON.parse(text(result, 1))).toEqual(result.structuredContent);
-    expect(mock.requests[0].key).toBe(result.structuredContent?.session_id);
+    expect(mock.requests[0].key).toBe(result.structuredContent?.session_key);
   });
 });
 
@@ -855,7 +903,7 @@ describe('mixed-era production endpoint', () => {
       name: 'openclaw_chat',
       arguments: { message: 'modern hello' },
     });
-    expect((result.structuredContent as Record<string, unknown>)?.session_id).toMatch(
+    expect((result.structuredContent as Record<string, unknown>)?.session_key).toMatch(
       /^agent:research:mcp:trusted[.]example:modern-desktop:/
     );
     const legacy = await connectHttp(base, 'Legacy', 'http');
@@ -942,7 +990,9 @@ describe('modern OAuth gate', () => {
       arguments: { task_id: job.task_id },
     });
     expect(polled.isError).not.toBe(true);
-    expect((polled.structuredContent as Record<string, unknown>).session_id).toBe(meta.session_id);
+    expect((polled.structuredContent as Record<string, unknown>).session_key).toBe(
+      meta.session_key
+    );
     const other = await connect('First', await mintToken(base));
     const rejected = await other.callTool({
       name: 'openclaw_task_status',

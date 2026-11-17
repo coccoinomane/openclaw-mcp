@@ -36,7 +36,7 @@ describe('MCP conversation keys', () => {
   ])('bounds untrusted display labels without namespace injection (%s)', (name, expected) => {
     const key = createConversationKey({ serverLabel: 'server', clientName: name });
     expect(key.split(':').slice(0, 3)).toEqual(['mcp', 'server', expected]);
-    expect(validateId(key, 'session_id').valid).toBe(true);
+    expect(validateId(key, 'session_key').valid).toBe(true);
   });
 
   it('keeps maximum-size keys reusable under the existing 256-character validation', () => {
@@ -45,7 +45,7 @@ describe('MCP conversation keys', () => {
       'a'.repeat(64)
     );
     expect(key.length).toBeLessThanOrEqual(256);
-    expect(validateId(key, 'session_id').value).toBe(key);
+    expect(validateId(key, 'session_key').value).toBe(key);
   });
 
   it.each(['agent:evil', 'bad/id', 'a'.repeat(65)])(

@@ -13,13 +13,13 @@ function validator(properties: Record<string, unknown>, extra = {}) {
 
 describe('input diagnostics', () => {
   it('reports missing and unknown fields without changing input', () => {
-    const validate = validator({ target: { type: 'string' } }, { required: ['target'] });
-    const input = Object.freeze({ channel_id: 'private-value' });
+    const validate = validator({ channel_id: { type: 'string' } }, { required: ['channel_id'] });
+    const input = Object.freeze({ thread_id: 'private-value' });
     expect(validate(input)).toBe(
-      'Invalid input for test_tool: missing required field: target; unknown field: channel_id. Check the input schema in tools/list.'
+      'Invalid input for test_tool: missing required field: channel_id; unknown field: thread_id. Check the input schema in tools/list.'
     );
-    expect(input).toEqual({ channel_id: 'private-value' });
-    expect(validate({ target: 'private-value' })).toBeUndefined();
+    expect(input).toEqual({ thread_id: 'private-value' });
+    expect(validate({ channel_id: 'private-value' })).toBeUndefined();
   });
 
   it.each([

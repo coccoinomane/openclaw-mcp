@@ -35,7 +35,7 @@ A write scope does not grant local-admin tool parity. Gateway role ceilings, own
 
 ## Native session forks
 
-New-thread asks may supply `fork_from_session`. The existing Discord SDK identity calls `sessions.resolve` to check that the fresh thread's destination session is absent, then `sessions.create` with a same-agent parent, `fork: true` and `forkFrom: "last-completed"`. The create request contains no initial message or task. An explicit model is supplied at creation so the Gateway checks fork capacity against that model. The ordinary prompt publication and agent turn follow only after a verified fork receipt.
+New-thread asks may supply `fork_from_session_key`. The existing Discord SDK identity calls `sessions.resolve` to check that the fresh thread's destination session is absent, then `sessions.create` with a same-agent parent, `fork: true` and `forkFrom: "last-completed"`. The create request contains no initial message or task. An explicit model is supplied at creation so the Gateway checks fork capacity against that model. The ordinary prompt publication and agent turn follow only after a verified fork receipt.
 
 The durable operation records the source and fork stage before the mutation. Uncertain or interrupted forks are never replayed; their destination claims are retained. SDK idempotency is supplementary and is not a substitute for that journal. An existing destination is rejected rather than deliberately reforked.
 

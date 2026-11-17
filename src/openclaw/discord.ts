@@ -1,3 +1,4 @@
+import { assertOperationVersion, operationSchemaVersion } from './discord-channels.js';
 import { checkModel } from './models.js';
 import { checkForkSource } from './session-fork.js';
 import { assertTargetAllowed } from './discord-policy.js';
@@ -84,9 +85,10 @@ function validateConfig(config: Omit<DiscordConfig, 'access'>) {
 }
 
 interface Operation {
+  schema_version: number;
   agent_id?: string;
-  guild_id?: string;
-  account_id?: string;
+  server_id?: string;
+  discord_account_id?: string;
   fingerprint: string;
   kind?: 'thread_reply' | 'channel_message';
   owner?: string;
@@ -111,8 +113,8 @@ interface Operation {
     | 'run_failed'
     | 'run_unknown';
   operation_id: string;
-  target: string;
-  channel_id?: string;
+  channel_id: string;
+  thread_id?: string;
   session_key?: string;
   discord_url?: string;
   run_id?: string;
@@ -127,7 +129,7 @@ interface Operation {
   starter_message_id?: string;
   model?: string;
   model_error?: string;
-  fork_from_session?: string;
+  fork_from_session_key?: string;
   fork_status?: 'pending' | 'forking' | 'completed' | 'failed' | 'unknown';
   fork_error_code?: string;
   member_status?: 'disabled' | 'pending' | 'adding' | 'verified' | 'failed' | 'unknown';
@@ -188,13 +190,13 @@ export class DiscordService {
   async createChannel(input: any) {
     if (!this.creation) throw new DiscordError('CHANNEL_CREATION_DISABLED');
     const agentId = await this.config.access.select(input.agent_id);
-    check(input.guild_id, snowflake, 'guild ID');
-    check(input.account_id, slug, 'account ID');
+    check(input.server_id, snowflake, 'server ID');
+    check(input.discord_account_id, slug, 'account ID');
     if (input.category_id !== undefined) check(input.category_id, snowflake, 'category ID');
     const destination: ChannelDestination = {
       agentId,
-      guildId: input.guild_id,
-      accountId: input.account_id,
+      guildId: input.server_id,
+      accountId: input.discord_account_id,
       categoryId: input.category_id,
     };
     await this.config.access.assertCreate({ ...destination, name: '', channelId: '' });
@@ -230,7 +232,7 @@ export class DiscordService {
     const result = await this.config.access.channels(input.agent_id);
     return {
       ...result,
-      creation_guilds: this.config.channelCreateEnabled ? result.creation_guilds : [],
+      creation_servers: this.config.channelCreateEnabled ? result.creation_servers : [],
     };
   }
   async threads(input: any) {
@@ -243,20 +245,25 @@ export class DiscordService {
     )
       throw new Error('Invalid limit');
     if (
-      input.before !== undefined &&
-      (typeof input.before !== 'string' ||
-        !/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(?:Z|[+-][0-9]{2}:[0-9]{2})$/.test(input.before) ||
-        !Number.isFinite(Date.parse(input.before)))
+      input.before_archive_timestamp !== undefined &&
+      (typeof input.before_archive_timestamp !== 'string' ||
+        !/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(?:Z|[+-][0-9]{2}:[0-9]{2})$/.test(
+          input.before_archive_timestamp
+        ) ||
+        !Number.isFinite(Date.parse(input.before_archive_timestamp)))
     )
       throw new Error('Invalid archive timestamp');
-    if (!input.archived && (input.before !== undefined || input.limit !== undefined))
+    if (
+      !input.archived &&
+      (input.before_archive_timestamp !== undefined || input.limit !== undefined)
+    )
       throw new Error('Pagination is only supported for archived public threads');
     await this.info(t, t.channelId, true);
     const data = await this.reader!(t, {
       action: 'thread-list',
       channelId: t.channelId,
       includeArchived: input.archived,
-      before: input.before,
+      before: input.before_archive_timestamp,
       limit: input.limit,
     });
     const raw = Array.isArray(data.threads) ? data : data.threads;
@@ -272,18 +279,20 @@ export class DiscordService {
           [10, 11, 12].includes(c.type)
       )
       .map((c: any) => ({
-        channel_id: c.id,
-        name: c.name,
+        thread_id: c.id,
+        thread_name: c.name,
         archived: c.thread_metadata?.archived,
         archive_timestamp: c.thread_metadata?.archive_timestamp,
         discord_url: 'https://discord.com/channels/' + t.guildId + '/' + c.id,
       }));
     return {
       agent_id: t.agentId,
-      account_id: t.accountId,
+      discord_account_id: t.accountId,
+      server_id: t.guildId,
+      channel_id: t.channelId,
       threads,
       has_more: raw.has_more === true,
-      next_before:
+      next_before_archive_timestamp:
         raw.has_more === true ? raw.threads.at(-1)?.thread_metadata?.archive_timestamp : undefined,
       pagination: input.archived ? 'archived_public_timestamp' : 'none',
     };
@@ -294,10 +303,16 @@ export class DiscordService {
   }
   async status(id: unknown, input: DiscordSelectors = {}) {
     const result: Operation = JSON.parse(await readFile(this.path(id), 'utf8'));
+    assertOperationVersion(result);
     const agentId = await this.config.access.select(input.agent_id);
     if (result.agent_id !== agentId) throw new DiscordError('ROUTE_SELECTOR_CONFLICT');
     if ((result as any).kind === 'channel_create') {
-      return this.creation ? this.creation.publicResult(result) : { ...result, retry_safe: false };
+      const creation: Partial<Operation> = { ...result };
+      delete creation.fingerprint;
+      delete creation.schema_version;
+      return this.creation
+        ? this.creation.publicResult(result)
+        : { ...creation, retry_safe: false };
     }
     return this.publicResult(result);
   }
@@ -318,7 +333,9 @@ export class DiscordService {
     }
   }
   private publicResult(op: Operation) {
+    assertOperationVersion(op);
     const result: Partial<Operation> = { ...op };
+    delete result.schema_version;
     delete result.fingerprint;
     delete result.owner;
     // Old process work is never resumed. Reads never rewrite records or repeat effects.
@@ -327,7 +344,7 @@ export class DiscordService {
       (op.owner !== this.owner || !this.active.has(op.operation_id))
     ) {
       result.status =
-        op.channel_id || op.kind === 'thread_reply' || op.kind === 'channel_message'
+        op.thread_id || op.kind === 'thread_reply' || op.kind === 'channel_message'
           ? 'run_unknown'
           : 'creation_unknown';
       result.error_code = 'OPERATION_INTERRUPTED';
@@ -348,7 +365,6 @@ export class DiscordService {
     return { ...result, retry_safe: false };
   }
   async ask(input: any) {
-    if (input?.mode !== 'new_thread') throw new DiscordError('CONTINUE_UNSUPPORTED');
     if (
       !input ||
       typeof input !== 'object' ||
@@ -356,23 +372,22 @@ export class DiscordService {
       Object.keys(input).some(
         (key) =>
           ![
-            'target',
-            'guild_id',
-            'account_id',
+            'channel_id',
+            'server_id',
+            'discord_account_id',
             'operation_id',
-            'mode',
-            'title',
+            'thread_name',
             'prompt',
             'agent_id',
             'model',
-            'fork_from_session',
+            'fork_from_session_key',
             'source',
           ].includes(key)
       )
     )
       throw new DiscordError('ASK_ARGUMENTS_INVALID');
     displaySource(input.source);
-    return this.enqueue(input);
+    return this.enqueue({ ...input, mode: 'new_thread' });
   }
   async reply(input: any) {
     if (
@@ -380,10 +395,10 @@ export class DiscordService {
       Object.keys(input).some(
         (key) =>
           ![
-            'target',
-            'guild_id',
-            'account_id',
             'channel_id',
+            'server_id',
+            'discord_account_id',
+            'thread_id',
             'operation_id',
             'prompt',
             'agent_id',
@@ -391,8 +406,8 @@ export class DiscordService {
       )
     )
       throw new DiscordError('REPLY_ARGUMENTS_INVALID');
-    check(input.channel_id, snowflake, 'thread ID');
-    if (input.channel_id === input.target) throw new DiscordError('PUBLIC_THREAD_REQUIRED');
+    check(input.thread_id, snowflake, 'thread ID');
+    if (input.thread_id === input.channel_id) throw new DiscordError('PUBLIC_THREAD_REQUIRED');
     return this.enqueue({ ...input, mode: 'reply' });
   }
   async send(input: any) {
@@ -400,11 +415,18 @@ export class DiscordService {
       !input ||
       Object.keys(input).some(
         (key) =>
-          !['target', 'guild_id', 'account_id', 'operation_id', 'prompt', 'agent_id'].includes(key)
+          ![
+            'channel_id',
+            'server_id',
+            'discord_account_id',
+            'operation_id',
+            'prompt',
+            'agent_id',
+          ].includes(key)
       )
     )
       throw new DiscordError('SEND_ARGUMENTS_INVALID');
-    return this.enqueue({ ...input, mode: 'send', channel_id: input.target });
+    return this.enqueue({ ...input, mode: 'send' });
   }
   private async enqueue(input: any) {
     this.path(input.operation_id);
@@ -569,28 +591,28 @@ export class DiscordService {
       throw new Error('Invalid prompt');
     if (input.mode === 'new_thread') {
       if (
-        typeof input.title !== 'string' ||
-        !input.title.trim() ||
-        input.title.length > 100 ||
-        [...input.title].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) ||
-        input.title.startsWith('-') ||
-        input.channel_id !== undefined
+        typeof input.thread_name !== 'string' ||
+        !input.thread_name.trim() ||
+        input.thread_name.length > 100 ||
+        [...input.thread_name].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) ||
+        input.thread_name.startsWith('-') ||
+        input.thread_id !== undefined
       )
-        throw new Error('Invalid thread title or channel_id');
+        throw new Error('Invalid thread_name or thread_id');
     }
     checkModel(input.model);
-    checkForkSource(input.fork_from_session, t.agentId);
+    checkForkSource(input.fork_from_session_key, t.agentId);
     const fingerprint = createHash('sha256')
       .update(
         JSON.stringify([
           t,
           input.mode,
-          input.title,
-          input.channel_id,
+          input.thread_name,
+          input.thread_id,
           input.prompt,
           ...(input.model !== undefined ? [input.model] : []),
-          ...(input.fork_from_session !== undefined
-            ? [{ fork_from_session: input.fork_from_session }]
+          ...(input.fork_from_session_key !== undefined
+            ? [{ fork_from_session_key: input.fork_from_session_key }]
             : []),
           ...(input.source !== undefined ? [{ source: input.source }] : []),
         ])
@@ -622,20 +644,22 @@ export class DiscordService {
           'Operation is being reserved or needs operator recovery; do not retry with a new ID'
         );
       }
+      assertOperationVersion(previous);
       if (previous.fingerprint !== fingerprint)
         throw new Error('Operation ID already used with different arguments');
-      await assertTargetAllowed(this.config, t, previous.channel_id);
+      await assertTargetAllowed(this.config, t, previous.thread_id);
       return this.publicResult(previous);
     }
     const op: Operation = {
+      schema_version: operationSchemaVersion,
       fingerprint,
       ...(input.model !== undefined ? { model: input.model } : {}),
-      ...(input.fork_from_session !== undefined
-        ? { fork_from_session: input.fork_from_session, fork_status: 'pending' as const }
+      ...(input.fork_from_session_key !== undefined
+        ? { fork_from_session_key: input.fork_from_session_key, fork_status: 'pending' as const }
         : {}),
       agent_id: t.agentId,
-      guild_id: t.guildId,
-      account_id: t.accountId,
+      server_id: t.guildId,
+      discord_account_id: t.accountId,
       agent_transport: 'sdk',
       agent_idempotency_key:
         'discord-run-' +
@@ -652,7 +676,7 @@ export class DiscordService {
       request_verified: false,
       request_message_ids: [],
       operation_id: input.operation_id,
-      target: t.name,
+      channel_id: t.channelId,
       status: input.mode === 'new_thread' ? 'creating' : 'created',
       member_status:
         input.mode === 'new_thread' && this.config.threadMember ? 'pending' : 'disabled',
@@ -688,17 +712,17 @@ export class DiscordService {
     let createDispatched = false;
     try {
       if (!this.publishRequest) throw new DiscordError('REQUEST_PUBLISHER_REQUIRED');
-      if (input.fork_from_session !== undefined && !this.agent?.forkSession)
+      if (input.fork_from_session_key !== undefined && !this.agent?.forkSession)
         throw new DiscordError('FORK_UNSUPPORTED');
       await this.agent!.ready();
       const parent = await this.info(t, t.channelId, true);
       if ([15, 16].includes(parent.type)) throw new DiscordError('FORUM_MEDIA_WRITES_UNSUPPORTED');
-      let id = input.channel_id;
+      let id = sending ? input.channel_id : input.thread_id;
       if (replying || sending) {
         op.session_key = replying
           ? await this.verifyReply(t, id, input.prompt)
           : await this.verifyDestination(t, id, input.prompt);
-        op.channel_id = id;
+        if (!sending) op.thread_id = id;
         op.discord_url = 'https://discord.com/channels/' + t.guildId + '/' + id;
         releaseSession = await this.claimSession(op.session_key, input.operation_id);
         await save();
@@ -711,7 +735,7 @@ export class DiscordService {
         await save();
         const created = await this.invokeThread!(
           t,
-          input.title,
+          input.thread_name,
           input.operation_id,
           async (messageId) => {
             op.starter_message_id = messageId;
@@ -721,7 +745,7 @@ export class DiscordService {
         id = created.thread?.id;
         check(id, snowflake, 'created thread ID');
         if (id === t.channelId) throw new DiscordError('CREATED_THREAD_ID_INVALID', true);
-        op.channel_id = id;
+        if (!sending) op.thread_id = id;
         op.discord_url = 'https://discord.com/channels/' + t.guildId + '/' + id;
         op.status = created.partial ? 'creation_partial' : 'created';
         await save();
@@ -733,10 +757,10 @@ export class DiscordService {
         }
       }
       await this.info(t, id);
-      op.channel_id = id;
+      if (!sending) op.thread_id = id;
       op.discord_url = 'https://discord.com/channels/' + t.guildId + '/' + id;
       op.session_key = await this.ordinaryRoute(t, id);
-      if (!replying && input.fork_from_session !== undefined) {
+      if (!replying && input.fork_from_session_key !== undefined) {
         releaseSession = await this.claimSession(op.session_key, input.operation_id);
         op.fork_status = 'forking';
         await save();
@@ -744,7 +768,7 @@ export class DiscordService {
           await this.config.access.assert(t);
           await this.agent!.forkSession!(
             op.session_key,
-            input.fork_from_session,
+            input.fork_from_session_key,
             t.agentId,
             input.model
           );
@@ -757,7 +781,7 @@ export class DiscordService {
         }
         await save();
       }
-      if (!replying && input.model !== undefined && input.fork_from_session === undefined) {
+      if (!replying && input.model !== undefined && input.fork_from_session_key === undefined) {
         if (!this.agent?.selectModel) throw new DiscordError('MODEL_SELECTION_UNSUPPORTED');
         try {
           await this.config.access.assert(t);
@@ -957,7 +981,7 @@ export class DiscordService {
       op.error_code = error instanceof DiscordError ? error.code : 'UNVERIFIED_RESULT';
       op.status = dispatched
         ? 'run_unknown'
-        : op.channel_id || input.mode === 'continue'
+        : op.thread_id || sending
           ? 'run_failed'
           : createDispatched
             ? 'creation_unknown'

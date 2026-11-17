@@ -31,12 +31,11 @@ const base: DiscordConfig = {
 const gatewayConfig = { url: 'http://127.0.0.1:18789', token: 'mock-gateway-secret' };
 const env = { DISCORD_BOT_TOKEN: 'mock-bot-secret' };
 const input = {
-  target: target.channelId,
-  guild_id: guild,
-  account_id: 'bot',
-  mode: 'new_thread',
+  channel_id: target.channelId,
+  server_id: guild,
+  discord_account_id: 'bot',
   operation_id: 'thread-test-operation-1',
-  title: 'Task',
+  thread_name: 'Task',
   prompt: 'Help',
 };
 const envelope = (result: any) =>
@@ -74,7 +73,7 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
           id: thread,
           channel_id: channel,
           author: { id: owner, bot: true },
-          content: input.title,
+          content: input.thread_name,
           flags: 4100,
           mention_everyone: false,
           mentions: [],
@@ -111,7 +110,7 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
   const member = vi.fn(async (_url: any, opts: any) => {
     events.push(opts.method);
     expect(await record()).toMatchObject({
-      channel_id: thread,
+      thread_id: thread,
       member_status: 'adding',
       member_verified: false,
     });
@@ -144,7 +143,7 @@ async function fixture(overrides: Partial<DiscordConfig> = {}) {
       threadMemberAdder(config, env, member),
       async (_t, _id, _prompt, _op, sent) => {
         events.push('publish');
-        if ((await record()).fork_from_session)
+        if ((await record()).fork_from_session_key)
           expect(await record()).toMatchObject({ fork_status: 'completed' });
         await sent('300000000000000004');
       },
@@ -162,7 +161,7 @@ describe('Classic new threads', () => {
     const result = await finished(f.service, input);
     expect(result).toMatchObject({
       status: 'completed',
-      channel_id: thread,
+      thread_id: thread,
       member_status: 'verified',
       member_verified: true,
       thread_create_transport: 'gateway',
@@ -320,7 +319,7 @@ describe('Classic new threads', () => {
       const result = await finished(f.service, input);
       expect(result).toMatchObject({
         status: 'creation_partial',
-        channel_id: thread,
+        thread_id: thread,
         discord_url: expect.stringContaining(thread),
         member_verified: false,
       });
@@ -348,7 +347,7 @@ describe('Classic new threads', () => {
       );
       expect(await finished(f.service, input)).toMatchObject({
         status: 'run_failed',
-        channel_id: thread,
+        thread_id: thread,
         member_verified: false,
       });
       expect(f.member).not.toHaveBeenCalled();
@@ -375,7 +374,7 @@ describe('Classic new threads', () => {
       const result = await finished(f.service, input);
       expect(result).toMatchObject({
         status: 'run_failed',
-        channel_id: thread,
+        thread_id: thread,
         discord_url: expect.stringContaining(thread),
         member_status: 'unknown',
         member_verified: false,
@@ -397,7 +396,7 @@ describe('Silent starter threads', () => {
     expect(result).toMatchObject({
       status: 'completed',
       starter_message_id: thread,
-      channel_id: thread,
+      thread_id: thread,
     });
     expect(f.events.filter((e) => e !== 'permissions' && e !== 'channel-info')).toEqual([
       'starter-POST',
@@ -412,7 +411,7 @@ describe('Silent starter threads', () => {
       ([url, opts]) => String(url).startsWith('https://discord.com/') && opts.method === 'POST'
     )!;
     expect(JSON.parse(post[1].body)).toEqual({
-      content: input.title,
+      content: input.thread_name,
       flags: 4100,
       allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
       nonce: expect.any(String),
@@ -558,15 +557,14 @@ describe('operator configuration and closed inputs', () => {
     const tool = discordTools.find((t) => t.name === 'openclaw_discord_ask')!;
     expect(Object.keys(tool.inputSchema.properties!)).toEqual([
       'agent_id',
-      'target',
-      'guild_id',
-      'account_id',
+      'channel_id',
+      'server_id',
+      'discord_account_id',
       'operation_id',
-      'mode',
       'model',
-      'fork_from_session',
+      'fork_from_session_key',
       'source',
-      'title',
+      'thread_name',
       'prompt',
     ]);
   });
@@ -603,10 +601,10 @@ describe('new-thread model selection', () => {
     expect(f.agent.run).not.toHaveBeenCalled();
     await expect(
       f.service.reply({
-        target: target.channelId,
-        guild_id: guild,
-        account_id: 'bot',
-        channel_id: thread,
+        channel_id: target.channelId,
+        server_id: guild,
+        discord_account_id: 'bot',
+        thread_id: thread,
         operation_id: 'reply-model-denied',
         prompt: 'hi',
         model: 'p/m',
@@ -620,7 +618,10 @@ describe('new-thread native fork', () => {
   it('forks with the explicit model before publication and execution, and replays without effects', async () => {
     const f = await fixture();
     f.agent.forkSession.mockImplementation(async () => {
-      expect(await f.record()).toMatchObject({ fork_status: 'forking', fork_from_session: source });
+      expect(await f.record()).toMatchObject({
+        fork_status: 'forking',
+        fork_from_session_key: source,
+      });
       expect(f.events).not.toContain('publish');
       expect(f.agent.run).not.toHaveBeenCalled();
       expect(f.agent.selectModel).not.toHaveBeenCalled();
@@ -628,12 +629,12 @@ describe('new-thread native fork', () => {
     f.agent.selectModel.mockImplementation(async () => {
       expect(f.agent.forkSession).toHaveBeenCalledTimes(1);
     });
-    const args = { ...input, fork_from_session: source, model: 'p/m' };
+    const args = { ...input, fork_from_session_key: source, model: 'p/m' };
     const result = await finished(f.service, args);
     expect(result).toMatchObject({
       status: 'completed',
       fork_status: 'completed',
-      fork_from_session: source,
+      fork_from_session_key: source,
     });
     expect(f.agent.forkSession).toHaveBeenCalledWith(
       'agent:main:discord:channel:' + thread,
@@ -647,14 +648,14 @@ describe('new-thread native fork', () => {
     await f.restart().ask(args);
     expect(f.agent.forkSession).toHaveBeenCalledTimes(1);
     expect(f.agent.run).toHaveBeenCalledTimes(1);
-    await expect(f.service.ask({ ...args, fork_from_session: source + '0' })).rejects.toThrow(
+    await expect(f.service.ask({ ...args, fork_from_session_key: source + '0' })).rejects.toThrow(
       'different arguments'
     );
     await expect(f.service.ask({ ...input, model: 'p/m' })).rejects.toThrow('different arguments');
   });
   it('does not select a new model unless requested; fresh-session behavior is unchanged', async () => {
     const fork = await fixture();
-    await finished(fork.service, { ...input, fork_from_session: source });
+    await finished(fork.service, { ...input, fork_from_session_key: source });
     expect(fork.agent.selectModel).not.toHaveBeenCalled();
     const fresh = await fixture();
     await finished(fresh.service, input);
@@ -670,7 +671,7 @@ describe('new-thread native fork', () => {
     null,
   ])('rejects invalid or cross-agent source before creating a thread: %s', async (value) => {
     const f = await fixture();
-    await expect(f.service.ask({ ...input, fork_from_session: value })).rejects.toThrow(
+    await expect(f.service.ask({ ...input, fork_from_session_key: value })).rejects.toThrow(
       /FORK_(AGENT_MISMATCH|SOURCE_INVALID)/
     );
     expect(f.gateway).not.toHaveBeenCalled();
@@ -681,11 +682,11 @@ describe('new-thread native fork', () => {
     async (uncertain) => {
       const f = await fixture();
       f.agent.forkSession.mockRejectedValue(new DiscordError('FORK_TEST_FAILURE', uncertain));
-      const args = { ...input, fork_from_session: source };
+      const args = { ...input, fork_from_session_key: source };
       const result = await finished(f.service, args);
       expect(result).toMatchObject({
         status: 'run_failed',
-        channel_id: thread,
+        thread_id: thread,
         fork_status: uncertain ? 'unknown' : 'failed',
         fork_error_code: 'FORK_TEST_FAILURE',
       });
@@ -702,27 +703,27 @@ describe('new-thread native fork', () => {
     const f = await fixture();
     await expect(
       f.service.reply({
-        target: target.channelId,
-        guild_id: guild,
-        account_id: 'bot',
-        channel_id: thread,
+        channel_id: target.channelId,
+        server_id: guild,
+        discord_account_id: 'bot',
+        thread_id: thread,
         operation_id: 'fork-reply-denied',
         prompt: 'hi',
-        fork_from_session: source,
+        fork_from_session_key: source,
       })
     ).rejects.toThrow('REPLY_ARGUMENTS_INVALID');
     expect(
       discordTools.find((t) => t.name === 'openclaw_discord_ask')!.inputSchema.properties
-    ).toHaveProperty('fork_from_session');
+    ).toHaveProperty('fork_from_session_key');
     expect(
       discordTools.find((t) => t.name === 'openclaw_discord_reply')!.inputSchema.properties
-    ).not.toHaveProperty('fork_from_session');
+    ).not.toHaveProperty('fork_from_session_key');
   });
 });
 
 it('reports an interrupted fork as unknown without re-running it', async () => {
   const f = await fixture();
-  const args = { ...input, fork_from_session: 'agent:main:main' };
+  const args = { ...input, fork_from_session_key: 'agent:main:main' };
   await finished(f.service, args);
   const record = await f.record();
   await writeFile(
@@ -746,7 +747,7 @@ it('reports an interrupted fork as unknown without re-running it', async () => {
 it('rejects unavailable fork transport before creating the Discord thread', async () => {
   const f = await fixture();
   delete (f.agent as Partial<DiscordAgentTransport>).forkSession;
-  const result = await f.service.ask({ ...input, fork_from_session: 'agent:main:main' });
+  const result = await f.service.ask({ ...input, fork_from_session_key: 'agent:main:main' });
   expect(result).toMatchObject({ status: 'run_failed', error_code: 'FORK_UNSUPPORTED' });
   expect(f.gateway).not.toHaveBeenCalled();
   expect(f.agent.run).not.toHaveBeenCalled();
@@ -754,7 +755,7 @@ it('rejects unavailable fork transport before creating the Discord thread', asyn
 
 it('releases the fork destination claim after successful execution', async () => {
   const f = await fixture();
-  await finished(f.service, { ...input, fork_from_session: 'agent:main:main' });
+  await finished(f.service, { ...input, fork_from_session_key: 'agent:main:main' });
   expect((await readdir(f.config.stateDir)).filter((name) => name.endsWith('.lock'))).toHaveLength(
     0
   );

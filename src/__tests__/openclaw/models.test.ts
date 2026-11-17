@@ -77,12 +77,12 @@ describe('agent-scoped session models', () => {
     await handleOpenclawChat(gateway, {
       message: 'follow-up',
       agent_id: 'writer',
-      session_id: key,
+      session_key: key,
     });
     expect(select).toHaveBeenCalledTimes(1);
     const rejected = await handleOpenclawChat(gateway, {
       message: 'change',
-      session_id: key,
+      session_key: key,
       model: 'p/other',
     });
     expect(rejected.isError).toBe(true);

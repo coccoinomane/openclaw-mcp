@@ -9,6 +9,11 @@ export interface ChannelDestination {
   accountId: string;
   agentId: string;
 }
+export const operationSchemaVersion = 2;
+export function assertOperationVersion(record: any) {
+  if (record?.schema_version !== operationSchemaVersion)
+    throw new DiscordError('OPERATION_SCHEMA_UNSUPPORTED');
+}
 export class DiscordError extends Error {
   constructor(
     readonly code: string,
@@ -149,17 +154,17 @@ export class ChannelCreation {
     if (
       typeof input.operation_id !== 'string' ||
       !/^[a-zA-Z0-9_-]{16,100}$/.test(input.operation_id) ||
-      typeof input.name !== 'string' ||
-      !/^[a-z0-9][a-z0-9-]{0,99}$/.test(input.name) ||
-      (input.topic !== undefined &&
-        (typeof input.topic !== 'string' ||
-          input.topic.length > 1024 ||
-          [...input.topic].some((c) => c.charCodeAt(0) < 32)))
+      typeof input.channel_name !== 'string' ||
+      !/^[a-z0-9][a-z0-9-]{0,99}$/.test(input.channel_name) ||
+      (input.channel_topic !== undefined &&
+        (typeof input.channel_topic !== 'string' ||
+          input.channel_topic.length > 1024 ||
+          [...input.channel_topic].some((c) => c.charCodeAt(0) < 32)))
     )
       throw new DiscordError('INVALID_CREATION_ARGUMENTS');
     await privateState(this.stateDir);
     const path = join(this.stateDir, input.operation_id + '.json');
-    const fingerprint = hash([p, input.name, input.topic]);
+    const fingerprint = hash([p, input.channel_name, input.channel_topic]);
     let h;
     try {
       h = await open(path, 'wx', 0o600);
@@ -171,15 +176,17 @@ export class ChannelCreation {
       } catch {
         throw new DiscordError('OPERATION_RESERVED_OR_DAMAGED');
       }
+      assertOperationVersion(previous);
       if (previous.kind !== 'channel_create' || previous.fingerprint !== fingerprint)
         throw new DiscordError('OPERATION_CONFLICT');
       return this.publicResult(previous);
     }
     const record: any = {
+      schema_version: operationSchemaVersion,
       kind: 'channel_create',
       agent_id: p.agentId,
-      guild_id: p.guildId,
-      account_id: p.accountId,
+      server_id: p.guildId,
+      discord_account_id: p.accountId,
       category_id: p.categoryId,
       fingerprint,
       operation_id: input.operation_id,
@@ -202,7 +209,12 @@ export class ChannelCreation {
       }
       await this.authorize(p);
       dispatched = true;
-      const result = await this.invoke(p, input.name, input.topic, input.operation_id);
+      const result = await this.invoke(
+        p,
+        input.channel_name,
+        input.channel_topic,
+        input.operation_id
+      );
       const c = result.channel;
       if (typeof c?.id !== 'string' || !/^[1-9][0-9]{16,19}$/.test(c.id))
         throw new DiscordError('CREATED_CHANNEL_ID_MISSING', true);
@@ -220,7 +232,6 @@ export class ChannelCreation {
       )
         throw new DiscordError('CREATED_CHANNEL_VERIFICATION_FAILED');
       record.status = 'completed';
-      record.target = c.id;
       record.routing =
         'Access follows current selected-agent bindings; inbound routing is unchanged';
       await save(path, record, this.stateDir);
@@ -238,8 +249,10 @@ export class ChannelCreation {
     return this.publicResult(record);
   }
   publicResult(record: any) {
+    assertOperationVersion(record);
     const result = { ...record };
     delete result.fingerprint;
+    delete result.schema_version;
     return result;
   }
 }

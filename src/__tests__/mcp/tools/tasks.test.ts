@@ -123,10 +123,10 @@ describe('async task tools — cross-connection isolation', () => {
     expect((mallory.stats as { total: number }).total).toBe(1);
   });
 
-  it('does not leak across connections via the session_id filter', async () => {
-    await handleOpenclawChatAsync(gateway, { message: 'a', session_id: 'shared' }, ALICE);
+  it('does not leak across connections via the session_key filter', async () => {
+    await handleOpenclawChatAsync(gateway, { message: 'a', session_key: 'shared' }, ALICE);
 
-    const mallory = json(await handleOpenclawTaskList(gateway, { session_id: 'shared' }, MALLORY));
+    const mallory = json(await handleOpenclawTaskList(gateway, { session_key: 'shared' }, MALLORY));
     expect(mallory.tasks).toHaveLength(0);
   });
 

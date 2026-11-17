@@ -12,6 +12,6 @@ See the separate repository for installation instructions. The older Claude Code
 
 ## Review scope
 
-The new-thread tool supports native same-agent forks through fork_from_session; reply remains unchanged. The source key can come from a prior MCP response, not only OpenClaw runtime context. No local plugin installation, deployment or inbox changes are performed by this PR.
+The new-thread tool supports native same-agent forks through fork_from_session_key; reply remains unchanged. The source key can come from a prior MCP response, not only OpenClaw runtime context. No local plugin installation, deployment or inbox changes are performed by this PR.
 
 After installing the Discord companion plugin, an inbox can keep its local routing rule and refer to discord-thread-coordination. Other Discord conversations use that skill when opening or resuming threads or splitting work across them.

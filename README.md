@@ -21,7 +21,7 @@ Seven Discord tools cover discovery, threads, asks, replies, channel messages, c
 
 Call `openclaw_models` for the target agent before choosing a model. `openclaw_chat` (new sessions only) and `openclaw_discord_ask` accept an optional `model` that stays with the new session. Omission keeps the current defaults; Discord replies and async chat cannot change the model. OpenClaw validates the selection, without an extra inference probe.
 
-To branch an existing conversation into a new Discord thread, pass its canonical OpenClaw session key as `fork_from_session` to `openclaw_discord_ask`. Source and destination must belong to the same agent on this Gateway. The native fork copies history through the last completed turn, then the separately supplied prompt is published and executed as the new assignment. Explicit `model` overrides apply only to the child; otherwise inherited model settings remain. Fork failure prevents prompt publication and agent execution; inspect the retained operation/thread rather than creating a replacement. Existing-thread replies cannot fork or replace their session history.
+To branch an existing conversation into a new Discord thread, pass its canonical OpenClaw session key as `fork_from_session_key` to `openclaw_discord_ask`. Source and destination must belong to the same agent on this Gateway. The native fork copies history through the last completed turn, then the separately supplied prompt is published and executed as the new assignment. Explicit `model` overrides apply only to the child; otherwise inherited model settings remain. Fork failure prevents prompt publication and agent execution; inspect the retained operation/thread rather than creating a replacement. Existing-thread replies cannot fork or replace their session history.
 
 ## Install this fork
 
@@ -54,3 +54,5 @@ Fork of [freema/openclaw-mcp](https://github.com/freema/openclaw-mcp), created b
 Have more than one OpenClaw agent? Follow [Use more than one OpenClaw agent](docs/multiagent.md) to list them in your MCP client and choose who handles a request. Agents share the configured OpenClaw installation; add Discord assignments only if you need them. Every authenticated client can select every configured agent.
 
 Select agent_id explicitly or configure OPENCLAW_DEFAULT_AGENT_ID. OPENCLAW_AGENT_IS_MANDATORY=true always requires it. Discovery and validation refresh from Gateway on every call.
+
+Public tool arguments and results use `session_key`, `channel_id` (parent/text channel), `thread_id`, `server_id` and `discord_account_id`. Old parameter names are rejected, not aliased. See [validated examples for all 15 tools](docs/tool-contract-examples.json) and [journal upgrade precautions](docs/discord-skills.md#recovery).
