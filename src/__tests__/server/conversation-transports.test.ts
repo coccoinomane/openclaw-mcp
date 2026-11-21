@@ -500,6 +500,14 @@ describe('conversation metadata across real MCP transports', () => {
       const guild = '400000000000000001',
         channel = '400000000000000002';
       const requests: any[] = [];
+      const matching = Array.from({ length: 125 }, (_, i) => ({
+        id: String(400000000000001000n + BigInt(i)),
+        guild_id: guild,
+        parent_id: channel,
+        type: 11,
+        name: 'Thread',
+        thread_metadata: { archived: false, archive_timestamp: '2026-11-01T00:00:00Z' },
+      }));
       const mock = createServer(async (req, res) => {
         let raw = '';
         for await (const chunk of req) raw += chunk;
@@ -508,6 +516,10 @@ describe('conversation metadata across real MCP transports', () => {
           authorization: req.headers.authorization,
           body: JSON.parse(raw),
         });
+        const args = requests.at(-1).body.args;
+        const threads = args.includeArchived
+          ? matching.slice(0, args.limit)
+          : [...matching.map((t) => ({ ...t, parent_id: '400000000000000003' })), ...matching];
         res.setHeader('Content-Type', 'application/json');
         res.end(
           JSON.stringify({
@@ -515,6 +527,8 @@ describe('conversation metadata across real MCP transports', () => {
             result: {
               details: {
                 ok: true,
+                threads,
+                has_more: true,
                 channel: { id: channel, guild_id: guild, type: 0, name: 'Allowed' },
                 channels: [
                   { id: channel, guild_id: guild, type: 0, name: 'Allowed' },
@@ -734,6 +748,90 @@ describe('conversation metadata across real MCP transports', () => {
           },
         },
       ]);
+      const threadArgs = { channel_id: channel, server_id: guild, discord_account_id: 'bot' };
+      const threadTool = listing.tools.find((t) => t.name === 'openclaw_discord_threads')!;
+      expect(threadTool.inputSchema.properties?.limit).toMatchObject({
+        minimum: 0,
+        maximum: 100,
+        default: 30,
+      });
+      const validateThreads = new AjvJsonSchemaValidator().getValidator(threadTool.outputSchema!);
+      for (const limit of [undefined, 0, 1, 100]) {
+        const result = await client.callTool({
+          name: threadTool.name,
+          arguments: { ...threadArgs, ...(limit === undefined ? {} : { limit }) },
+        });
+        expect(result.isError).not.toBe(true);
+        expect(validateThreads(result.structuredContent).valid).toBe(true);
+        const output = result.structuredContent as Record<string, unknown>;
+        const count = limit === 0 ? 125 : (limit ?? 30);
+        expect(output.threads).toHaveLength(count);
+        expect((output.threads as any[]).map((t) => t.thread_id)).toEqual(
+          matching.slice(0, count).map((t) => t.id)
+        );
+        expect(output.has_more).toBe(count < 125);
+        expect(output.pagination).toBe('none');
+        expect(output).not.toHaveProperty('next_before_archive_timestamp');
+        if (count < 125) expect(output.guidance).toContain('limit=0');
+        else expect(output).not.toHaveProperty('guidance');
+        expect(requests.at(-1).body.args).toEqual({
+          action: 'thread-list',
+          channelId: channel,
+          channel: 'discord',
+          accountId: 'bot',
+          guildId: guild,
+        });
+      }
+      const before = '2026-11-02T18:34:47.544000+00:00';
+      for (const limit of [undefined, 1, 100]) {
+        const result = await client.callTool({
+          name: threadTool.name,
+          arguments: {
+            ...threadArgs,
+            archived: true,
+            before_archive_timestamp: before,
+            ...(limit === undefined ? {} : { limit }),
+          },
+        });
+        expect(result.isError).not.toBe(true);
+        expect(validateThreads(result.structuredContent).valid).toBe(true);
+        expect((result.structuredContent as Record<string, unknown>).threads).toHaveLength(
+          limit ?? 30
+        );
+        expect(result.structuredContent).toMatchObject({
+          has_more: true,
+          pagination: 'archived_public_timestamp',
+          next_before_archive_timestamp: '2026-11-01T00:00:00Z',
+        });
+        expect(requests.at(-1).body.args).toMatchObject({
+          includeArchived: true,
+          limit: limit ?? 30,
+          before,
+        });
+      }
+      for (const [args, details] of [
+        [{ archived: true, limit: 0 }, ['1..100', 'active-only']],
+        [{ limit: -1 }, ['limit', '>= 0']],
+        [{ limit: 101 }, ['limit', '<= 100']],
+        [{ limit: 1.5 }, ['limit', 'integer']],
+        [
+          { archived: true, before_archive_timestamp: 'private-value' },
+          ['before_archive_timestamp', 'ISO 8601'],
+        ],
+        [{ before_archive_timestamp: before }, ['before_archive_timestamp', 'archived=true']],
+      ] as const) {
+        const reads = requests.length;
+        const result = await client.callTool({
+          name: threadTool.name,
+          arguments: { ...threadArgs, ...args },
+        });
+        expect(result.isError).toBe(true);
+        expect(result.structuredContent).toBeUndefined();
+        const text = (result.content[0] as { text: string }).text;
+        for (const detail of details) expect(text).toContain(detail);
+        expect(text).not.toContain('private-value');
+        expect(requests).toHaveLength(reads);
+      }
     }
   );
 

@@ -281,7 +281,7 @@ describe('ordinary Discord workflows without subprocesses', () => {
         discord_account_id: 'bot',
         before_archive_timestamp: before,
       })
-    ).rejects.toThrow('Pagination');
+    ).rejects.toThrow('before_archive_timestamp requires archived=true');
   });
   it('blocks lack of SDK authority before creation, member-add or publication', async () => {
     const f = await fixture();

@@ -139,6 +139,8 @@ interface Operation {
   recovery?: string;
   error_code?: string;
 }
+export class DiscordInputError extends Error {}
+
 export class DiscordService {
   private readonly creation?: ChannelCreation;
   private readonly owner = randomUUID();
@@ -236,14 +238,24 @@ export class DiscordService {
     };
   }
   async threads(input: any) {
-    const t = await this.target(input);
     if (input.archived !== undefined && typeof input.archived !== 'boolean')
-      throw new Error('Invalid archived flag');
+      throw new DiscordInputError('archived must be boolean.');
     if (
       input.limit !== undefined &&
-      (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100)
+      (!Number.isInteger(input.limit) || input.limit < 0 || input.limit > 100)
     )
-      throw new Error('Invalid limit');
+      throw new DiscordInputError(
+        'limit must be an integer from 1 to 100, or 0 for all active threads.'
+      );
+    if (input.archived && input.limit === 0)
+      throw new DiscordInputError(
+        'Archived threads require limit 1..100 (default 30); limit 0 is active-only.'
+      );
+    if (!input.archived && input.before_archive_timestamp !== undefined)
+      throw new DiscordInputError(
+        'before_archive_timestamp requires archived=true. Omit it for active threads.'
+      );
+    const limit = input.limit ?? 30;
     if (
       input.before_archive_timestamp !== undefined &&
       (typeof input.before_archive_timestamp !== 'string' ||
@@ -252,23 +264,21 @@ export class DiscordService {
         ) ||
         !Number.isFinite(Date.parse(input.before_archive_timestamp)))
     )
-      throw new Error('Invalid archive timestamp');
-    if (
-      !input.archived &&
-      (input.before_archive_timestamp !== undefined || input.limit !== undefined)
-    )
-      throw new Error('Pagination is only supported for archived public threads');
+      throw new DiscordInputError(
+        'before_archive_timestamp must be an ISO 8601 timestamp with timezone.'
+      );
+    const t = await this.target(input);
     await this.info(t, t.channelId, true);
     const data = await this.reader!(t, {
       action: 'thread-list',
       channelId: t.channelId,
-      includeArchived: input.archived,
-      before: input.before_archive_timestamp,
-      limit: input.limit,
+      ...(input.archived
+        ? { includeArchived: true, before: input.before_archive_timestamp, limit }
+        : {}),
     });
     const raw = Array.isArray(data.threads) ? data : data.threads;
     if (!raw || !Array.isArray(raw.threads)) throw new Error('Unexpected thread list');
-    const threads = raw.threads
+    const matching = raw.threads
       .filter(
         (c: any) =>
           c &&
@@ -285,15 +295,21 @@ export class DiscordService {
         archive_timestamp: c.thread_metadata?.archive_timestamp,
         discord_url: 'https://discord.com/channels/' + t.guildId + '/' + c.id,
       }));
+    const truncated = !input.archived && limit > 0 && matching.length > limit;
+    const threads = truncated ? matching.slice(0, limit) : matching;
     return {
       agent_id: t.agentId,
       discord_account_id: t.accountId,
       server_id: t.guildId,
       channel_id: t.channelId,
       threads,
-      has_more: raw.has_more === true,
-      next_before_archive_timestamp:
-        raw.has_more === true ? raw.threads.at(-1)?.thread_metadata?.archive_timestamp : undefined,
+      has_more: input.archived ? raw.has_more === true : truncated,
+      ...(truncated
+        ? { guidance: 'Use limit=0 to return all active threads in this channel.' }
+        : {}),
+      ...(input.archived && raw.has_more === true
+        ? { next_before_archive_timestamp: raw.threads.at(-1)?.thread_metadata?.archive_timestamp }
+        : {}),
       pagination: input.archived ? 'archived_public_timestamp' : 'none',
     };
   }

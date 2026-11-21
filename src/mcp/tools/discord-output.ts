@@ -89,6 +89,7 @@ export const discordThreadsOutput = output({
       },
     },
     has_more: boolean,
+    guidance: string,
     next_before_archive_timestamp: string,
     pagination: { type: 'string', enum: ['none', 'archived_public_timestamp'] },
   },

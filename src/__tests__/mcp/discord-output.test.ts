@@ -130,6 +130,7 @@ async function fixture() {
   });
   return {
     service,
+    reader,
     invokeThread,
     agent,
     channels,
@@ -242,6 +243,116 @@ describe('Discord output contracts', () => {
     const f = await fixture();
     expect((await checked(f.service, 'channels')).channels).toHaveLength(1);
   });
+  it.each([undefined, 0, 1, 30, 100])(
+    'caps active results after channel filtering: %s',
+    async (limit) => {
+      const f = await fixture();
+      const template = f.threads[0];
+      const matching = Array.from({ length: 125 }, (_, i) => ({
+        ...template,
+        id: String(500000000000001000n + BigInt(i)),
+      }));
+      f.threads.splice(
+        0,
+        1,
+        ...matching.map((c) => ({ ...c, parent_id: category })),
+        ...matching.map((c) => ({ ...c, guild_id: category })),
+        { ...template, id: 'invalid' },
+        { ...template, type: 0 },
+        null,
+        ...matching
+      );
+      const result = await checked(f.service, 'threads', {
+        channel_id: parent,
+        server_id: guild,
+        discord_account_id: 'bot',
+        limit,
+      });
+      const count = limit === 0 ? 125 : (limit ?? 30);
+      expect(result.threads).toHaveLength(count);
+      expect((result.threads as any[]).map((t: any) => t.thread_id)).toEqual(
+        matching.slice(0, count).map((t) => t.id)
+      );
+      expect(result.has_more).toBe(count < 125);
+      expect(result.pagination).toBe('none');
+      expect(result).not.toHaveProperty('next_before_archive_timestamp');
+      if (count < 125) expect(result.guidance).toContain('limit=0');
+      else expect(result).not.toHaveProperty('guidance');
+      expect(f.reader.mock.calls.at(-1)![1]).toEqual({ action: 'thread-list', channelId: parent });
+    }
+  );
+  it.each([0, 1, 30])('does not claim more active threads for %i matches', async (count) => {
+    const f = await fixture();
+    const template = f.threads[0];
+    f.threads.splice(
+      0,
+      1,
+      ...Array.from({ length: count }, (_, i) => ({
+        ...template,
+        id: String(500000000000001000n + BigInt(i)),
+      })),
+      ...Array.from({ length: 40 }, () => ({ ...template, parent_id: category }))
+    );
+    f.more();
+    const result = await checked(f.service, 'threads', {
+      channel_id: parent,
+      server_id: guild,
+      discord_account_id: 'bot',
+      archived: false,
+    });
+    expect(result.threads).toHaveLength(count);
+    expect(result.has_more).toBe(false);
+    expect(result).not.toHaveProperty('guidance');
+    expect(result).not.toHaveProperty('next_before_archive_timestamp');
+  });
+  it('defaults archived reads to 30 and preserves upstream pagination', async () => {
+    const f = await fixture();
+    f.more();
+    const result = await checked(f.service, 'threads', {
+      channel_id: parent,
+      server_id: guild,
+      discord_account_id: 'bot',
+      archived: true,
+    });
+    expect(f.reader.mock.calls.at(-1)![1]).toMatchObject({ includeArchived: true, limit: 30 });
+    expect(result).toMatchObject({
+      has_more: true,
+      pagination: 'archived_public_timestamp',
+      next_before_archive_timestamp: '2026-11-01T00:00:00Z',
+    });
+    expect(result).not.toHaveProperty('guidance');
+  });
+  it.each([
+    [{ archived: true, limit: 0 }, ['1..100', 'active-only']],
+    [{ limit: -1 }, ['limit', '1 to 100']],
+    [{ limit: 101 }, ['limit', '1 to 100']],
+    [{ limit: 1.5 }, ['limit', 'integer']],
+    [{ limit: '30' }, ['limit', 'integer']],
+    [{ limit: null }, ['limit', 'integer']],
+    [{ archived: 'true' }, ['archived', 'boolean']],
+    [
+      { before_archive_timestamp: '2026-11-01T00:00:00Z' },
+      ['before_archive_timestamp', 'archived=true'],
+    ],
+    [
+      { archived: true, before_archive_timestamp: 'private-value' },
+      ['before_archive_timestamp', 'ISO 8601'],
+    ],
+  ])('returns safe actionable validation for %j', async (args, details) => {
+    const f = await fixture();
+    const result = await handleDiscord(f.service, 'openclaw_discord_threads', {
+      channel_id: parent,
+      server_id: guild,
+      discord_account_id: 'bot',
+      ...args,
+    });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    for (const detail of details) expect(result.content[0].text).toContain(detail);
+    expect(result.content[0].text).not.toContain('private-value');
+    expect(f.reader).not.toHaveBeenCalled();
+  });
+
   it('validates active, archived, empty and sparse thread payloads', async () => {
     const f = await fixture();
     expect(

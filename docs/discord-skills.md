@@ -5,7 +5,7 @@ Enable MCP_DISCORD_ENABLED and configure the [SDK identity](discord-sdk.md), pri
 ## Tools
 
 - openclaw_discord_channels: current channels and creation_servers for the selected agent.
-- openclaw_discord_threads: active or archived public threads; archived results accept before_archive_timestamp and return next_before_archive_timestamp.
+- openclaw_discord_threads: threads in channel_id, default limit 30. Active: limit 1..100 or 0 for all; has_more signals truncation. Archived public: limit 1..100; before_archive_timestamp and next_before_archive_timestamp are archived-only.
 - openclaw_discord_ask: new thread, published prompt and queued agent. Required thread_name; optional same-agent fork_from_session_key, new-session model and display source.
 - openclaw_discord_reply: publish and queue in an existing unlocked public thread.
 - openclaw_discord_send: publish and queue in a text channel.

@@ -10,7 +10,7 @@ import {
 } from './discord-output.js';
 import { DiscordError } from '../../openclaw/discord-channels.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { DiscordService } from '../../openclaw/discord.js';
+import { DiscordInputError, type DiscordService } from '../../openclaw/discord.js';
 import { errorResponse, structuredJsonResponse } from '../../utils/response-helpers.js';
 const selectors = {
   agent_id: {
@@ -47,7 +47,7 @@ export const discordTools: Tool[] = [
     name: 'openclaw_discord_threads',
     outputSchema: discordThreadsOutput,
     description:
-      'List threads under a channel from openclaw_discord_channels. Reuse thread_id with openclaw_discord_reply. Archived public threads support timestamp pagination.',
+      'List threads in channel_id. Default limit 30; active limit 0 returns all. Archived public threads use timestamp pagination.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -57,9 +57,15 @@ export const discordTools: Tool[] = [
         archived: { type: 'boolean' },
         before_archive_timestamp: {
           type: 'string',
-          description: 'Archive timestamp cursor, not a snowflake.',
+          description: 'Archived-only timestamp cursor, not a snowflake.',
         },
-        limit: { type: 'integer', minimum: 1, maximum: 100 },
+        limit: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 100,
+          default: 30,
+          description: 'Default 30; 1..100, or 0 for all active threads. Archived: 1..100.',
+        },
       },
       required: ['server_id', 'discord_account_id', 'channel_id'],
       additionalProperties: false,
@@ -234,6 +240,7 @@ export async function handleDiscord(service: DiscordService, name: string, input
               : await service.status(input.operation_id, input);
     return structuredJsonResponse(result);
   } catch (error) {
+    if (error instanceof DiscordInputError) return errorResponse(error.message);
     if (error instanceof DiscordError)
       return {
         ...errorResponse(error.code),
